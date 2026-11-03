@@ -1,0 +1,1 @@
+export { useInirTheme } from './useInirTheme'

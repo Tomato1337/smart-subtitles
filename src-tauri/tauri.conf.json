@@ -1,0 +1,59 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "smart-subtitle",
+  "version": "0.1.0",
+  "identifier": "dev.tomato.smartsubtitle",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "width": 1600,
+        "height": 900,
+        "title": "Smart Subtitles",
+        "resizable": true,
+        "fullscreen": false,
+        "backgroundColor": "#15151a"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: http://127.0.0.1:47800; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src http://127.0.0.1:47800 blob:; connect-src ipc: http://ipc.localhost http://127.0.0.1:47800"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["rpm"],
+    "shortDescription": "Плеер с умными субтитрами для изучения английского",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    },
+    "linux": {
+      "rpm": {
+        "desktopTemplate": "linux/smart-subtitle.desktop.hbs",
+        "depends": ["/usr/bin/ffmpeg", "/usr/bin/ffprobe"]
+      }
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "smartsubs"
+        ]
+      }
+    }
+  }
+}

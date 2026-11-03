@@ -1,0 +1,76 @@
+import { create } from 'zustand'
+import type { Cue, CueAnnotation, SubsStatus } from '@/common/types/ipc'
+
+export type SubtitleSettings = {
+  showEn: boolean
+  showRu: boolean
+  hideMode: boolean
+  sidebarOpen: boolean
+  showSidebarTranslation: boolean
+  sidebarFont: 'S' | 'M' | 'L'
+  patterns: boolean
+}
+
+const KEY = 'smartsubs.settings'
+const DEFAULTS: SubtitleSettings = {
+  showEn: true, showRu: true, hideMode: false, sidebarOpen: true, showSidebarTranslation: true, sidebarFont: 'M', patterns: true,
+}
+
+function load(): SubtitleSettings {
+  try {
+    return { ...DEFAULTS, ...(JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<SubtitleSettings>) }
+  } catch {
+    return DEFAULTS
+  }
+}
+
+type SubsStore = SubtitleSettings & {
+  mediaId: string | null
+  cues: Cue[]
+  annotations: Map<number, CueAnnotation>
+  status: SubsStatus | null
+  offset: number
+  /** Hidden-mode reveal window: show subtitles until absolute time `until`; `t0` is where `A` was pressed. */
+  reveal: { t0: number; until: number } | null
+  failedBatches: Set<number>
+  set: (p: Partial<SubtitleSettings>) => void
+  reset: (mediaId: string, offset: number) => void
+  setCues: (cues: Cue[], annotations: CueAnnotation[]) => void
+  applyAnnotations: (a: CueAnnotation[]) => void
+  setStatus: (s: SubsStatus | null) => void
+  setOffset: (o: number) => void
+  setReveal: (r: { t0: number; until: number } | null) => void
+  markFailed: (firstIdx: number) => void
+}
+
+export const useSubsStore = create<SubsStore>((set, get) => ({
+  ...load(),
+  mediaId: null,
+  cues: [],
+  annotations: new Map(),
+  status: null,
+  offset: 0,
+  reveal: null,
+  failedBatches: new Set(),
+  set: (p) => {
+    set(p)
+    const s = get()
+    const persisted: SubtitleSettings = {
+      showEn: s.showEn, showRu: s.showRu, hideMode: s.hideMode, sidebarOpen: s.sidebarOpen,
+      showSidebarTranslation: s.showSidebarTranslation, sidebarFont: s.sidebarFont, patterns: s.patterns,
+    }
+    localStorage.setItem(KEY, JSON.stringify(persisted))
+  },
+  reset: (mediaId, offset) => set({ mediaId, offset, cues: [], annotations: new Map(), status: null, reveal: null, failedBatches: new Set() }),
+  setCues: (cues, annotations) => set({ cues, annotations: new Map(annotations.map((a) => [a.idx, a])) }),
+  applyAnnotations: (a) =>
+    set((s) => {
+      const m = new Map(s.annotations)
+      for (const x of a) m.set(x.idx, x)
+      return { annotations: m }
+    }),
+  setStatus: (status) => set({ status }),
+  setOffset: (offset) => set({ offset }),
+  setReveal: (reveal) => set({ reveal }),
+  markFailed: (firstIdx) => set((s) => ({ failedBatches: new Set(s.failedBatches).add(firstIdx) })),
+}))

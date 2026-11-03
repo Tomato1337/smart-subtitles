@@ -1,0 +1,338 @@
+[
+  {
+    "id": "PRESENT_CONTINUOUS",
+    "label": "Present Continuous",
+    "formula": "am/is/are + V-ing",
+    "level": "A1",
+    "about": "Действие, происходящее сейчас или в этот период. Также запланированное и раздражающее повторяющееся (always + V-ing)."
+  },
+  {
+    "id": "PRESENT_CONT_FUTURE",
+    "label": "Present Continuous для будущего",
+    "formula": "am/is/are + V-ing + время в будущем",
+    "level": "A2",
+    "about": "Договорённость на ближайшее будущее: «I'm meeting him tomorrow»."
+  },
+  {
+    "id": "PAST_CONTINUOUS",
+    "label": "Past Continuous",
+    "formula": "was/were + V-ing",
+    "level": "A2",
+    "about": "Процесс в конкретный момент прошлого или фон для другого события: «I was sleeping when you called»."
+  },
+  {
+    "id": "PRESENT_PERFECT",
+    "label": "Present Perfect",
+    "formula": "have/has + V3",
+    "level": "A2",
+    "about": "Связь прошлого с настоящим: опыт, результат, незаконченный период (ever, just, already, yet, for, since)."
+  },
+  {
+    "id": "PRESENT_PERFECT_CONT",
+    "label": "Present Perfect Continuous",
+    "formula": "have/has been + V-ing",
+    "level": "B1",
+    "about": "Действие, начавшееся в прошлом и длящееся до сих пор или только что закончившееся с видимым результатом."
+  },
+  {
+    "id": "PAST_PERFECT",
+    "label": "Past Perfect",
+    "formula": "had + V3",
+    "level": "B1",
+    "about": "Действие, завершившееся до другого момента в прошлом: «She had left before I arrived»."
+  },
+  {
+    "id": "GOING_TO",
+    "label": "Going to / gonna",
+    "formula": "be going to + V",
+    "level": "A2",
+    "about": "План или уверенный прогноз по видимым признакам: «It's going to rain»."
+  },
+  {
+    "id": "WILL_FUTURE",
+    "label": "Will-будущее",
+    "formula": "will/'ll + V",
+    "level": "A2",
+    "about": "Спонтанное решение, обещание, предсказание: «I'll help you»."
+  },
+  {
+    "id": "USED_TO",
+    "label": "Used to",
+    "formula": "used to + V",
+    "level": "B1",
+    "about": "Привычка или состояние в прошлом, которых больше нет: «I used to smoke»."
+  },
+  {
+    "id": "BE_ABOUT_TO",
+    "label": "Be about to",
+    "formula": "be about to + V",
+    "level": "B1",
+    "about": "Действие вот-вот начнётся: «The movie is about to start»."
+  },
+  {
+    "id": "CAN_COULD",
+    "label": "Can / could",
+    "formula": "can/could + V",
+    "level": "A1",
+    "about": "Умение, возможность, разрешение, вежливая просьба (Could you…?)."
+  },
+  {
+    "id": "MUST_HAVE_TO",
+    "label": "Must / have to / gotta",
+    "formula": "must / have to / gotta + V",
+    "level": "A2",
+    "about": "Обязанность и необходимость. Must — внутреннее убеждение, have to — внешнее обстоятельство; mustn't — запрет."
+  },
+  {
+    "id": "SHOULD_OUGHT",
+    "label": "Should / ought to",
+    "formula": "should / ought to + V",
+    "level": "A2",
+    "about": "Совет и рекомендация: «You should see a doctor»."
+  },
+  {
+    "id": "MIGHT_MAY",
+    "label": "Might / may",
+    "formula": "might/may + V",
+    "level": "B1",
+    "about": "Возможность, неуверенное предположение: «He might be late»."
+  },
+  {
+    "id": "MODAL_PERFECT",
+    "label": "Модальный + perfect",
+    "formula": "must/might/should/could + have + V3",
+    "level": "B2",
+    "about": "Догадка о прошлом (must have been) или упрёк (should have told me)."
+  },
+  {
+    "id": "HAD_BETTER",
+    "label": "Had better",
+    "formula": "had ('d) better + V",
+    "level": "B1",
+    "about": "Настоятельный совет с угрозой последствий: «You'd better go»."
+  },
+  {
+    "id": "BE_SUPPOSED_TO",
+    "label": "Be supposed to",
+    "formula": "be supposed to + V",
+    "level": "B1",
+    "about": "Ожидание или правило: «You're supposed to be here at nine»."
+  },
+  {
+    "id": "FIRST_COND",
+    "label": "Условное 1 типа",
+    "formula": "If + Present, will + V",
+    "level": "A2",
+    "about": "Реальное условие в будущем: «If it rains, we'll stay home»."
+  },
+  {
+    "id": "SECOND_COND",
+    "label": "Условное 2 типа",
+    "formula": "If + Past, would + V",
+    "level": "B1",
+    "about": "Нереальное или маловероятное условие в настоящем: «If I were you, I'd go»."
+  },
+  {
+    "id": "THIRD_COND",
+    "label": "Условное 3 типа",
+    "formula": "If + Past Perfect, would have + V3",
+    "level": "B2",
+    "about": "Нереальное условие в прошлом, сожаление: «If I had known, I would have come»."
+  },
+  {
+    "id": "WISH",
+    "label": "Wish / if only",
+    "formula": "wish + Past / Past Perfect / would",
+    "level": "B2",
+    "about": "Сожаление или желание изменить: «I wish I had more time»."
+  },
+  {
+    "id": "PASSIVE",
+    "label": "Пассив",
+    "formula": "be + V3",
+    "level": "B1",
+    "about": "Подчёркивает объект действия, а не исполнителя: «The car was stolen»."
+  },
+  {
+    "id": "GET_PASSIVE",
+    "label": "Get-пассив",
+    "formula": "get + V3",
+    "level": "B2",
+    "about": "Разговорный пассив, часто о неожиданном событии: «He got fired»."
+  },
+  {
+    "id": "CAUSATIVE_HAVE_GET",
+    "label": "Каузатив have/get",
+    "formula": "have/get + object + V3",
+    "level": "B2",
+    "about": "Кто-то делает что-то для нас: «I had my car repaired»."
+  },
+  {
+    "id": "MAKE_LET_SB_DO",
+    "label": "Make / let somebody do",
+    "formula": "make/let/help + object + V",
+    "level": "B1",
+    "about": "После make и let инфинитив без to: «She made me laugh», «Let me go»."
+  },
+  {
+    "id": "QUESTION_AUX",
+    "label": "Вопрос со вспомогательным",
+    "formula": "Aux + подлежащее + V?",
+    "level": "A1",
+    "about": "Обратный порядок слов в вопросе: «Do you know him?», «Where did he go?»."
+  },
+  {
+    "id": "TAG_QUESTION",
+    "label": "Разделительный вопрос",
+    "formula": "утверждение, aux + not + местоимение?",
+    "level": "A2",
+    "about": "Короткий вопрос в конце для подтверждения: «You're coming, aren't you?»."
+  },
+  {
+    "id": "NEGATIVE_QUESTION",
+    "label": "Отрицательный вопрос",
+    "formula": "Don't/Isn't + подлежащее…?",
+    "level": "B1",
+    "about": "Выражает удивление, упрёк или ожидание согласия: «Don't you think so?»."
+  },
+  {
+    "id": "EMBEDDED_QUESTION",
+    "label": "Косвенный вопрос",
+    "formula": "Do you know where + подлежащее + V",
+    "level": "B1",
+    "about": "Прямой порядок слов внутри вопроса: «Do you know where he lives?»."
+  },
+  {
+    "id": "SO_NEITHER_ECHO",
+    "label": "So do I / Neither do I",
+    "formula": "So + aux + I / Neither + aux + I",
+    "level": "A2",
+    "about": "Согласие с утверждением собеседника: «I love it. — So do I»."
+  },
+  {
+    "id": "RELATIVE_CLAUSE",
+    "label": "Определительное придаточное",
+    "formula": "существительное + who/which/that/whose + …",
+    "level": "B1",
+    "about": "Уточняет существительное: «The man who called is here»."
+  },
+  {
+    "id": "REPORTED_SPEECH",
+    "label": "Косвенная речь",
+    "formula": "said (that) + сдвиг времён",
+    "level": "B1",
+    "about": "Пересказ чужих слов со сдвигом времени: «He said he was tired»."
+  },
+  {
+    "id": "WH_CLEFT",
+    "label": "Wh-расщепление",
+    "formula": "What/All + подлежащее + V + is …",
+    "level": "C1",
+    "about": "Выносит важное в конец для акцента: «What I need is a coffee»."
+  },
+  {
+    "id": "IT_CLEFT",
+    "label": "It-расщепление",
+    "formula": "It is/was + акцент + that/who …",
+    "level": "C1",
+    "about": "Подчёркивает один элемент: «It was John who broke it»."
+  },
+  {
+    "id": "THERE_BE",
+    "label": "There is / there are",
+    "formula": "there + be + существительное",
+    "level": "A1",
+    "about": "Констатирует наличие или существование: «There's a problem»."
+  },
+  {
+    "id": "INVERSION",
+    "label": "Инверсия",
+    "formula": "Never/Hardly/Not only + aux + подлежащее …",
+    "level": "C1",
+    "about": "Обратный порядок слов после отрицательных наречий для усиления: «Never have I seen this»."
+  },
+  {
+    "id": "VERB_ING",
+    "label": "Глагол + V-ing",
+    "formula": "enjoy/avoid/keep/mind/finish + V-ing",
+    "level": "B1",
+    "about": "Глаголы, после которых герундий: «I enjoy swimming»."
+  },
+  {
+    "id": "VERB_TO_INF",
+    "label": "Глагол + to V",
+    "formula": "want/decide/hope/plan/need + to + V",
+    "level": "A2",
+    "about": "Глаголы, после которых инфинитив с to: «I want to go»."
+  },
+  {
+    "id": "VERB_OBJ_TO_INF",
+    "label": "Глагол + объект + to V",
+    "formula": "want/ask/tell/expect + объект + to + V",
+    "level": "B1",
+    "about": "«I want you to stay», «She told him to leave»."
+  },
+  {
+    "id": "IMPERATIVE_LETS",
+    "label": "Повелительное и Let's",
+    "formula": "V! / Don't + V / Let's + V",
+    "level": "A1",
+    "about": "Приказ, просьба, приглашение сделать что-то вместе."
+  },
+  {
+    "id": "COMPARATIVE_SUPERLATIVE",
+    "label": "Сравнительная и превосходная степень",
+    "formula": "-er/more … than, the -est/the most",
+    "level": "A2",
+    "about": "Сравнение предметов: «bigger than», «the best»."
+  },
+  {
+    "id": "AS_AS",
+    "label": "As … as",
+    "formula": "as + adj/adv + as",
+    "level": "A2",
+    "about": "Равенство в сравнении: «as tall as», «not as good as»."
+  },
+  {
+    "id": "TOO_ENOUGH",
+    "label": "Too / enough",
+    "formula": "too + adj / adj + enough (+ to V)",
+    "level": "A2",
+    "about": "Избыток или достаточность: «too cold», «old enough to drive»."
+  },
+  {
+    "id": "SO_SUCH_THAT",
+    "label": "So / such … that",
+    "formula": "so + adj + that / such + noun + that",
+    "level": "B1",
+    "about": "Следствие: «It was so loud that I couldn't sleep»."
+  },
+  {
+    "id": "REDUCTIONS",
+    "label": "Разговорные сокращения",
+    "formula": "gonna, wanna, gotta, kinda, lemme, dunno",
+    "level": "A2",
+    "about": "Слитное произношение и написание в неформальной речи."
+  },
+  {
+    "id": "ELLIPSIS",
+    "label": "Эллипсис",
+    "formula": "пропуск подразумеваемых слов",
+    "level": "B1",
+    "about": "В разговоре опускают слова, понятные из контекста: «Seen it?», «Sounds good»."
+  },
+  {
+    "id": "DISCOURSE_MARKER",
+    "label": "Маркеры речи",
+    "formula": "well, you know, I mean, actually, anyway",
+    "level": "B1",
+    "about": "Слова-связки, которые организуют разговор и показывают отношение говорящего."
+  },
+  {
+    "id": "EMPHATIC_DO",
+    "label": "Усилительный do",
+    "formula": "do/does/did + V",
+    "level": "B1",
+    "about": "Подчёркивает утверждение или противопоставляет: «I do like it», «Do come in»."
+  }
+]

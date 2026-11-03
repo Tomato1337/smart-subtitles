@@ -1,0 +1,6 @@
+export { PATTERNS, patternById } from './lib/catalog'
+export type { Pattern } from './lib/catalog'
+export { usePatternStore } from './store/patternStore'
+export { usePatternExposure, usePatternStats } from './usePatterns'
+export { PatternBadges, PatternChip } from './ui/PatternBadges'
+export { PatternCard } from './ui/PatternCard'

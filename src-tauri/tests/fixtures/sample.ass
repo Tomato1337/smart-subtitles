@@ -1,0 +1,13 @@
+[Script Info]
+Title: sample
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize
+Style: Default,Arial,20
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Comment: 0,0:00:00.00,0:00:00.50,Default,,0,0,0,,not a dialogue
+Dialogue: 0,0:00:01.00,0:00:03.50,Default,,0,0,0,,Hello there.\NHow are you?
+Dialogue: 0,0:00:04.00,0:00:06.25,Default,,0,0,0,,I'm fine, thanks, really.
+Dialogue: 0,1:02:03.46,1:02:05.00,Default,,0,0,0,,Goodbye.
