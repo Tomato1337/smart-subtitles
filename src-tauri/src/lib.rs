@@ -20,7 +20,7 @@ use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
 use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 
-async fn vaapi_selftest(dev: &str) -> bool {
+pub(crate) async fn vaapi_selftest(dev: &str) -> bool {
     let out = tokio::process::Command::new("ffmpeg")
         .args(["-hide_banner", "-v", "error", "-init_hw_device", &format!("vaapi=va:{dev}"), "-f", "lavfi", "-i", "testsrc=s=320x240:d=1", "-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-f", "null", "-"])
         .output()
@@ -57,7 +57,7 @@ pub fn run() {
             let cfg = config::Config::load()?;
             let conn = db::open(&config::config_dir().join("data.db"))?;
             let st = Arc::new(AppState {
-                cfg,
+                config: std::sync::RwLock::new(Arc::new(cfg)),
                 db: Arc::new(Mutex::new(conn)),
                 sessions: Default::default(),
                 vaapi_ok: AtomicBool::new(false),
@@ -75,12 +75,12 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = server::serve(s2.clone()).await {
                     logs::log("app", &format!("server: {e}"));
-                    let _ = handle.emit("toast", serde_json::json!({ "message": format!("Порт {} занят — Lampa не сможет открыть фильм", s2.cfg.server.port) }));
+                    let _ = handle.emit("toast", serde_json::json!({ "message": format!("Порт {} занят — Lampa не сможет открыть фильм", s2.cfg().server.port) }));
                 }
             });
             let s3 = st.clone();
             tauri::async_runtime::spawn(async move {
-                let ok = vaapi_selftest(&s3.cfg.ffmpeg.vaapi_device).await;
+                let ok = vaapi_selftest(&s3.cfg().ffmpeg.vaapi_device).await;
                 s3.vaapi_ok.store(ok, Ordering::Relaxed);
                 logs::log("app", &format!("vaapi_ok={ok}"));
             });
@@ -128,6 +128,8 @@ pub fn run() {
             commands::cards_dismiss,
             commands::anki_refresh,
             commands::tutor_import_script,
+            commands::config_get,
+            commands::config_save,
             commands::patterns_exposure,
             commands::patterns_stats,
             commands::patterns_set_status,

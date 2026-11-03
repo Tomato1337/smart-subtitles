@@ -1,10 +1,11 @@
 use crate::{config::Config, session::SessionManager};
 use rusqlite::Connection;
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock};
 use tauri::AppHandle;
 
 pub struct AppState {
-    pub cfg: Config,
+    /// Live config; `config_save` swaps it, readers take a cheap Arc snapshot via `cfg()`.
+    pub config: RwLock<Arc<Config>>,
     pub db: Arc<Mutex<Connection>>,
     pub sessions: SessionManager,
     pub vaapi_ok: AtomicBool,
@@ -20,6 +21,11 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Snapshot of the current config. Hold it for one operation; later reads may see a newer one.
+    pub fn cfg(&self) -> Arc<Config> {
+        self.config.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     /// Runs a closure against the SQLite connection on a blocking thread.
     pub async fn db<T, F>(&self, f: F) -> Result<T, String>
     where

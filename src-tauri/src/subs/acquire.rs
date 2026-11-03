@@ -65,7 +65,7 @@ async fn try_sidecar(st: &Arc<AppState>, s: &Arc<Session>) -> Option<()> {
 }
 
 async fn try_opensubtitles(st: &Arc<AppState>, s: &Arc<Session>) -> Option<()> {
-    if !st.cfg.opensubtitles_enabled() { return None; }
+    if !st.cfg().opensubtitles_enabled() { return None; }
     status(st, SubsStatus::new(&s.media_id, "downloading").msg("OpenSubtitles"));
     match os::fetch(st, s).await {
         Ok(os::Outcome::Found(f)) => {

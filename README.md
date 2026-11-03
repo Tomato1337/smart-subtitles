@@ -77,9 +77,20 @@ sudo dnf install webkit2gtk4.1-devel librsvg2-devel libappindicator-gtk3-devel f
 
 ## Установка
 
+### Готовые сборки
+
+На странице [Releases](https://github.com/Tomato1337/smart-subtitles/releases) лежат:
+
+- `smart-subtitle-<версия>-1.x86_64.rpm` — Fedora: `sudo dnf install ./smart-subtitle-*.rpm` (ffmpeg и ffprobe поставятся как зависимости);
+- `smart-subtitle_<версия>_universal.dmg` — macOS, Apple Silicon и Intel; дальше см. [Сборка для macOS](#сборка-для-macos), шаги 3 и далее.
+
+Сборки делает GitHub Actions (`.github/workflows/release.yml`) при пуше тега `v*`.
+
+### Из исходников
+
 ```sh
-git clone https://github.com/Tomato1337/smart-subtitle.git
-cd smart-subtitle
+git clone https://github.com/Tomato1337/smart-subtitles.git
+cd smart-subtitles
 npm install
 
 npm run tauri dev       # запуск в режиме разработки
@@ -91,7 +102,7 @@ sudo dnf install ./src-tauri/target/release/bundle/rpm/smart-subtitle-0.1.0-1.x8
 
 ### Сборка для macOS
 
-Тот же код собирается и под macOS (Apple Silicon и Intel). Готовых сборок нет, только из исходников.
+Тот же код собирается и под macOS (Apple Silicon и Intel). Готовый `.dmg` есть в [Releases](https://github.com/Tomato1337/smart-subtitles/releases); чтобы собрать самому:
 
 1. Установите инструменты:
 
@@ -133,7 +144,9 @@ sudo dnf install ./src-tauri/target/release/bundle/rpm/smart-subtitle-0.1.0-1.x8
 
 ## Настройка
 
-При первом запуске приложение создаёт `~/.config/smart-subtitle/config.json` (на macOS — `~/Library/Application Support/smart-subtitle/config.json`). Заполните нужные поля:
+Все настройки доступны прямо на главном экране, в панели «Настройки» справа: изменения применяются сразу после «Сохранить» (кроме порта — он меняется после перезапуска). Панель сворачивается кнопкой в заголовке; если не хватает ключа DeepSeek, OpenSubtitles или адреса Lampa, на свёрнутой панели виден красный счётчик.
+
+Хранятся настройки в `~/.config/smart-subtitle/config.json` (на macOS — `~/Library/Application Support/smart-subtitle/config.json`), его можно править и вручную:
 
 ```json
 {
@@ -157,7 +170,7 @@ sudo dnf install ./src-tauri/target/release/bundle/rpm/smart-subtitle-0.1.0-1.x8
 | `tutor.*` | путь к tutor, его API и колода Anki |
 | `learner.cefr` | уровень ученика (A1–C2): от него зависит, что подсвечивать и как объяснять |
 
-Секреты хранятся только в этом файле, держите его с правами `chmod 600`. В логах логины и пароли из URL заменяются на `***`.
+Секреты хранятся только в этом файле; приложение сохраняет его с правами `600`. В логах логины и пароли из URL заменяются на `***`.
 
 ## Подключение к Lampa
 

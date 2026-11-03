@@ -101,3 +101,15 @@ export type ChatMessage = {
 export type PatternStat = { id: string; count: number; status: 'learning' | 'known' | null }
 export type PatternOccurrence = { idx: number; text: string }
 export type SubsList = { cues: Cue[]; annotations: CueAnnotation[] }
+
+/** `~/.config/smart-subtitle/config.json` (Rust `config::Config`). */
+export type AppConfig = {
+  server: { port: number }
+  lampa: { origins: string[] }
+  llm: { baseUrl: string; apiKey: string; model: string }
+  opensubtitles: { apiKey: string; username: string; password: string }
+  tutor: { root: string; apiUrl: string; deck: string }
+  torrserver: { baseUrl: string; username: string; password: string }
+  ffmpeg: { vaapiDevice: string }
+  learner: { cefr: string }
+}

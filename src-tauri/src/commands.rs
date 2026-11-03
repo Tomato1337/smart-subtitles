@@ -14,6 +14,31 @@ type Res<T> = Result<T, String>;
 pub fn theme_current() -> Option<crate::theme::InirTheme> { crate::theme::load() }
 
 #[tauri::command]
+pub fn config_get(st: St<'_>) -> crate::config::Config { (*st.cfg()).clone() }
+
+/// Saves and applies the config at once. Returns true when the change needs an app restart (server port).
+#[tauri::command]
+pub async fn config_save(st: St<'_>, cfg: crate::config::Config) -> Res<bool> {
+    if cfg.server.port == 0 { return Err("Порт должен быть от 1 до 65535".into()); }
+    let old = st.cfg();
+    cfg.save().map_err(|e| format!("Не удалось сохранить config.json: {e}"))?;
+    let vaapi_changed = old.ffmpeg.vaapi_device != cfg.ffmpeg.vaapi_device;
+    let anki_changed = old.tutor.deck != cfg.tutor.deck || old.tutor.api_url != cfg.tutor.api_url;
+    let restart = old.server.port != cfg.server.port;
+    *st.config.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(cfg);
+    if vaapi_changed {
+        let ok = crate::vaapi_selftest(&st.cfg().ffmpeg.vaapi_device).await;
+        st.vaapi_ok.store(ok, Ordering::Relaxed);
+        crate::logs::log("app", &format!("vaapi_ok={ok}"));
+    }
+    if anki_changed {
+        let s = st.inner().clone();
+        tauri::async_runtime::spawn(async move { crate::tutor::anki_index::refresh(&s).await });
+    }
+    Ok(restart)
+}
+
+#[tauri::command]
 pub async fn session_current(st: St<'_>) -> Res<Option<SessionState>> {
     match st.sessions.current() {
         Some(s) => session::build_state(&st, &s).await,
@@ -57,7 +82,7 @@ pub async fn media_open_stream(st: St<'_>, session_id: String, at: f64, audio_in
     let s = st.sessions.get(&session_id).ok_or("сессия закрыта")?;
     s.mode(st.vaapi_ok.load(Ordering::Relaxed)).ok_or("ffprobe ещё не завершён")?;
     let gen = s.gen.fetch_add(1, Ordering::Relaxed) + 1;
-    Ok(OpenStream { url: format!("http://127.0.0.1:{}/media/{}/stream?start={}&audio={}&gen={}", st.cfg.server.port, s.id, at.max(0.0), audio_index, gen) })
+    Ok(OpenStream { url: format!("http://127.0.0.1:{}/media/{}/stream?start={}&audio={}&gen={}", st.cfg().server.port, s.id, at.max(0.0), audio_index, gen) })
 }
 
 #[tauri::command]

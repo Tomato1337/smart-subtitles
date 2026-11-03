@@ -81,7 +81,7 @@ fn position_tag(cue_idx: Option<u32>, at: Option<f64>) -> String {
 /// Stores the user message with the learner's position and runs the tool loop in the background;
 /// progress arrives as agent:* events.
 pub async fn send(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: Option<u32>, at: f64, text: String) -> Result<(), String> {
-    if !st.cfg.llm_enabled() { return Err("нет ключа DeepSeek".into()); }
+    if !st.cfg().llm_enabled() { return Err("нет ключа DeepSeek".into()); }
     if !st.agent_busy.lock().unwrap().insert(s.media_id.clone()) { return Err("агент ещё отвечает".into()); }
     save(st, &s.media_id, "user", json!({ "text": text, "cue": cue_idx, "at": at }), cue_idx).await;
     let (st2, s2) = (st.clone(), s.clone());

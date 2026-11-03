@@ -30,7 +30,7 @@ pub async fn read_ref(st: &AppState, url: &str) -> anyhow::Result<Vec<u8>> {
         let p = url::Url::parse(url)?.to_file_path().map_err(|_| anyhow::anyhow!("bad file url"))?;
         return Ok(tokio::fs::read(p).await?);
     }
-    Ok(st.http.get(st.cfg.with_auth(url)).send().await?.error_for_status()?.bytes().await?.to_vec())
+    Ok(st.http.get(st.cfg().with_auth(url)).send().await?.error_for_status()?.bytes().await?.to_vec())
 }
 
 #[cfg(test)]

@@ -98,7 +98,7 @@ pub fn state_of(st: &AppState, s: &Session, p: &Probe, resume_at: f64, sub_offse
     let has_poster = s.req.card.as_ref().and_then(|c| c.poster.as_ref()).is_some()
         || crate::poster::poster_path(&s.media_id).exists();
     let poster_url = has_poster
-        .then(|| format!("http://127.0.0.1:{}/media/poster/{}", st.cfg.server.port, crate::poster::poster_key(&s.media_id)));
+        .then(|| format!("http://127.0.0.1:{}/media/poster/{}", st.cfg().server.port, crate::poster::poster_key(&s.media_id)));
     SessionState {
         session_id: s.id.clone(),
         media_id: s.media_id.clone(),
@@ -116,7 +116,7 @@ pub fn state_of(st: &AppState, s: &Session, p: &Probe, resume_at: f64, sub_offse
         sub_offset,
         playlist: s.req.playlist.iter().map(|i| PlaylistTitle { title: i.title.clone() }).collect(),
         playlist_index: s.req.playlist.iter().position(|i| &i.url == url),
-        llm_enabled: st.cfg.llm_enabled(),
+        llm_enabled: st.cfg().llm_enabled(),
     }
 }
 
@@ -179,7 +179,7 @@ pub async fn open(st: &Arc<AppState>, req: SessionRequest, file_size: Option<u64
         id: uuid::Uuid::new_v4().to_string(),
         media_id: media_id.clone(),
         req: req.clone(),
-        src: st.cfg.with_auth(&req.url),
+        src: st.cfg().with_auth(&req.url),
         probe: OnceLock::new(),
         audio_index: Mutex::new(0),
         ffmpeg: Default::default(),

@@ -31,12 +31,13 @@ pub async fn import_script(st: &AppState, media_id: &str) -> anyhow::Result<i64>
         .map_err(anyhow::Error::msg)?;
     if cues.is_empty() { bail!("нет субтитров"); }
     // Tutor runs in Docker and only sees its bind-mounted tree, so the file goes under <tutor.root>/data (same path on both sides).
-    let dir = std::path::Path::new(&st.cfg.tutor.root).join("data").join("smart-subtitle");
+    let dir = std::path::Path::new(&st.cfg().tutor.root).join("data").join("smart-subtitle");
     tokio::fs::create_dir_all(&dir).await?;
     let path = dir.join(format!("{}.srt", slug(&title)));
     tokio::fs::write(&path, to_srt(&cues)).await?;
-    let url = format!("{}/api/media/import", st.cfg.tutor.api_url.trim_end_matches('/'));
-    let r = st.http.post(url).timeout(Duration::from_secs(30)).json(&json!({ "path": path })).send().await.map_err(|_| anyhow!("Tutor не запущен ({})", st.cfg.tutor.api_url))?;
+    let api_url = st.cfg().tutor.api_url.clone();
+    let url = format!("{}/api/media/import", api_url.trim_end_matches('/'));
+    let r = st.http.post(url).timeout(Duration::from_secs(30)).json(&json!({ "path": path })).send().await.map_err(|_| anyhow!("Tutor не запущен ({api_url})"))?;
     let ok = r.status().is_success();
     let v: Value = r.json().await.unwrap_or(Value::Null);
     if !ok { bail!("tutor: {}", v["error"].as_str().unwrap_or("ошибка импорта")); }

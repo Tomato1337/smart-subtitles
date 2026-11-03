@@ -123,12 +123,12 @@ struct Outcome { added: usize, warnings: Vec<String> }
 /// Image flags for flashcards.py from tutor's card settings (`GET /api/settings`), so cards get the same
 /// pictures as in tutor. Tutor not running: its defaults (omp, image role model).
 async fn image_args(st: &AppState) -> Vec<String> {
-    let url = format!("{}/api/settings", st.cfg.tutor.api_url.trim_end_matches('/'));
+    let url = format!("{}/api/settings", st.cfg().tutor.api_url.trim_end_matches('/'));
     let settings = match st.http.get(url).timeout(Duration::from_secs(3)).send().await {
         Ok(r) if r.status().is_success() => r.json().await.unwrap_or(Value::Null),
         _ => Value::Null,
     };
-    image_backend_args(&settings, &st.cfg.tutor.root)
+    image_backend_args(&settings, &st.cfg().tutor.root)
 }
 
 pub fn image_backend_args(settings: &Value, tutor_root: &str) -> Vec<String> {
@@ -280,9 +280,9 @@ async fn run(st: &Arc<AppState>, ctx: &Ctx, indices: &[usize], clip_source: Opti
         // Lower priority: playback (ffmpeg stream, webview) must not stutter while images are generated.
         tokio::process::Command::new("nice")
             .args(["-n", "10", "python3", "anki/flashcards.py", "--input"]).arg(&tmp.0)
-            .args(["--deck", &st.cfg.tutor.deck, "--tags", &tags])
+            .args(["--deck", &st.cfg().tutor.deck, "--tags", &tags])
             .args(image_args(st).await)
-            .current_dir(&st.cfg.tutor.root)
+            .current_dir(&st.cfg().tutor.root)
             .env("PATH", child_path(&std::env::var("PATH").unwrap_or_default()))
             .kill_on_drop(true)
             .output(),

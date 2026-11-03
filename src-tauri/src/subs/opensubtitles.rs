@@ -12,7 +12,7 @@ pub struct Found { pub bytes: Vec<u8>, pub label: String, pub exact: bool }
 pub enum Outcome { Found(Found), NotFound, QuotaExhausted }
 
 fn req(st: &AppState, b: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    b.header("Api-Key", &st.cfg.opensubtitles.api_key).header("User-Agent", "smart-subtitle v0.1").header("Accept", "application/json")
+    b.header("Api-Key", &st.cfg().opensubtitles.api_key).header("User-Agent", "smart-subtitle v0.1").header("Accept", "application/json")
 }
 
 /// Sends the request; one retry after 2 s on HTTP 429.
@@ -32,7 +32,7 @@ async fn token(st: &AppState) -> anyhow::Result<String> {
     if let Some((t, at)) = TOKEN.lock().unwrap().as_ref() {
         if at.elapsed() < Duration::from_secs(23 * 3600) { return Ok(t.clone()); }
     }
-    let o = &st.cfg.opensubtitles;
+    let o = &st.cfg().opensubtitles;
     let r = send(req(st, st.http.post(format!("{BASE}/login")).json(&json!({ "username": o.username, "password": o.password })))).await?;
     if !r.status().is_success() { bail!("OpenSubtitles login: HTTP {}", r.status()); }
     let v: Value = r.json().await?;
@@ -101,7 +101,7 @@ pub async fn fetch(st: &AppState, s: &Session) -> anyhow::Result<Outcome> {
     }
     // Anonymous downloads work with the API key alone (smaller daily quota); login only raises it.
     let mut dl = req(st, st.http.post(format!("{BASE}/download")).json(&json!({ "file_id": file_id, "sub_format": "srt" })));
-    if !st.cfg.opensubtitles.username.is_empty() {
+    if !st.cfg().opensubtitles.username.is_empty() {
         dl = dl.bearer_auth(token(st).await?);
     }
     let r = send(dl).await?;

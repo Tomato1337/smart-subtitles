@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
-  AnkiCard, CardsResult, ChatMessage, Explanation, InirTheme, OpenStream, PatternOccurrence, PatternStat, SessionState, SubsList, WordDraft,
+  AnkiCard, AppConfig, CardsResult, ChatMessage, Explanation, InirTheme, OpenStream, PatternOccurrence, PatternStat, SessionState, SubsList, WordDraft,
 } from '@/common/types/ipc'
 
 export type RecentMedia = {
@@ -58,6 +58,10 @@ export const api = {
   tutorImportScript: (mediaId: string) => invoke<{ id: number }>('tutor_import_script', { mediaId }),
 
   themeCurrent: () => invoke<InirTheme | null>('theme_current'),
+
+  configGet: () => invoke<AppConfig>('config_get'),
+  /** Applies at once; resolves true when the app must restart (server port). */
+  configSave: (cfg: AppConfig) => invoke<boolean>('config_save', { cfg }),
 }
 
 export type AppEvents = {

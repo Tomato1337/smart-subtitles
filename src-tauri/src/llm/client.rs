@@ -7,7 +7,7 @@ use std::time::Duration;
 
 fn body(st: &AppState, messages: &[Value], max_tokens: u32, json_mode: bool) -> Value {
     let mut b = json!({
-        "model": st.cfg.llm.model,
+        "model": st.cfg().llm.model,
         "messages": messages,
         "max_tokens": max_tokens,
         "thinking": { "type": "disabled" },
@@ -26,11 +26,11 @@ fn log_usage(tag: &str, v: &Value) {
 }
 
 async fn post(st: &AppState, b: &Value, timeout: Duration) -> anyhow::Result<reqwest::Response> {
-    let url = format!("{}/chat/completions", st.cfg.llm.base_url.trim_end_matches('/'));
+    let url = format!("{}/chat/completions", st.cfg().llm.base_url.trim_end_matches('/'));
     let mut last = anyhow!("нет попыток");
     for delay in [0u64, 2, 8] {
         if delay > 0 { tokio::time::sleep(Duration::from_secs(delay)).await; }
-        match st.http.post(&url).bearer_auth(&st.cfg.llm.api_key).timeout(timeout).json(b).send().await {
+        match st.http.post(&url).bearer_auth(&st.cfg().llm.api_key).timeout(timeout).json(b).send().await {
             Ok(r) if r.status().is_success() => return Ok(r),
             Ok(r) if r.status().is_server_error() || r.status().as_u16() == 429 => last = anyhow!("LLM HTTP {}", r.status()),
             Ok(r) => {
@@ -45,7 +45,7 @@ async fn post(st: &AppState, b: &Value, timeout: Duration) -> anyhow::Result<req
 
 /// JSON-mode completion. One extra attempt if the reply is not valid JSON for `T`.
 pub async fn chat_json<T: DeserializeOwned>(st: &AppState, tag: &str, messages: &[Value], max_tokens: u32) -> anyhow::Result<T> {
-    if !st.cfg.llm_enabled() { bail!("нет ключа DeepSeek"); }
+    if !st.cfg().llm_enabled() { bail!("нет ключа DeepSeek"); }
     let b = body(st, messages, max_tokens, true);
     let mut err = anyhow!("пустой ответ");
     for _ in 0..2 {
@@ -96,7 +96,7 @@ impl SseAccumulator {
 
 /// Streaming completion with tools; `on_text` receives each text delta as it arrives.
 pub async fn chat_stream(st: &AppState, tag: &str, messages: &[Value], tools: &[Value], mut on_text: impl FnMut(&str)) -> anyhow::Result<Turn> {
-    if !st.cfg.llm_enabled() { bail!("нет ключа DeepSeek"); }
+    if !st.cfg().llm_enabled() { bail!("нет ключа DeepSeek"); }
     let mut b = body(st, messages, 2000, false);
     b["stream"] = json!(true);
     b["stream_options"] = json!({ "include_usage": true });

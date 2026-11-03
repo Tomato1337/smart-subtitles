@@ -49,7 +49,7 @@ pub async fn available(st: &AppState) -> bool {
 }
 
 async fn fetch(st: &AppState) -> anyhow::Result<Vec<AnkiCard>> {
-    let ids = call(st, "findCards", json!({ "query": format!("deck:\"{}\"", st.cfg.tutor.deck) }), Duration::from_secs(10)).await?;
+    let ids = call(st, "findCards", json!({ "query": format!("deck:\"{}\"", st.cfg().tutor.deck) }), Duration::from_secs(10)).await?;
     let ids: Vec<i64> = ids.as_array().ok_or_else(|| anyhow!("findCards"))?.iter().filter_map(Value::as_i64).collect();
     let mut by_note: HashMap<i64, AnkiCard> = HashMap::new();
     for chunk in ids.chunks(400) {

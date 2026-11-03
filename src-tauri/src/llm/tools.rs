@@ -98,9 +98,10 @@ async fn anki_words(ctx: &ToolCtx, a: &Value) -> String {
     let status = a["status"].as_str();
     let word = a["word"].as_str().map(|w| w.trim().to_lowercase()).filter(|w| !w.is_empty());
     let api_status = match status { Some("problem") => "problem", Some("learned") => "learned", _ => "all" };
-    let mut url = format!("{}/api/anki/words?status={api_status}&limit=200", ctx.st.cfg.tutor.api_url.trim_end_matches('/'));
+    let tutor_url = ctx.st.cfg().tutor.api_url.clone();
+    let mut url = format!("{}/api/anki/words?status={api_status}&limit=200", tutor_url.trim_end_matches('/'));
     if let Some(w) = &word { url.push_str(&format!("&q={}", url::form_urlencoded::byte_serialize(w.as_bytes()).collect::<String>())); }
-    let down = || format!("Tutor не запущен ({})", ctx.st.cfg.tutor.api_url);
+    let down = || format!("Tutor не запущен ({tutor_url})");
     let Ok(r) = ctx.st.http.get(&url).timeout(Duration::from_secs(10)).send().await else { return down() };
     let Ok(v) = r.json::<Value>().await else { return down() };
     let mut out = vec![];

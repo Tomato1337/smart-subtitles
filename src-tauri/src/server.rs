@@ -30,7 +30,7 @@ pub fn router(st: Arc<AppState>) -> Router {
 }
 
 pub async fn serve(st: Arc<AppState>) -> anyhow::Result<()> {
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], st.cfg.server.port));
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], st.cfg().server.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, router(st)).await?;
     Ok(())
@@ -41,7 +41,7 @@ fn origin_of(h: &HeaderMap) -> Option<String> {
 }
 
 async fn cors(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Response {
-    let allowed = origin_of(req.headers()).filter(|o| st.cfg.lampa.origins.contains(o));
+    let allowed = origin_of(req.headers()).filter(|o| st.cfg().lampa.origins.contains(o));
     let media = req.uri().path().starts_with("/media/");
     let mut resp = if req.method() == Method::OPTIONS {
         StatusCode::NO_CONTENT.into_response()
@@ -71,7 +71,7 @@ async fn plugin() -> Response {
 
 async fn post_session(State(st): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
     if let Some(o) = origin_of(&headers) {
-        if !st.cfg.lampa.origins.contains(&o) {
+        if !st.cfg().lampa.origins.contains(&o) {
             return err(StatusCode::FORBIDDEN, "origin не разрешён");
         }
     }
@@ -104,7 +104,7 @@ async fn stream(State(st): State<Arc<AppState>>, Path(sid): Path<String>, Query(
     }
 
     let mode = s.mode(st.vaapi_ok.load(Ordering::Relaxed)).unwrap();
-    let args = stream_args(&s.src, q.start, q.audio, probe, mode, &st.cfg.ffmpeg.vaapi_device);
+    let args = stream_args(&s.src, q.start, q.audio, probe, mode, &st.cfg().ffmpeg.vaapi_device);
     logs::log("ffmpeg", &format!("[{sid}] ffmpeg {}", args.join(" ")));
 
     let mut slot = s.ffmpeg.lock().await;

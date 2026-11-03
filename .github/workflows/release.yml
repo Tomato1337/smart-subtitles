@@ -1,0 +1,61 @@
+# Builds the Fedora RPM and the macOS universal DMG and attaches them to a draft GitHub release.
+# Trigger: push a tag `v*` (e.g. `git tag v0.1.0 && git push origin v0.1.0`) or run it by hand.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fedora:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: System packages
+        run: |
+          dnf install -y git gcc gcc-c++ make pkgconf-pkg-config openssl-devel \
+            webkit2gtk4.1-devel librsvg2-devel libappindicator-gtk3-devel nodejs npm rpm-build
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: Smart Subtitles v__VERSION__
+          releaseBody: Fedora — `.rpm`, macOS (Apple Silicon и Intel) — `.dmg`. Установка описана в README.
+          releaseDraft: true
+          args: --bundles rpm
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: Smart Subtitles v__VERSION__
+          releaseBody: Fedora — `.rpm`, macOS (Apple Silicon и Intel) — `.dmg`. Установка описана в README.
+          releaseDraft: true
+          args: --bundles app,dmg --target universal-apple-darwin

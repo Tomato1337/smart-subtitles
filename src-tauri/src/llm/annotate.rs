@@ -118,7 +118,7 @@ async fn run_batch(st: &Arc<AppState>, s: &Arc<Session>, first: u32) -> Result<(
     if cues.is_empty() { return Ok(()); }
 
     let mut messages = (*prompts::prefix(st, s).await.map_err(|e| e.to_string())?).clone();
-    messages.push(json!({ "role": "user", "content": task_text(&cues, &st.cfg.learner.cefr) }));
+    messages.push(json!({ "role": "user", "content": task_text(&cues, &st.cfg().learner.cefr) }));
     let raw: RawBatch = client::chat_json(st, &format!("annotate {first}"), &messages, 8000).await.map_err(|e| e.to_string())?;
     let anns = process(&cues, raw);
     if anns.len() * 2 < cues.len() {
@@ -211,7 +211,7 @@ pub fn restart(st: &Arc<AppState>, s: &Arc<Session>) {
     let token = s.cancel.child_token();
     let old = std::mem::replace(&mut *s.annot_cancel.lock().unwrap(), token.clone());
     old.cancel();
-    if !st.cfg.llm_enabled() { return; }
+    if !st.cfg().llm_enabled() { return; }
     tauri::async_runtime::spawn(scheduler(st.clone(), s.clone(), token));
 }
 

@@ -8,12 +8,12 @@ pub fn mmss(sec: f64) -> String {
 }
 
 async fn learner_cefr(st: &AppState) -> String {
-    let url = format!("{}/api/settings", st.cfg.tutor.api_url.trim_end_matches('/'));
+    let url = format!("{}/api/settings", st.cfg().tutor.api_url.trim_end_matches('/'));
     let v: Option<Value> = async {
         st.http.get(url).timeout(Duration::from_secs(2)).send().await.ok()?.json().await.ok()
     }
     .await;
-    v.and_then(|v| v["learner.cefr"].as_str().map(str::to_string)).unwrap_or_else(|| st.cfg.learner.cefr.clone())
+    v.and_then(|v| v["learner.cefr"].as_str().map(str::to_string)).unwrap_or_else(|| st.cfg().learner.cefr.clone())
 }
 
 fn system_text(cefr: &str) -> String {

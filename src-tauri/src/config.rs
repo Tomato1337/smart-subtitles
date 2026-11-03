@@ -91,6 +91,21 @@ impl Config {
         Ok(cfg)
     }
 
+    /// Writes config.json atomically, readable only by the owner (it holds API keys and passwords).
+    pub fn save(&self) -> anyhow::Result<()> {
+        let dir = config_dir();
+        std::fs::create_dir_all(&dir)?;
+        let tmp = dir.join("config.json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        }
+        std::fs::rename(&tmp, dir.join("config.json"))?;
+        Ok(())
+    }
+
     /// Adds Basic-auth userinfo to URLs under torrserver.baseUrl so ffmpeg/ffprobe/reqwest can read them.
     /// URLs that already carry credentials, or lie elsewhere, are returned unchanged.
     pub fn with_auth(&self, url: &str) -> String {
