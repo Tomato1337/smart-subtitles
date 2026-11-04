@@ -17,6 +17,23 @@ CREATE TABLE proposal(id INTEGER PRIMARY KEY AUTOINCREMENT, media_id TEXT NOT NU
 /// v2: one automatic subtitle-offset probe per (media, subtitle file).
 const MIGRATION_2: &str = "CREATE TABLE sub_sync(media_id TEXT PRIMARY KEY, source_path TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN('done','failed')), offset REAL, support INTEGER NOT NULL, detail TEXT, created_at INTEGER NOT NULL);";
 
+/// v3: warn/error notifications kept until the user deletes them.
+const MIGRATION_3: &str = "CREATE TABLE notification(id INTEGER PRIMARY KEY AUTOINCREMENT, level TEXT NOT NULL CHECK(level IN('warn','error')), message TEXT NOT NULL, created_at INTEGER NOT NULL);";
+
+/// v4: per-media consent for the dialog analysis; NULL = the user has not been asked yet.
+const MIGRATION_4: &str = "ALTER TABLE media ADD COLUMN annot TEXT CHECK(annot IN('on','off')); UPDATE media SET annot='on' WHERE id IN (SELECT DISTINCT media_id FROM annot_batch);";
+
+/// v5: which candidate the active subtitles came from (`SubCandidate::key`); NULL for rows written before v5.
+const MIGRATION_5: &str = "ALTER TABLE subtitle_source ADD COLUMN ref TEXT;";
+
+/// v6: tokens and dollars of every LLM request, per film and task; `usd` is NULL when no price is known.
+const MIGRATION_6: &str = "CREATE TABLE llm_usage(id INTEGER PRIMARY KEY AUTOINCREMENT, media_id TEXT NOT NULL, task TEXT NOT NULL, model TEXT NOT NULL, input INTEGER NOT NULL, cache_read INTEGER NOT NULL, cache_write INTEGER NOT NULL, output INTEGER NOT NULL, usd REAL, created_at INTEGER NOT NULL);
+CREATE INDEX llm_usage_media_task ON llm_usage(media_id, task);";
+
+/// v7: a subtitles track inside the video file being read block by block; the row is the resume point
+/// and the user's consent to keep downloading it.
+const MIGRATION_7: &str = "CREATE TABLE embedded_load(media_id TEXT PRIMARY KEY, track INTEGER NOT NULL, label TEXT NOT NULL, next_cue INTEGER NOT NULL, total_cues INTEGER NOT NULL);";
+
 pub fn open(path: &std::path::Path) -> anyhow::Result<Connection> {
     let conn = Connection::open(path)?;
     init(&conn)?;
@@ -37,6 +54,36 @@ pub fn init(conn: &Connection) -> anyhow::Result<()> {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(MIGRATION_2)?;
         tx.pragma_update(None, "user_version", 2)?;
+        tx.commit()?;
+    }
+    if v < 3 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_3)?;
+        tx.pragma_update(None, "user_version", 3)?;
+        tx.commit()?;
+    }
+    if v < 4 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_4)?;
+        tx.pragma_update(None, "user_version", 4)?;
+        tx.commit()?;
+    }
+    if v < 5 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_5)?;
+        tx.pragma_update(None, "user_version", 5)?;
+        tx.commit()?;
+    }
+    if v < 6 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_6)?;
+        tx.pragma_update(None, "user_version", 6)?;
+        tx.commit()?;
+    }
+    if v < 7 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_7)?;
+        tx.pragma_update(None, "user_version", 7)?;
         tx.commit()?;
     }
     conn.execute(
@@ -71,11 +118,11 @@ mod tests {
         c.pragma_update(None, "user_version", 1).unwrap();
         init(&c).unwrap();
         let v: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-        assert_eq!(v, 2);
+        assert_eq!(v, 7);
         c.execute("INSERT INTO sub_sync(media_id,source_path,status,offset,support,detail,created_at) VALUES('m','/s.srt','done',0.5,7,NULL,0)", []).unwrap();
         init(&c).unwrap();
         let v: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-        assert_eq!(v, 2);
+        assert_eq!(v, 7);
         let n: i64 = c.query_row("SELECT count(*) FROM sub_sync", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
     }

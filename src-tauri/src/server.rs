@@ -25,7 +25,9 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/media/{sid}/stream", get(stream))
         .route("/media/{sid}/flow", post(flow))
         .route("/media/poster/{key}", get(poster_route))
+        .merge(crate::setup::routes(st.clone()))
         .layer(middleware::from_fn_with_state(st.clone(), cors))
+        .layer(middleware::from_fn(access_log))
         .with_state(st)
 }
 
@@ -38,6 +40,20 @@ pub async fn serve(st: Arc<AppState>) -> anyhow::Result<()> {
 
 fn origin_of(h: &HeaderMap) -> Option<String> {
     h.get(header::ORIGIN).and_then(|v| v.to_str().ok()).map(str::to_string)
+}
+
+/// Interaction log for HTTP: method, path (never the query) status and duration. `/media/` is the
+/// stream/flow pipe — high-frequency — so it is logged only when the request fails.
+async fn access_log(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let started = std::time::Instant::now();
+    let resp = next.run(req).await;
+    let status = resp.status();
+    if !(path.starts_with("/media/") && status.is_success()) {
+        logs::log("events", &format!("http {method} {path} {} {}ms", status.as_u16(), started.elapsed().as_millis()));
+    }
+    resp
 }
 
 async fn cors(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Response {
@@ -61,7 +77,7 @@ async fn cors(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Resp
     resp
 }
 
-fn err(code: StatusCode, msg: impl Into<String>) -> Response {
+pub(crate) fn err(code: StatusCode, msg: impl Into<String>) -> Response {
     (code, Json(json!({ "error": msg.into() }))).into_response()
 }
 

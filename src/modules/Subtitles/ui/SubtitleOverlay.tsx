@@ -79,15 +79,20 @@ export function SubtitleOverlay({ onReplay, onCard, onExplain, above, renderEn, 
     >
       <div className="relative max-w-[min(90%,1100px)] text-center">
         {cue && (
-          <div className={`mb-1 flex justify-center gap-1 transition-opacity duration-150 pointer-events-auto ${playing ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}>
+          <div data-tour="cue-actions" className={`mb-1 flex justify-center gap-1 transition-opacity duration-150 pointer-events-auto ${playing ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}>
             <IconButton icon="replay" label="Повторить" onClick={() => onReplay(cue)} />
             <IconButton icon="add_card" label="Фразу в Anki" onClick={() => onCard(cue)} />
             <IconButton icon="auto_awesome" label="Объяснить фразу агентом" onClick={() => onExplain(cue)} />
           </div>
         )}
-        {cue && <div key={cue.idx} className="sub-in pointer-events-auto">{text(cue, vis.karaoke, true)}</div>}
+        {cue && <div key={cue.idx} data-tour="subtitle" className="sub-in pointer-events-auto">{text(cue, vis.karaoke, true)}</div>}
         {leaving && leaving.idx !== cue?.idx && (
-          <div key={`out-${leaving.idx}`} aria-hidden className="sub-out absolute inset-x-0 bottom-0">
+          <div
+            key={`out-${leaving.idx}`}
+            aria-hidden
+            className="sub-out absolute inset-x-0 bottom-0"
+            onAnimationEnd={(e) => { if (e.target === e.currentTarget) setLeaving(null) }}
+          >
             {text(leaving, 1, false)}
           </div>
         )}

@@ -1,14 +1,18 @@
+mod anki;
 mod asr;
 mod commands;
 mod config;
 mod db;
+mod deps;
 mod llm;
 mod logs;
 mod media;
+mod notify;
 mod patterns;
 mod poster;
 mod server;
 mod session;
+mod setup;
 mod state;
 mod subs;
 mod theme;
@@ -17,7 +21,7 @@ mod types;
 
 use state::AppState;
 use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
-use tauri::{Emitter, Manager, RunEvent};
+use tauri::{Manager, RunEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 
 pub(crate) async fn vaapi_selftest(dev: &str) -> bool {
@@ -54,29 +58,37 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            logs::vacuum();
             let cfg = config::Config::load()?;
+            let port = cfg.server.port;
             let conn = db::open(&config::config_dir().join("data.db"))?;
             let st = Arc::new(AppState {
                 config: std::sync::RwLock::new(Arc::new(cfg)),
+                listen_port: port,
                 db: Arc::new(Mutex::new(conn)),
                 sessions: Default::default(),
                 vaapi_ok: AtomicBool::new(false),
                 http: reqwest::Client::builder().build()?,
+                llm_http: llm::client::http_client()?,
                 app: app.handle().clone(),
                 anki: Default::default(),
                 agent_busy: Default::default(),
                 cards_queue: Default::default(),
                 asr: Default::default(),
+                models_dev: Default::default(),
             });
             app.manage(st.clone());
 
-            let handle = app.handle().clone();
             let s2 = st.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = server::serve(s2.clone()).await {
                     logs::log("app", &format!("server: {e}"));
-                    let _ = handle.emit("toast", serde_json::json!({ "message": format!("Порт {} занят — Lampa не сможет открыть фильм", s2.cfg().server.port) }));
+                    let _ = notify::push(&s2, notify::Level::Error, format!("Порт {} занят — Lampa не сможет открыть фильм", s2.cfg().server.port));
                 }
+            });
+            let s5 = st.clone();
+            tauri::async_runtime::spawn(async move {
+                llm::catalog::models_dev(&s5).await;
             });
             let s3 = st.clone();
             tauri::async_runtime::spawn(async move {
@@ -92,7 +104,7 @@ pub fn run() {
                 loop {
                     tick.tick().await;
                     if s4.app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false) {
-                        tutor::anki_index::refresh(&s4).await;
+                        anki::index::refresh(&s4).await;
                     }
                 }
             });
@@ -110,31 +122,59 @@ pub fn run() {
             commands::session_open_file,
             commands::session_open_playlist_item,
             commands::media_open_stream,
+            commands::media_torrent_health,
             commands::media_save_position,
             commands::media_set_audio,
             commands::media_set_sub_offset,
             commands::media_recent,
+            commands::media_reset_annot,
             commands::session_reopen,
             commands::subs_list,
             commands::subs_load_file,
+            commands::subs_candidates,
+            commands::subs_select,
+            commands::subs_embedded_state,
+            commands::subs_embedded_decide,
             commands::annot_prioritize,
+            commands::annot_status,
+            commands::annot_estimate,
+            commands::annot_cost,
+            commands::annot_set,
+            commands::annot_model,
             commands::annot_retry,
             commands::llm_explain,
             commands::agent_send,
             commands::agent_history,
+            commands::agent_usage,
             commands::cards_draft,
             commands::cards_create_proposal,
             commands::cards_add,
             commands::cards_dismiss,
             commands::anki_refresh,
+            commands::anki_catalog,
+            commands::anki_index_models,
+            commands::anki_note_type,
+            commands::cards_preview,
+            commands::images_generate,
             commands::tutor_import_script,
             commands::config_get,
             commands::config_save,
+            commands::llm_providers,
+            commands::llm_models,
+            commands::llm_model_info,
+            commands::llm_ping,
+            commands::setup_status,
+            commands::deps_check,
             commands::patterns_exposure,
             commands::patterns_stats,
             commands::patterns_set_status,
             commands::patterns_occurrences,
             commands::theme_current,
+            commands::notifications_list,
+            commands::notifications_push,
+            commands::notifications_remove,
+            commands::notifications_clear,
+            commands::log_events,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

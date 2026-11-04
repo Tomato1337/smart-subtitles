@@ -1,19 +1,18 @@
 use crate::{patterns::PATTERNS, session::Session, state::AppState};
 use serde_json::{json, Value};
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 pub fn mmss(sec: f64) -> String {
     let s = sec.max(0.0) as u64;
     format!("{}:{:02}", s / 60, s % 60)
 }
 
+/// Tutor owns the level when the add-on is on; otherwise the one saved in the app.
 async fn learner_cefr(st: &AppState) -> String {
-    let url = format!("{}/api/settings", st.cfg().tutor.api_url.trim_end_matches('/'));
-    let v: Option<Value> = async {
-        st.http.get(url).timeout(Duration::from_secs(2)).send().await.ok()?.json().await.ok()
-    }
-    .await;
-    v.and_then(|v| v["learner.cefr"].as_str().map(str::to_string)).unwrap_or_else(|| st.cfg().learner.cefr.clone())
+    crate::tutor::api::settings(st)
+        .await
+        .and_then(|v| v["learner.cefr"].as_str().map(str::to_string))
+        .unwrap_or_else(|| st.cfg().learner.cefr.clone())
 }
 
 fn system_text(cefr: &str) -> String {

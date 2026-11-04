@@ -1,5 +1,5 @@
-use super::{client, prompts};
-use crate::{db::now, session::Session, state::AppState, tutor::cards::{cloze_inner, WordDraft}};
+use super::{client, prompts, tasks::Task};
+use crate::{db::now, session::Session, state::AppState, anki::cards::{cloze_inner, WordDraft}};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -28,10 +28,10 @@ async fn cue_text(st: &AppState, media_id: &str, idx: u32) -> Result<String, Str
     st.db(move |c| c.query_row("SELECT text FROM cue WHERE media_id=?1 AND idx=?2", params![m, idx], |r| r.get(0))).await
 }
 
-async fn ask<T: serde::de::DeserializeOwned>(st: &AppState, s: &Session, tag: &str, task: String, max_tokens: u32) -> Result<T, String> {
+async fn ask<T: serde::de::DeserializeOwned>(st: &AppState, s: &Session, task: Task, tag: &str, prompt: String, max_tokens: u32) -> Result<T, String> {
     let mut messages = (*prompts::prefix(st, s).await.map_err(|e| e.to_string())?).clone();
-    messages.push(json!({ "role": "user", "content": task }));
-    client::chat_json(st, tag, &messages, max_tokens).await.map_err(|e| e.to_string())
+    messages.push(json!({ "role": "user", "content": prompt }));
+    client::chat_json(st, task, &s.media_id, tag, &messages, max_tokens).await.map_err(|e| e.to_string())
 }
 
 /// Contextual explanation of a span; cached per (media, cue, span).
@@ -46,7 +46,7 @@ pub async fn explain(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: u32, span: S
     let task = format!(
         "TASK explain span \"{span}\" in cue [{cue_idx}] «{text}». Return {{\"chunk\":\"<каноническая форма, напр. bail on someone>\",\"translation\":\"<перевод в этом контексте>\",\"meaning\":\"<что здесь имеется в виду, 1–2 предложения по-русски>\",\"literal\":\"<буквальный перевод или пусто>\",\"register\":\"neutral|informal|slang|vulgar|formal\",\"word_type\":\"<часть речи / тип по-английски>\",\"grammar\":\"<объяснение грамматики по-русски или пусто>\",\"pattern_id\":\"<id каталога или null>\",\"examples\":[{{\"en\":\"\",\"ru\":\"\"}}]}}. 2 примера."
     );
-    let e: Explanation = ask(st, s, &format!("explain {cue_idx}"), task, 900).await?;
+    let e: Explanation = ask(st, s, Task::Explain, &format!("explain {cue_idx}"), task, 900).await?;
     let (m, sp, j) = (s.media_id.clone(), span, serde_json::to_string(&e).map_err(|e| e.to_string())?);
     st.db(move |c| { c.execute("INSERT OR REPLACE INTO explanation VALUES(?1,?2,?3,?4,?5)", params![m, cue_idx, sp, j, now()])?; Ok(()) }).await?;
     Ok(e)
@@ -86,7 +86,7 @@ pub async fn draft(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: u32, span: Opt
         Some(sp) => format!("TASK make one flashcard for \"{sp}\" from cue [{cue_idx}] «{text}». Return WORD_SCHEMA JSON {schema}: word = the span in canonical form, full_sentence = the cue in one line, cloze_sentence = the cue with {{{{c1::<span as it appears in the text>}}}}, word_type = part of speech. {image}"),
         None => format!("TASK make one PHRASE flashcard for the whole cue [{cue_idx}] «{text}». Return WORD_SCHEMA JSON {schema} where word = the whole cue as one line, translation = its contextual Russian translation, word_type = \"phrase\", full_sentence = the cue, sentence_translation = same translation, cloze_sentence = the cue with its single hardest chunk wrapped in {{{{c1::...}}}}. {image}"),
     };
-    let mut d: WordDraft = ask(st, s, &format!("draft {cue_idx}"), task, 800).await?;
+    let mut d: WordDraft = ask(st, s, Task::Draft, &format!("draft {cue_idx}"), task, 800).await?;
     match &span {
         Some(sp) => {
             if !d.cloze_sentence.contains("{{c1::") {

@@ -5,6 +5,7 @@ import type { Cue, CueAnnotation } from '@/common/types/ipc'
 import { Icon } from '@/common/ui/Icon'
 import { IconButton } from '@/common/ui/IconButton'
 import { Menu, MenuItem, MenuDivider } from '@/common/ui/Menu'
+import { useTipAnchor } from '@/common/ui/tipAnchor'
 import { formatTime } from '@/common/utilities/time'
 import { usePlaybackStore, usePlayer } from '@/modules/Player'
 import { focusEnd } from '../lib/cues'
@@ -34,12 +35,14 @@ type Props = {
 const FONT = { S: 'type-title-small', M: 'type-title-medium', L: 'type-title-large' } as const
 
 function TonalButton({ icon, label, onClick, compact }: { icon: string; label: string; onClick: () => void; compact?: boolean }) {
+  const tip = useTipAnchor()
   return (
     <button
       type="button"
       aria-label={label}
       data-tip={label}
       onClick={(e) => { e.stopPropagation(); onClick() }}
+      style={tip}
       className={`state-layer state-on-surface relative flex items-center justify-center bg-[var(--md-sys-color-surface-container-highest)] text-[var(--md-sys-color-on-surface)] ${compact ? 'size-7 rounded-[var(--md-sys-shape-corner-small)]' : 'size-10 rounded-[var(--md-sys-shape-corner-medium)]'}`}
     >
       <Icon name={icon} size={compact ? 18 : 22} />
@@ -94,7 +97,7 @@ export function Sidebar({ mediaId, onReplay, onSlowReplay, onCard, onExplain, re
   const actions = { onReplay, onSlowReplay, onCard, onExplain }
 
   return (
-    <aside className="flex h-full w-[380px] shrink-0 flex-col bg-[var(--md-sys-color-surface-container-low)]" aria-label="Диалоги">
+    <aside data-tour="sidebar" className="flex h-full w-[380px] shrink-0 flex-col bg-[var(--md-sys-color-surface-container-low)]" aria-label="Диалоги">
       <div className="flex items-center justify-between px-3 py-2">
         <h2 className="type-title-medium px-2">Диалоги</h2>
         <div className="relative flex">

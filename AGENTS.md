@@ -1,0 +1,93 @@
+# Smart Subtitles — notes for coding agents
+
+Desktop player (Tauri 2: Rust backend + React frontend) for learning English from films: bilingual subtitles, LLM translation and highlighting, a tutor chat, Anki cards with movie clips. Linux (Fedora) and macOS. The UI and user-facing strings are Russian; code, comments and agent docs are English.
+
+Two audiences, two documents:
+
+- **Runtime agents** that configure the running app for a user read `src-tauri/src/setup_guide.md`. The app serves it at `http://127.0.0.1:47800/llms.txt` together with the setup API (`/api/setup`, `PATCH /api/setup/config`, …). Point users' agents there; do not duplicate it here.
+- **Coding agents** working on this repository read this file. `README.md` is the user-facing manual (Russian).
+
+## Commands
+
+```sh
+npm install
+npm run tauri dev                                  # dev app; a src-tauri change rebuilds (~15 s) and restarts it
+npm run type-check                                 # tsc -b (TypeScript 7)
+npm run lint                                       # oxlint src --deny-warnings (no ESLint)
+npm test                                           # vitest
+cargo test --manifest-path src-tauri/Cargo.toml    # Rust unit tests
+npm run build:rpm / npm run build:mac              # packages; CI release: .github/workflows/release.yml on tag v*
+```
+
+Run all four checks before handing work back. The dev app restart kills the current ffmpeg stream and session.
+
+## Layout
+
+```
+src-tauri/src/
+  lib.rs            app setup, plugins (single-instance, deep link smartsubs://), command registration
+  commands.rs       every #[tauri::command] the UI calls
+  server.rs         axum on 127.0.0.1:{server.port}: /api/session (Lampa), /media/* (fMP4 stream), plugin JS
+  setup.rs          setup wizard status, agent HTTP API, config validate/merge-patch/apply
+  setup_guide.md    agent guide, served as /llms.txt
+  config.rs         config.json schema and defaults (serde, camelCase)
+  state.rs session.rs  AppState, the open film (one session at a time)
+  db.rs             SQLite schema + numbered migrations (PRAGMA user_version)
+  notify.rs logs.rs deps.rs poster.rs theme.rs patterns.rs
+  media/            ffprobe, ffmpeg stream args (copy / VAAPI tonemap / x264), keyframes, clips
+  subs/             parse/clean, sources: torrserver (/subs API), sidecar, embedded (mkv.rs EBML reader), opensubtitles;
+                    acquire.rs (source chain), choose.rs (chooser), store.rs, sync.rs (whisper offset)
+  llm/              client (OpenAI + Anthropic wire), providers (keys from other agents), tasks (per-task routing),
+                    annotate, explain, agent + tools (chat), catalog/cost/usage (prices, tokens)
+  asr/              faster-whisper through uv, word alignment
+  anki/             AnkiConnect client, note type, field mapping, known-words index, card queue, images, tts
+  tutor/            optional tutor add-on API
+src/                FEOD layers: common → modules → pages → app
+  common/api/tauri.ts      typed wrappers over invoke()
+  common/types/ipc.ts      TS mirror of the Rust IPC/config types
+  modules/<Name>/index.ts  the only public API of a module
+lampa-plugin/smartsubs.js  Lampa plugin; also served by the app at /lampa/smartsubs.js
+```
+
+## Conventions
+
+- Frontend follows FEOD (<https://github.com/Sdju/feod>): import other modules only through their `index.ts`; lower layers never import higher ones. `oxlint.config.ts` enforces it.
+- TanStack Router (code-based, `src/app/router.tsx`) and TanStack Query; Tailwind 4. Custom typography classes live in `@layer components`, otherwise they override utilities like `font-semibold`.
+- Backend → UI communication is Tauri events (`subs:status`, `annot:progress`, `cards:result`, `config:changed`, `notification:added`, …). Errors and warnings the user must see go through `notify::push` (stored, shown in the notification center); transient messages through `notify::info`.
+- Logging: `logs::log("<name>", …)` writes `logs/<name>.log` next to `config.json` (`app`, `llm`, `ffmpeg`, `asr`, `events`). Never log secrets; `logs::redact` masks URL userinfo and key-shaped strings, keep it in the path of anything third-party.
+- Comments explain why, not what; keep them current when behaviour changes.
+
+## Changing the config
+
+A config field touches several places; all of them must change together:
+
+1. `src-tauri/src/config.rs`: the struct field with `#[serde(default)]` and its default. Old `config.json` files must keep loading.
+2. `src-tauri/src/setup.rs`: `validate` for enumerations and formats; `SECRETS` if the value is a key or password (it is then masked as `***` in the agent API); `status` if a wizard step depends on it.
+3. `src-tauri/src/setup_guide.md`: a row `| \`dotted.path\` | type | default | meaning |` in «Config fields». The test `setup::tests::agent_guide_documents_every_config_field` fails when a field has no row.
+4. `src/common/types/ipc.ts` and the settings UI in `src/modules/Settings/`.
+5. `README.md` («Настройка») when users need to know about it.
+
+`setup::apply` is the only path that saves and applies a config (UI and agent API alike); add any re-initialization a field needs there (see the VAAPI self-test and the Anki index refresh).
+
+## Changing the database
+
+Never edit `SCHEMA` for existing installs: append `MIGRATION_<n>` in `db.rs`, run it under `if v < n` and bump `user_version` to `n`. Document the version in a comment like the others.
+
+## Pitfalls
+
+- AnkiConnect closes the socket after each answer; requests go with `Connection: close`.
+- `ffprobe` on a cold torrent can take up to 120 s (the timeout); keep it off paths the UI waits on.
+- The ffmpeg stream is a live fMP4 pipe: no byte ranges except from 0; seeking restarts ffmpeg.
+- The embedded-subtitle reader only appends cues at the tail, so `cue.idx` stays the start-time rank everything keys on.
+- Annotation batches are 40 cues (`annotate::BATCH`, mirrored in `Watch/AnnotGate.tsx`).
+- macOS apps started from Finder get a minimal `PATH`; `lib.rs` appends the Homebrew prefixes.
+- The machine may have `http_proxy` set; reqwest reaches loopback services directly through `no_proxy`.
+
+## Files on the user's machine
+
+Linux paths (macOS: `~/Library/Application Support/smart-subtitle/` and `~/Library/Caches/smart-subtitle/`):
+
+- `~/.config/smart-subtitle/config.json` (mode 600, holds keys), `data.db`, `logs/`
+- `~/.cache/smart-subtitle/`: subtitles, clips, card images, posters, the whisper `uv` environment, `models-dev.json`
+
+Never print or commit the contents of `config.json`; refer to fields by path.

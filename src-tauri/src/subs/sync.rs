@@ -6,6 +6,7 @@ use crate::{
     db::now,
     logs,
     media::TempFile,
+    notify::{self, Level},
     session::Session,
     state::AppState,
 };
@@ -32,7 +33,7 @@ pub fn spawn(st: &Arc<AppState>, s: &Arc<Session>) {
 pub async fn run(st: Arc<AppState>, s: Arc<Session>) {
     if let Err(e) = once(&st, &s).await {
         logs::log("asr", &format!("sync: failed: {e}"));
-        toast(&st, format!("Автоподгонка субтитров не удалась: {e}"));
+        let _ = notify::push(&st, Level::Warn, format!("Автоподгонка субтитров не удалась: {e}"));
     }
 }
 
@@ -176,10 +177,6 @@ fn silent(pcm: &Path) -> bool {
     }
 }
 
-fn toast(st: &AppState, message: String) {
-    let _ = st.app.emit("toast", serde_json::json!({ "message": message }));
-}
-
 fn report(st: &Arc<AppState>, s: &Session, cur: f64, written: Written) {
     match written {
         Written::Stale => {}
@@ -187,17 +184,17 @@ fn report(st: &Arc<AppState>, s: &Session, cur: f64, written: Written) {
             logs::log("asr", &format!("sync: offset {offset:+.1} support {support}"));
             if (offset - cur).abs() >= 0.1 {
                 let _ = st.app.emit("subs:offset", serde_json::json!({ "mediaId": s.media_id, "offset": offset }));
-                toast(st, format!("Субтитры подогнаны по звуку: сдвиг {offset:+.1} с"));
+                notify::info(st, format!("Субтитры подогнаны по звуку: сдвиг {offset:+.1} с"));
             }
         }
         Written::Kept { offset } => logs::log("asr", &format!("sync: manual offset changed during sync, kept (found {offset:+.1})")),
         Written::Weak { support, total } => {
             logs::log("asr", &format!("sync: weak support {support}/{total}"));
-            toast(st, "Автоподгонка субтитров: мало совпадений со звуком, сдвиг не изменён".into());
+            let _ = notify::push(st, Level::Warn, "Автоподгонка субтитров: мало совпадений со звуком, сдвиг не изменён");
         }
         Written::Drift => {
             logs::log("asr", "sync: drift");
-            toast(st, "Автоподгонка субтитров: сдвиг разный в разных частях фильма — похоже, субтитры от другой версии".into());
+            let _ = notify::push(st, Level::Warn, "Автоподгонка субтитров: сдвиг разный в разных частях фильма — похоже, субтитры от другой версии");
         }
     }
 }

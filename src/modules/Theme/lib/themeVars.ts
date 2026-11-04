@@ -19,6 +19,8 @@ const kinds: [name: string, hex: string][] = [
  ['slang', '#F06292'], ['reduction', '#BA68C8'], ['grammar', '#FFD54F'],
 ]
 const ANKI = '#FFB74D'
+/** Warnings: kept unblended so the orange stays orange on any wallpaper. */
+const WARNING = '#FF9800'
 
 export type ThemeInput = { seed: string; mode: string; colors: Record<string, string> }
 
@@ -44,5 +46,9 @@ export function themeVars(t: ThemeInput): Record<string, string> {
  out['--app-anki-label'] = hexFromArgb(anki.color)
  out['--app-anki-label-container'] = hexFromArgb(anki.colorContainer)
  out['--app-anki-on-label-container'] = hexFromArgb(anki.onColorContainer)
+ const warn = customColor(seed, { name: 'warning', value: argbFromHex(WARNING), blend: false })[group]
+ out['--app-warning'] = hexFromArgb(warn.color)
+ out['--app-warning-container'] = hexFromArgb(warn.colorContainer)
+ out['--app-on-warning-container'] = hexFromArgb(warn.onColorContainer)
  return out
 }

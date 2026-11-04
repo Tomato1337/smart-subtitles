@@ -3,14 +3,10 @@ import type { AnkiCard, AnkiLabelMode, Chunk, ChunkKind, Cue } from '@/common/ty
 import { Icon } from '@/common/ui/Icon'
 import { IconButton } from '@/common/ui/IconButton'
 import { ankiTokenDecor, isLabelVisible, labelText, STATUS_RU } from '@/modules/Anki'
+import { keyLabel, useHotkeysStore } from '@/modules/Hotkeys'
 import { PatternChip, patternById } from '@/modules/Patterns'
 import { chunkUnderline, CueText, kindColor, tokenize, type SpanPick } from '@/modules/Subtitles'
 import { PATTERN_UNDERLINE } from './CueLine'
-
-const SEEN_KEY = 'smartsubs.guideSeen'
-
-/** True until the guide has been opened once. */
-export const guideUnseen = () => !localStorage.getItem(SEEN_KEY)
 
 type Layer = ChunkKind | 'pattern' | 'anki'
 
@@ -153,6 +149,7 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
 /** Interactive legend for subtitle highlighting: live sample cues, a layer inspector and the reading rules. */
 export function HighlightGuide({ open, onClose }: { open: boolean; onClose: () => void }) {
   const samples = useMemo(() => SAMPLES.map(build), [])
+  const hotkey = useHotkeysStore((s) => s.bindings)
   const [hoverLayer, setHoverLayer] = useState<Layer | null>(null)
   const [pinnedLayer, setPinnedLayer] = useState<Layer | null>(null)
   const [pick, setPick] = useState<Pick | null>(null)
@@ -161,8 +158,6 @@ export function HighlightGuide({ open, onClose }: { open: boolean; onClose: () =
   const [karaoke, setKaraoke] = useState(0.4)
   const [playing, setPlaying] = useState(false)
   const spot = hoverLayer ?? pinnedLayer
-
-  useEffect(() => { if (open) localStorage.setItem(SEEN_KEY, '1') }, [open])
 
   useEffect(() => {
     if (!playing) return
@@ -303,7 +298,7 @@ export function HighlightGuide({ open, onClose }: { open: boolean; onClose: () =
 
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="type-label-large w-32">Конструкции <Kbd>P</Kbd></span>
+                <span className="type-label-large w-32">Конструкции <Kbd>{keyLabel(hotkey.patterns)}</Kbd></span>
                 <Chip active={showPatterns} onClick={() => setShowPatterns((v) => !v)}>{showPatterns ? 'Вкл' : 'Выкл'}</Chip>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -315,7 +310,7 @@ export function HighlightGuide({ open, onClose }: { open: boolean; onClose: () =
 
             <div className="rounded-[var(--md-sys-shape-corner-large)] bg-[var(--md-sys-color-surface-container)] p-4">
               <div className="type-label-large mb-2 text-[var(--md-sys-color-primary)]">Уже произнесённое</div>
-              <p className="type-body-medium mb-3">Слова загораются по мере того, как их произносят, остальные приглушены. Так подсвечиваются и субтитры на видео, и активная реплика в «Диалогах». В режиме «Скрывать субтитры» текст появляется только по <Kbd>A</Kbd>: фильм отмотается на 5 секунд и покажет фразу.</p>
+              <p className="type-body-medium mb-3">Слова загораются по мере того, как их произносят, остальные приглушены. Так подсвечиваются и субтитры на видео, и активная реплика в «Диалогах». В режиме «Скрывать субтитры» текст появляется только по <Kbd>{keyLabel(hotkey.reveal)}</Kbd>: фильм отмотается на 5 секунд и покажет фразу.</p>
               <div className="rounded-[var(--md-sys-shape-corner-medium)] bg-black px-4 py-3 text-center">
                 <div className="type-title-large">{renderSample(samples[1], 1, karaoke)}</div>
               </div>
@@ -366,7 +361,7 @@ export function HighlightGuide({ open, onClose }: { open: boolean; onClose: () =
               <ul className="type-body-small flex flex-col gap-1.5">
                 <li><Icon name="mouse" size={16} /> Клик по слову: пауза и разбор. Протянуть мышью: разбор своего куска фразы.</li>
                 <li><Icon name="menu" size={16} /> В «Диалогах» наведение сразу показывает перевод. Полоса под активной репликой показывает, сколько она ещё будет в фокусе.</li>
-                <li><Kbd>P</Kbd> конструкции, <Kbd>E</Kbd> / <Kbd>T</Kbd> английский и русский текст, <Kbd>S</Kbd> диалоги, <Kbd>R</Kbd> повтор, <Kbd>←</Kbd> <Kbd>→</Kbd> соседняя реплика, <Kbd>H</Kbd> эта справка, <Kbd>C</Kbd> чат с агентом.</li>
+                <li><Kbd>{keyLabel(hotkey.patterns)}</Kbd> конструкции, <Kbd>{keyLabel(hotkey.showEn)}</Kbd> / <Kbd>{keyLabel(hotkey.showRu)}</Kbd> английский и русский текст, <Kbd>{keyLabel(hotkey.sidebar)}</Kbd> диалоги, <Kbd>{keyLabel(hotkey.replay)}</Kbd> повтор, <Kbd>{keyLabel(hotkey.prevCue)}</Kbd> <Kbd>{keyLabel(hotkey.nextCue)}</Kbd> соседняя реплика, <Kbd>{keyLabel(hotkey.guide)}</Kbd> эта справка, <Kbd>{keyLabel(hotkey.chat)}</Kbd> чат с агентом.</li>
               </ul>
             </div>
           </aside>

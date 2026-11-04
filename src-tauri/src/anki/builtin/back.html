@@ -1,0 +1,30 @@
+<div class="card-back">
+    {{#Clip}}
+    <div class="clip-wrap">{{Clip}}</div>
+    <div class="clip-tools"><button data-act="play">▶ Видео</button><button data-act="slow">🐢 0.75×</button></div>
+    {{#ClipText}}<div class="clip-text">{{ClipText}} {{#SentenceAudio}}<span class="audio-btn">{{SentenceAudio}}</span>{{/SentenceAudio}}</div>{{/ClipText}}
+    {{^ClipText}}<div class="full-sentence">{{FullSentence}} {{#SentenceAudio}}<span class="audio-btn">{{SentenceAudio}}</span>{{/SentenceAudio}}</div>{{/ClipText}}
+    {{#ClipSource}}<div class="clip-source">{{ClipSource}}</div>{{/ClipSource}}
+    {{/Clip}}
+    {{^Clip}}{{#Image}}<div class="img-wrap">{{Image}}</div>{{/Image}}
+    <div class="full-sentence">{{FullSentence}} {{#SentenceAudio}}<span class="audio-btn">{{SentenceAudio}}</span>{{/SentenceAudio}}</div>{{/Clip}}
+    <div class="answer-word">{{Word}} {{#WordAudio}}<span class="audio-btn">{{WordAudio}}</span>{{/WordAudio}}</div>
+    <div class="word-translation">{{WordTranslation}}</div>
+    <hr id="answer">
+    {{type:Word}}
+</div>
+<script>
+(function () {
+  var v = document.querySelector('.clip-wrap video');
+  if (!v) return;
+  var play = document.querySelector('.clip-tools button[data-act="play"]');
+  var slow = document.querySelector('.clip-tools button[data-act="slow"]');
+  function label() { if (play) play.textContent = v.paused || v.ended ? '▶ Видео' : '⏸ Пауза'; }
+  function start() { if (v.ended) v.currentTime = 0; var p = v.play(); if (p && p.catch) p.catch(function () {}); }
+  function toggle() { if (v.paused || v.ended) start(); else v.pause(); }
+  ['play', 'pause', 'ended'].forEach(function (e) { v.addEventListener(e, label); });
+  v.onclick = toggle;
+  if (play) play.onclick = toggle;
+  if (slow) slow.onclick = function () { v.playbackRate = v.playbackRate === 1 ? 0.75 : 1; slow.classList.toggle('on', v.playbackRate !== 1); };
+})();
+</script>

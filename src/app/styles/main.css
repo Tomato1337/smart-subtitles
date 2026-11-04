@@ -26,15 +26,65 @@ body {
 [data-tip] { position: relative; }
 [data-tip]::after {
   content: attr(data-tip);
+  display: none;
   position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
   padding: 4px 8px; white-space: nowrap; pointer-events: none;
   background: var(--md-sys-color-inverse-surface); color: var(--md-sys-color-inverse-on-surface);
   border-radius: var(--md-sys-shape-corner-extra-small);
   font-size: var(--md-sys-typescale-label-small-size);
   opacity: 0; transition: opacity 100ms 0ms;
-  z-index: 100;
+  z-index: 1000;
 }
-[data-tip]:hover::after { opacity: 1; transition-delay: 500ms; }
+[data-tip]:hover::after { display: block; opacity: 1; transition-delay: 500ms; }
+/* Buttons at the top of the window: the tip goes below, or it is clipped by the window edge. */
+[data-tip][data-tip-pos='bottom']::after { bottom: auto; top: calc(100% + 6px); }
+[data-tip][data-tip-pos='left']::after { bottom: auto; left: auto; right: calc(100% + 6px); top: 50%; transform: translateY(-50%); }
+/* Edge buttons: keep the tip inside a clipping panel. */
+[data-tip][data-tip-pos='bottom-start']::after { bottom: auto; top: calc(100% + 6px); left: 0; transform: none; }
+[data-tip][data-tip-pos='bottom-end']::after { bottom: auto; top: calc(100% + 6px); left: auto; right: 0; transform: none; }
+
+/*
+ * CSS Anchor Positioning: the hint is fixed to the viewport and anchored to its own button, so
+ * `overflow: hidden` on a scrolling cue row or a dialog cannot cut it off. The unique anchor name
+ * comes from `useTipAnchor` — one shared name would bind every hint to the last button on the page.
+ * `position-area` places the hint on a tile of the anchor grid; `position-try-fallbacks` flips it
+ * to the opposite side / another tile when the window edge would clip it, including both axes at once.
+ */
+@supports (anchor-name: --tip) and (position-anchor: --tip) and (position-area: top) {
+  [data-tip] { anchor-name: var(--tip-anchor); }
+  /* Reset the absolute fallback's insets/transforms: position-area defines the box now. */
+  [data-tip]::after,
+  [data-tip][data-tip-pos]::after {
+    inset: auto; translate: none; transform: none;
+  }
+  [data-tip]::after {
+    position: fixed;
+    position-anchor: var(--tip-anchor);
+    position-area: top;
+    /* Old engines may know only simple flips; the full list also handles both axes at once. */
+    position-try-fallbacks: flip-block;
+    position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+    margin: 0 0 6px;
+  }
+  [data-tip][data-tip-pos='bottom']::after {
+    position-area: bottom;
+    margin: 6px 0 0;
+  }
+  [data-tip][data-tip-pos='left']::after {
+    position-area: left;
+    margin: 0 6px 0 0;
+  }
+  [data-tip][data-tip-pos='bottom-start']::after {
+    position-area: bottom span-right;
+    justify-self: start;
+    margin: 6px 0 0;
+  }
+  [data-tip][data-tip-pos='bottom-end']::after {
+    position-area: bottom span-left;
+    justify-self: end;
+    margin: 6px 0 0;
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -60,11 +110,26 @@ body {
 @keyframes sub-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes sub-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-14px); } }
 .sub-in { animation: sub-in 280ms var(--md-sys-motion-emphasized-decelerate); }
-.sub-out { animation: sub-out 220ms var(--md-sys-motion-emphasized-accelerate) forwards; }
+/* Base style is the end state: if the fill is dropped (WebKitGTK) or unmount lags, the old line must not flash back. */
+.sub-out { opacity: 0; transform: translateY(-14px); animation: sub-out 220ms var(--md-sys-motion-emphasized-accelerate) forwards; }
 @media (prefers-reduced-motion: reduce) { .sub-out { display: none; } }
+/* Notification popup: flies in from the left edge… */
+@keyframes toast-in { from { opacity: 0; transform: translateX(-120%); } to { opacity: 1; transform: none; } }
+.toast-in { animation: toast-in 260ms var(--md-sys-motion-emphasized-decelerate); }
+/* …and, when its time is up, shrinks down into the center button. */
+@keyframes toast-out { to { opacity: 0; transform: translate(0, 44px) scale(0.12); } }
+.toast-out { animation: toast-out 240ms var(--md-sys-motion-emphasized-accelerate) forwards; transform-origin: bottom left; }
 @keyframes md-spin { to { transform: rotate(360deg); } }
 .md-spinner {
   width: 48px; height: 48px; border-radius: 9999px;
   border: 4px solid var(--md-sys-color-surface-container-highest); border-top-color: var(--md-sys-color-primary);
   animation: md-spin 900ms linear infinite;
 }
+/* The global reduced-motion rule above stops every animation; a static ring reads as a stalled task,
+   so spinners keep turning — just slowly enough not to be disorienting. */
+@media (prefers-reduced-motion: reduce) { .md-spinner { animation: md-spin 6s linear infinite !important; } }
+/* Player mode: the same popups, but they drop out of the top bar and shrink back up into its button. */
+@keyframes toast-in-top { from { opacity: 0; transform: translateY(-120%); } to { opacity: 1; transform: none; } }
+.toast-in-top { animation: toast-in-top 260ms var(--md-sys-motion-emphasized-decelerate); }
+@keyframes toast-out-top { to { opacity: 0; transform: translateY(-44px) scale(0.12); } }
+.toast-out-top { animation: toast-out-top 240ms var(--md-sys-motion-emphasized-accelerate) forwards; transform-origin: top right; }

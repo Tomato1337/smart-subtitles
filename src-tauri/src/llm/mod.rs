@@ -1,6 +1,11 @@
 pub mod agent;
 pub mod annotate;
+pub mod catalog;
 pub mod client;
+pub mod cost;
 pub mod explain;
 pub mod prompts;
+pub mod providers;
+pub mod tasks;
 pub mod tools;
+pub mod usage;

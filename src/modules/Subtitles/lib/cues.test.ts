@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { Cue } from '@/common/types/ipc'
-import { findCueIndex, focusEnd, focusedCueIndex, nextCueIndex, prevCueIndex } from './cues'
+import { findCueIndex, focusEnd, focusedCueIndex, lastStartedBefore, nextCueIndex, prevCueIndex } from './cues'
 
 const c = (idx: number, start: number, end: number): Cue => ({ idx, start, end, text: String(idx), ru: null })
 const cues = [c(0, 1, 3), c(1, 5, 7), c(2, 10, 12)]
@@ -30,6 +30,15 @@ describe('navigation', () => {
     expect(prevCueIndex(cues, 6.5, 0)).toBe(1)
     expect(prevCueIndex(cues, 5.5, 0)).toBe(0)
     expect(prevCueIndex(cues, 4, 0)).toBe(0)
+  })
+})
+
+describe('lastStartedBefore', () => {
+  test('keeps the just-spoken phrase through the gap, so replay restarts it', () => {
+    expect(lastStartedBefore(cues, 0.5, 0)).toBe(-1)
+    expect(lastStartedBefore(cues, 4, 0)).toBe(0)
+    expect(lastStartedBefore(cues, 12.5, 0)).toBe(2)
+    expect(lastStartedBefore(cues, 6, 1)).toBe(1)
   })
 })
 

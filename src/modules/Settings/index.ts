@@ -1,1 +1,5 @@
 export { SettingsPanel } from './ui/SettingsPanel'
+export { SetupWizard } from './ui/SetupWizard'
+export { useConfigEvents } from './useConfigEvents'
+export { useDepsCheck } from './useDepsCheck'
+export { useSetupWizard } from './useSetupWizard'

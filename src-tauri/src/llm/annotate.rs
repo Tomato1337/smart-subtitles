@@ -1,6 +1,6 @@
 use super::{client, prompts};
 use crate::{patterns, session::Session, state::AppState, types::*};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::Deserialize;
 use serde_json::json;
 use std::{collections::HashSet, sync::{atomic::Ordering, Arc, Mutex}};
@@ -119,7 +119,7 @@ async fn run_batch(st: &Arc<AppState>, s: &Arc<Session>, first: u32) -> Result<(
 
     let mut messages = (*prompts::prefix(st, s).await.map_err(|e| e.to_string())?).clone();
     messages.push(json!({ "role": "user", "content": task_text(&cues, &st.cfg().learner.cefr) }));
-    let raw: RawBatch = client::chat_json(st, &format!("annotate {first}"), &messages, 8000).await.map_err(|e| e.to_string())?;
+    let raw: RawBatch = client::chat_json(st, super::tasks::Task::Annotate, &s.media_id, &format!("annotate {first}"), &messages, 8000).await.map_err(|e| e.to_string())?;
     let anns = process(&cues, raw);
     if anns.len() * 2 < cues.len() {
         return Err(format!("ответ не совпал с репликами: {} из {}", anns.len(), cues.len()));
@@ -152,6 +152,90 @@ async fn run_batch_recorded(st: &Arc<AppState>, s: &Arc<Session>, first: u32) {
         let _ = st.db(move |c| { c.execute("INSERT OR REPLACE INTO annot_batch VALUES(?1,?2,'failed')", params![mid, first])?; Ok(()) }).await;
         let _ = st.app.emit("annot:failed", json!({ "mediaId": s.media_id, "firstIdx": first }));
     }
+    emit_status(st, &s.media_id).await;
+}
+
+/// Batch counters of one media's analysis; no session is needed, so the home screen can ask too.
+pub async fn status(st: &AppState, media_id: &str) -> Result<AnnotStatus, String> {
+    let mid = media_id.to_string();
+    st.db(move |c| {
+        let cues: u32 = c.query_row("SELECT count(*) FROM cue WHERE media_id=?1", [&mid], |r| r.get(0))?;
+        let consent = c
+            .query_row("SELECT annot FROM media WHERE id=?1", [&mid], |r| r.get::<_, Option<String>>(0))
+            .optional()?
+            .flatten();
+        let mut q = c.prepare("SELECT status, count(*) FROM annot_batch WHERE media_id=?1 GROUP BY status")?;
+        let rows = q.query_map([&mid], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?)))?;
+        let (mut done, mut failed) = (0u32, 0u32);
+        for row in rows {
+            let (state, n) = row?;
+            if state == "done" { done = n } else { failed = n }
+        }
+        Ok(AnnotStatus { media_id: mid.clone(), consent, total: cues.div_ceil(BATCH), done, failed })
+    })
+    .await
+}
+
+pub async fn emit_status(st: &AppState, media_id: &str) {
+    if let Ok(x) = status(st, media_id).await { let _ = st.app.emit("annot:progress", x); }
+}
+
+/// Calibrated on real usage logs: prompt tokens / prompt chars ≈ 2.8 (script-heavy, digits and brackets tokenize densely).
+const CHARS_PER_TOKEN: f64 = 2.8;
+/// Mean completion over 209 logged batches: 2 832 tokens per 40 cues.
+const OUT_TOKENS_PER_CUE: u64 = 72;
+
+fn est_tokens(s: &str) -> u64 { (s.chars().count() as f64 / CHARS_PER_TOKEN).ceil() as u64 }
+
+/// `batches`: (cue count, task tokens) of every batch still to run. The first request pays the
+/// whole prefix; the others read it from the provider's prefix cache.
+fn estimate_from(prefix_tokens: u64, batches: &[(u32, u64)]) -> AnnotEstimate {
+    let cues: u32 = batches.iter().map(|(c, _)| *c).sum();
+    let input_tokens: u64 = batches.iter().map(|(_, t)| prefix_tokens + t).sum();
+    let cached_tokens = prefix_tokens.saturating_mul(batches.len().saturating_sub(1) as u64);
+    AnnotEstimate { cues, batches: batches.len() as u32, input_tokens, cached_tokens, output_tokens: cues as u64 * OUT_TOKENS_PER_CUE, partial: false }
+}
+
+/// Estimate of the remaining analysis, without a single LLM request.
+pub async fn estimate(st: &Arc<AppState>, s: &Arc<Session>) -> Result<AnnotEstimate, String> {
+    let mid = s.media_id.clone();
+    let (cues, done, progress): (Vec<(u32, String)>, HashSet<u32>, Option<(u32, u32)>) = st
+        .db(move |c| {
+            let cues = c.prepare("SELECT idx,text FROM cue WHERE media_id=?1 ORDER BY idx")?.query_map([&mid], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+            let done = c.prepare("SELECT first_idx FROM annot_batch WHERE media_id=?1 AND status='done'")?.query_map([&mid], |r| r.get(0))?.collect::<Result<HashSet<u32>, _>>()?;
+            // (stored cues, cues in the whole track) while the video file is still being read.
+            let progress = crate::subs::store::embedded_progress(c, &mid)?.map(|(_, next, total)| (next, total));
+            Ok((cues, done, progress))
+        })
+        .await?;
+    let cefr = st.cfg().learner.cefr.clone();
+    let mut batches = vec![];
+    for first in (0..cues.len()).step_by(BATCH as usize) {
+        if done.contains(&(first as u32)) { continue; }
+        let slice = &cues[first..(first + BATCH as usize).min(cues.len())];
+        batches.push((slice.len() as u32, est_tokens(&task_text(slice, &cefr))));
+    }
+    let prefix_tokens = prompts::prefix(st, s)
+        .await
+        .map_err(|e| e.to_string())?
+        .iter()
+        .map(|m| est_tokens(m["content"].as_str().unwrap_or("")))
+        .sum();
+    let mut e = estimate_from(prefix_tokens, &batches);
+    // A partly read track is priced by the cues stored so far; scale them to the whole film, so the
+    // number the user agrees to does not grow as the rest arrives.
+    if let Some((_, total)) = progress.filter(|(next, total)| next < total) {
+        if !cues.is_empty() {
+            let k = total as f64 / cues.len() as f64;
+            e.cues = (e.cues as f64 * k).round() as u32;
+            e.batches = (e.batches as f64 * k).round() as u32;
+            e.input_tokens = (e.input_tokens as f64 * k).round() as u64;
+            e.cached_tokens = (e.cached_tokens as f64 * k).round() as u64;
+            e.output_tokens = (e.output_tokens as f64 * k).round() as u64;
+            e.partial = true;
+        }
+    }
+    Ok(e)
 }
 
 /// Batches to run, starting with the one containing `priority`, then forward, then wrapping to the start.
@@ -162,19 +246,43 @@ pub fn batch_order(total_cues: u32, priority: u32, skip: &HashSet<u32>) -> Vec<u
     (0..n).map(|k| ((p + k) % n) * BATCH).filter(|f| !skip.contains(f)).collect()
 }
 
+/// Cue count the scheduler may take batches from. While the subtitles are still being read out of
+/// the video file, a batch that is not full yet must not start: it would be stored as done with
+/// cues missing.
+pub fn eligible(count: u32, loading: bool) -> u32 {
+    if loading { count / BATCH * BATCH } else { count }
+}
+
 async fn scheduler(st: Arc<AppState>, s: Arc<Session>, cancel: CancellationToken) {
     let mid = s.media_id.clone();
-    let (total, done): (u32, HashSet<u32>) = match st
+    let duration = s.probe.get().map(|p| p.duration).unwrap_or(0.0);
+    let resume_at = s.req.resume_at;
+    let (done, consent, resume, sub_offset) = match st
         .db(move |c| {
-            let n: u32 = c.query_row("SELECT count(*) FROM cue WHERE media_id=?1", [&mid], |r| r.get(0))?;
             let d = c.prepare("SELECT first_idx FROM annot_batch WHERE media_id=?1 AND status='done'")?.query_map([&mid], |r| r.get(0))?.collect::<Result<HashSet<u32>, _>>()?;
-            Ok((n, d))
+            let media = c.query_row("SELECT annot,last_position,sub_offset FROM media WHERE id=?1", [&mid], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, f64>(1)?, r.get::<_, f64>(2)?))).optional()?;
+            let (consent, last, off) = media.unwrap_or((None, 0.0, 0.0));
+            let resume = crate::session::resume_position(last, resume_at, duration);
+            Ok((d, consent, resume, off))
         })
         .await
     {
         Ok(x) => x,
         Err(_) => return,
     };
+    // No consent yet (the user has not been asked) and "watch without analysis" both mean: do not run.
+    if consent.as_deref() != Some("on") { return; }
+    let mid = s.media_id.clone();
+    let first = match st
+        .db(move |c| {
+            c.query_row("SELECT max(idx) FROM cue WHERE media_id=?1 AND start + ?2 <= ?3", params![mid, sub_offset, resume], |r| r.get::<_, Option<u32>>(0))
+        })
+        .await
+    {
+        Ok(x) => x.unwrap_or(0),
+        Err(_) => 0,
+    };
+    prioritize(&s, first);
     let taken = Arc::new(Mutex::new(done));
     let sem = Arc::new(Semaphore::new(3));
     let mut tasks = tokio::task::JoinSet::new();
@@ -184,13 +292,38 @@ async fn scheduler(st: Arc<AppState>, s: Arc<Session>, cancel: CancellationToken
             p = sem.clone().acquire_owned() => p.unwrap(),
             _ = cancel.cancelled() => break,
         };
+        // The cue set grows while the embedded subtitles load, so the count is read every time.
+        // `loading` also needs a loader that is actually running: after a failed or cancelled load
+        // the row stays behind, and waiting for cues that will never come would hang the analysis.
+        let running = matches!(s.embedded.lock().unwrap().as_ref().map(|e| e.phase), Some("loading"));
+        let mid = s.media_id.clone();
+        let (count, row_loading) = match st
+            .db(move |c| {
+                let n: u32 = c.query_row("SELECT count(*) FROM cue WHERE media_id=?1", [&mid], |r| r.get(0))?;
+                let loading = crate::subs::store::embedded_progress(c, &mid)?.is_some_and(|(_, next, total)| next < total);
+                Ok((n, loading))
+            })
+            .await
+        {
+            Ok(x) => x,
+            Err(_) => break,
+        };
+        let loading = row_loading && running;
         let next = {
             let mut t = taken.lock().unwrap();
-            let f = batch_order(total, s.annot_priority.load(Ordering::Relaxed), &t).into_iter().next();
+            let f = batch_order(eligible(count, loading), s.annot_priority.load(Ordering::Relaxed), &t).into_iter().next();
             if let Some(f) = f { t.insert(f); }
             f
         };
-        let Some(first) = next else { break };
+        let Some(first) = next else {
+            // Nothing to do right now. If more cues are on their way, wait for them (the permit is
+            // released at the end of this iteration); otherwise the analysis is finished.
+            if !loading { break; }
+            tokio::select! {
+                _ = s.cues_grew.notified() => continue,
+                _ = cancel.cancelled() => break,
+            }
+        };
         let (st2, s2, c2) = (st.clone(), s.clone(), cancel.clone());
         tasks.spawn(async move {
             tokio::select! { _ = run_batch_recorded(&st2, &s2, first) => {}, _ = c2.cancelled() => {} }
@@ -288,5 +421,23 @@ mod tests {
         let skip: HashSet<u32> = [80, 0].into_iter().collect();
         assert_eq!(batch_order(130, 85, &skip), vec![120, 40]);
         assert!(batch_order(0, 0, &none).is_empty());
+    }
+
+    #[test]
+    fn estimate_counts_prefix_once_uncached() {
+        let e = estimate_from(1000, &[(40, 100), (10, 50)]);
+        assert_eq!((e.cues, e.batches, e.input_tokens, e.cached_tokens, e.output_tokens), (50, 2, 2150, 1000, 3600));
+        assert!(!e.partial);
+        let empty = estimate_from(1000, &[]);
+        assert_eq!((empty.cues, empty.batches, empty.input_tokens, empty.cached_tokens, empty.output_tokens), (0, 0, 0, 0, 0));
+    }
+
+    #[test]
+    fn a_partly_loaded_track_only_gives_whole_batches() {
+        assert_eq!(eligible(95, true), 80);
+        assert_eq!(eligible(95, false), 95);
+        assert_eq!(eligible(39, true), 0);
+        assert_eq!(eligible(40, true), 40);
+        assert_eq!(eligible(0, true), 0);
     }
 }

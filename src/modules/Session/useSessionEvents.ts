@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { notify } from '@/common/api/notify'
 import { api, onEvent } from '@/common/api/tauri'
 import { toast } from '@/common/ui/toast'
 import { useSessionStore } from './store/sessionStore'
@@ -10,7 +11,7 @@ export function useSessionEvents(onOpened: () => void) {
     const un = [
       onEvent('session:loading', (e) => { setSession(null); setLoading(e.title) }),
       onEvent('session:opened', (s) => { setSession(s); onOpened() }),
-      onEvent('player:error', (e) => { setLoading(null); toast(e.message) }),
+      onEvent('player:error', (e) => { setLoading(null); notify('error', e.message) }),
       onEvent('toast', (e) => toast(e.message)),
     ]
     void api.sessionCurrent().then((s) => { if (s) { setSession(s); onOpened() } })

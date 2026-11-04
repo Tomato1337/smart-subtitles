@@ -6,18 +6,24 @@ use tauri::AppHandle;
 pub struct AppState {
     /// Live config; `config_save` swaps it, readers take a cheap Arc snapshot via `cfg()`.
     pub config: RwLock<Arc<Config>>,
+    /// Port the HTTP server was bound to at startup; config.server.port may differ until restart.
+    pub listen_port: u16,
     pub db: Arc<Mutex<Connection>>,
     pub sessions: SessionManager,
     pub vaapi_ok: AtomicBool,
     pub http: reqwest::Client,
+    /// LLM calls only: same-host redirects, so a keyed header never follows a cross-host hop.
+    pub llm_http: reqwest::Client,
     pub app: AppHandle,
-    pub anki: Mutex<crate::tutor::anki_index::AnkiState>,
+    pub anki: Mutex<crate::anki::index::AnkiState>,
     /// Media ids with an agent run in flight (one chat thread per film).
     pub agent_busy: Mutex<std::collections::HashSet<String>>,
     /// Serializes background Anki jobs: one clip + image run at a time, in click order.
     pub cards_queue: tokio::sync::Mutex<()>,
     /// Serializes speech recognition (venv setup and runs).
     pub asr: tokio::sync::Mutex<()>,
+    /// models.dev index and when it was loaded; one download a day, shared by every call.
+    pub models_dev: tokio::sync::Mutex<Option<(std::time::Instant, Arc<crate::llm::catalog::DevIndex>)>>,
 }
 
 impl AppState {

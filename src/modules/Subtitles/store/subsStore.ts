@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Cue, CueAnnotation, SubsStatus } from '@/common/types/ipc'
+import type { AnnotStatus, Cue, CueAnnotation, EmbeddedState, SubsStatus } from '@/common/types/ipc'
 
 export type SubtitleSettings = {
   showEn: boolean
@@ -33,6 +33,10 @@ type SubsStore = SubtitleSettings & {
   /** Hidden-mode reveal window: show subtitles until absolute time `until`; `t0` is where `A` was pressed. */
   reveal: { t0: number; until: number } | null
   failedBatches: Set<number>
+  /** Background analysis of the current film; null until the backend has answered. */
+  annot: AnnotStatus | null
+  /** Embedded (in-file) subtitle load of the current film; null when there is none. */
+  embedded: EmbeddedState | null
   set: (p: Partial<SubtitleSettings>) => void
   reset: (mediaId: string, offset: number) => void
   setCues: (cues: Cue[], annotations: CueAnnotation[]) => void
@@ -41,7 +45,12 @@ type SubsStore = SubtitleSettings & {
   setOffset: (o: number) => void
   setReveal: (r: { t0: number; until: number } | null) => void
   markFailed: (firstIdx: number) => void
+  setAnnot: (a: AnnotStatus) => void
+  setEmbedded: (e: EmbeddedState | null) => void
 }
+
+/** What the analysis UI needs from the store: cues, their annotations and the written-off batches. */
+export type SubsSnapshot = Pick<SubsStore, 'cues' | 'offset' | 'annotations' | 'failedBatches'>
 
 export const useSubsStore = create<SubsStore>((set, get) => ({
   ...load(),
@@ -52,6 +61,8 @@ export const useSubsStore = create<SubsStore>((set, get) => ({
   offset: 0,
   reveal: null,
   failedBatches: new Set(),
+  annot: null,
+  embedded: null,
   set: (p) => {
     set(p)
     const s = get()
@@ -61,7 +72,7 @@ export const useSubsStore = create<SubsStore>((set, get) => ({
     }
     localStorage.setItem(KEY, JSON.stringify(persisted))
   },
-  reset: (mediaId, offset) => set({ mediaId, offset, cues: [], annotations: new Map(), status: null, reveal: null, failedBatches: new Set() }),
+  reset: (mediaId, offset) => set({ mediaId, offset, cues: [], annotations: new Map(), status: null, reveal: null, failedBatches: new Set(), annot: null, embedded: null }),
   setCues: (cues, annotations) => set({ cues, annotations: new Map(annotations.map((a) => [a.idx, a])) }),
   applyAnnotations: (a) =>
     set((s) => {
@@ -73,4 +84,6 @@ export const useSubsStore = create<SubsStore>((set, get) => ({
   setOffset: (offset) => set({ offset }),
   setReveal: (reveal) => set({ reveal }),
   markFailed: (firstIdx) => set((s) => ({ failedBatches: new Set(s.failedBatches).add(firstIdx) })),
+  setAnnot: (annot) => set({ annot }),
+  setEmbedded: (embedded) => set({ embedded }),
 }))

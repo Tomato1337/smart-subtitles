@@ -1,8 +1,16 @@
 use super::prompts::mmss;
-use crate::{patterns, session::Session, state::AppState, tutor::{anki_index, cards::{self, WordDraft}}};
+use crate::{
+    anki::{
+        cards::{self, WordDraft},
+        index as anki_index,
+    },
+    patterns,
+    session::Session,
+    state::AppState,
+};
 use rusqlite::params;
 use serde_json::{json, Value};
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 use tauri::Emitter;
 
 pub struct ToolCtx { pub st: Arc<AppState>, pub session: Arc<Session>, pub cue_idx: u32 }
@@ -43,7 +51,7 @@ pub fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": "anki_words", "label": "Anki words",
-            "description": "Words of the Anki deck 'Learning English' with status (new, learning, young, learned, weak, leech; 'problem' = weak+leech). With 'word': only that word. It never changes Anki.",
+            "description": "Words of the learner's Anki decks with status (new, learning, young, learned, weak, leech; 'problem' = weak+leech). With 'word': only that word. It never changes Anki.",
             "parameters": { "type": "object", "properties": {
                 "status": { "type": "string", "enum": statuses }, "word": s("One word to look up") }, "additionalProperties": false },
         }),
@@ -94,23 +102,21 @@ async fn transcript(ctx: &ToolCtx, a: &Value) -> String {
     }
 }
 
+/// The known-words index the app already keeps: no tutor, no extra Anki round.
 async fn anki_words(ctx: &ToolCtx, a: &Value) -> String {
     let status = a["status"].as_str();
     let word = a["word"].as_str().map(|w| w.trim().to_lowercase()).filter(|w| !w.is_empty());
-    let api_status = match status { Some("problem") => "problem", Some("learned") => "learned", _ => "all" };
-    let tutor_url = ctx.st.cfg().tutor.api_url.clone();
-    let mut url = format!("{}/api/anki/words?status={api_status}&limit=200", tutor_url.trim_end_matches('/'));
-    if let Some(w) = &word { url.push_str(&format!("&q={}", url::form_urlencoded::byte_serialize(w.as_bytes()).collect::<String>())); }
-    let down = || format!("Tutor не запущен ({tutor_url})");
-    let Ok(r) = ctx.st.http.get(&url).timeout(Duration::from_secs(10)).send().await else { return down() };
-    let Ok(v) = r.json::<Value>().await else { return down() };
+    let cards = ctx.st.anki.lock().unwrap().cards.clone();
     let mut out = vec![];
-    for w in v["words"].as_array().cloned().unwrap_or_default() {
-        let st_ = w["status"].as_str().unwrap_or("");
-        if let Some(want) = status.filter(|x| STATUSES.contains(x)) { if st_ != want { continue; } }
-        let text = w["word"].as_str().unwrap_or("");
-        if let Some(q) = &word { if !text.to_lowercase().contains(q.as_str()) { continue; } }
-        out.push(format!("{text} | {st_} | interval {}d | lapses {}", w["interval"], w["lapses"]));
+    for c in &cards {
+        let wanted = match status {
+            Some("problem") => matches!(c.status, "weak" | "leech"),
+            Some(s) if STATUSES.contains(&s) => c.status == s,
+            _ => true,
+        };
+        if !wanted { continue; }
+        if let Some(q) = &word { if !c.word.to_lowercase().contains(q.as_str()) { continue; } }
+        out.push(format!("{} | {} | interval {}d | lapses {}", c.word, c.status, c.interval, c.lapses));
         if out.len() == 60 { break; }
     }
     if out.is_empty() { "No matching words".into() } else { out.join("\n") }

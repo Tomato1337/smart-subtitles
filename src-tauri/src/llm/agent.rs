@@ -1,5 +1,5 @@
 use super::{client, prompts, tools};
-use crate::{db::now, session::Session, state::AppState, tutor::cards::WordDraft};
+use crate::{db::now, session::Session, state::AppState, anki::cards::WordDraft};
 use rusqlite::params;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -31,6 +31,65 @@ pub struct ChatMessage {
     pub words: Option<Vec<WordDraft>>,
     pub status: Option<String>,
     pub created_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatUsage {
+    pub model: String,
+    pub model_name: String,
+    pub effort: super::tasks::Effort,
+    pub context_window: Option<u64>,
+    /// Prompt plus output of the latest request: how full the window was.
+    pub context_tokens: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub usd: Option<f64>,
+    /// Some requests in the chat have no known price, so `usd` is a lower bound.
+    pub usd_partial: bool,
+}
+
+/// Totals of the film's chat plus the currently configured model: the footer before and after a message.
+pub async fn usage(st: &AppState, media_id: &str) -> Result<ChatUsage, String> {
+    let t = st.cfg().target(super::tasks::Task::Chat);
+    let info = super::catalog::model_info_for(st, &t).await;
+    let m = media_id.to_string();
+    let rows: Vec<(i64, i64, i64, i64, Option<f64>)> = st
+        .db(move |c| {
+            c.prepare("SELECT input,cache_read,cache_write,output,usd FROM llm_usage WHERE media_id=?1 AND task='chat' ORDER BY id")?
+                .query_map(params![m], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+                .collect()
+        })
+        .await?;
+    let (input_tokens, output_tokens, context_tokens, usd, usd_partial) = totals(&rows);
+    Ok(ChatUsage {
+        model: t.model,
+        model_name: info.name,
+        effort: t.effort,
+        context_window: info.context_window,
+        context_tokens,
+        input_tokens,
+        output_tokens,
+        usd,
+        usd_partial,
+    })
+}
+
+/// Running totals of the film chat: all prompt tokens, all output, the last request's window fill.
+fn totals(rows: &[(i64, i64, i64, i64, Option<f64>)]) -> (u64, u64, u64, Option<f64>, bool) {
+    let (mut input_tokens, mut output_tokens, mut context_tokens) = (0u64, 0u64, 0u64);
+    let (mut usd, mut priced, mut unpriced) = (0.0f64, false, false);
+    for (input, cache_read, cache_write, output, row_usd) in rows {
+        let prompt = (input + cache_read + cache_write) as u64;
+        input_tokens += prompt;
+        output_tokens += *output as u64;
+        context_tokens = prompt + *output as u64;
+        match row_usd {
+            Some(x) => { priced = true; usd += x; }
+            None => unpriced = true,
+        }
+    }
+    (input_tokens, output_tokens, context_tokens, if priced { Some(usd) } else { None }, priced && unpriced)
 }
 
 /// The film's whole chat, oldest first: one thread per media, kept across closing the panel and restarts.
@@ -81,7 +140,7 @@ fn position_tag(cue_idx: Option<u32>, at: Option<f64>) -> String {
 /// Stores the user message with the learner's position and runs the tool loop in the background;
 /// progress arrives as agent:* events.
 pub async fn send(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: Option<u32>, at: f64, text: String) -> Result<(), String> {
-    if !st.cfg().llm_enabled() { return Err("нет ключа DeepSeek".into()); }
+    if st.cfg().target(super::tasks::Task::Chat).endpoint.api_key.is_empty() { return Err("LLM не настроен".into()); }
     if !st.agent_busy.lock().unwrap().insert(s.media_id.clone()) { return Err("агент ещё отвечает".into()); }
     save(st, &s.media_id, "user", json!({ "text": text, "cue": cue_idx, "at": at }), cue_idx).await;
     let (st2, s2) = (st.clone(), s.clone());
@@ -139,14 +198,18 @@ async fn run(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: Option<u32>) -> Resu
     for _ in 0..MAX_ITERATIONS {
         let mid = s.media_id.clone();
         let st2 = st.clone();
-        let turn = client::chat_stream(st, "agent", &messages, &tool_defs, move |t| emit(&st2, "agent:delta", json!({ "mediaId": mid, "text": t }))).await.map_err(|e| e.to_string())?;
+        let turn = client::chat_stream(st, super::tasks::Task::Chat, &s.media_id, "agent", &messages, &tool_defs, move |t| emit(&st2, "agent:delta", json!({ "mediaId": mid, "text": t }))).await.map_err(|e| e.to_string())?;
         final_text.push_str(&turn.content);
         if turn.tool_calls.is_empty() { break; }
-        messages.push(json!({
+        let mut assistant = json!({
             "role": "assistant",
             "content": turn.content,
             "tool_calls": turn.tool_calls.iter().map(|c| json!({ "id": c.id, "type": "function", "function": { "name": c.name, "arguments": c.arguments } })).collect::<Vec<_>>(),
-        }));
+        });
+        // DeepSeek needs its own reasoning back in the tool loop; Anthropic needs the thinking blocks.
+        if !turn.reasoning.is_empty() { assistant["reasoning_content"] = json!(turn.reasoning); }
+        if !turn.thinking.is_empty() { assistant["anthropic_thinking"] = json!(turn.thinking); }
+        messages.push(assistant);
         for c in &turn.tool_calls {
             emit(st, "agent:tool", json!({ "mediaId": s.media_id, "name": c.name }));
             let args: Value = serde_json::from_str(&c.arguments).unwrap_or(json!({}));
@@ -164,6 +227,16 @@ async fn run(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: Option<u32>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usage_totals_count_cache_and_the_last_context() {
+        let rows = [(100, 900, 0, 50, Some(0.01)), (200, 1800, 0, 70, None)];
+        let (input, output, context, usd, partial) = totals(&rows);
+        assert_eq!((input, output, context), (3000, 120, 2070));
+        assert_eq!(usd, Some(0.01));
+        assert!(partial);
+        assert_eq!(totals(&[]), (0, 0, 0, None, false));
+    }
 
     #[test]
     fn history_is_one_thread_per_film_and_keeps_legacy_cues() {

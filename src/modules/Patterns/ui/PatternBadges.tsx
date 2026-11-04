@@ -26,7 +26,7 @@ export function PatternBadges({ ann }: { ann: CueAnnotation | undefined }) {
   const shown = ann.patterns.filter((p) => byId.get(p.patternId)?.status !== 'known' && patternById(p.patternId))
   if (shown.length === 0) return null
   return (
-    <div className="mb-2 flex flex-wrap justify-center gap-2">
+    <div data-tour="patterns" className="mb-2 flex flex-wrap justify-center gap-2">
       {shown.map((p) => {
         const pat = patternById(p.patternId)!
         return (

@@ -1,0 +1,145 @@
+.card {
+    font-family: "Segoe UI", "Roboto", "Noto Sans", Arial, sans-serif;
+    font-size: 18px;
+    text-align: center;
+    color: #1a1a2e;
+    background: #f8f9fa;
+    padding: 20px 16px;
+    line-height: 1.5;
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.card.night_mode {
+    background: #1a1a2e;
+    color: #e0e0e0;
+}
+
+/* Image */
+.img-wrap {
+    margin: 0 auto 16px;
+    border-radius: 12px;
+    overflow: hidden;
+    max-width: 320px;
+}
+.img-wrap img {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+/* Cloze sentence (front) */
+.cloze {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 12px 0;
+    color: #16213e;
+}
+.night_mode .cloze {
+    color: #e8e8e8;
+}
+
+/* Full sentence (back) */
+.full-sentence {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 12px 0;
+    color: #16213e;
+}
+.night_mode .full-sentence {
+    color: #e8e8e8;
+}
+
+/* Answer word */
+.answer-word {
+    font-size: 26px;
+    font-weight: 700;
+    color: #0f3460;
+    margin: 8px 0;
+}
+.night_mode .answer-word {
+    color: #64b5f6;
+}
+
+/* Collapsible hint */
+.hint-toggle {
+    margin: 10px 0;
+    cursor: pointer;
+}
+.hint-toggle summary {
+    color: #7f8c8d;
+    font-size: 14px;
+    user-select: none;
+}
+.hint-toggle .hint-body {
+    color: #555;
+    font-size: 15px;
+    margin-top: 4px;
+    font-style: italic;
+}
+.night_mode .hint-toggle summary { color: #aaa; }
+.night_mode .hint-toggle .hint-body { color: #bbb; }
+
+/* Translations */
+.word-translation {
+    font-size: 18px;
+    font-weight: 700;
+    color: #2c3e50;
+    margin: 8px 0;
+}
+.night_mode .word-translation { color: #90caf9; }
+
+.sentence-translation {
+    font-size: 15px;
+    color: #666;
+    margin: 6px 0 14px;
+    font-style: italic;
+}
+.night_mode .sentence-translation { color: #999; }
+
+/* Audio */
+.audio-btn {
+    display: inline-block;
+    vertical-align: middle;
+    margin-left: 6px;
+}
+
+/* Type answer input */
+input[type="text"] {
+    font-size: 20px !important;
+    padding: 8px 12px !important;
+    border-radius: 8px !important;
+    border: 2px solid #ccc !important;
+    max-width: 280px;
+}
+input[type="text"]:focus {
+    border-color: #667eea !important;
+    outline: none !important;
+}
+
+/* Divider */
+hr#answer {
+    border: none;
+    border-top: 2px solid #e0e0e0;
+    margin: 16px 0;
+}
+.night_mode hr#answer {
+    border-top-color: #333;
+}
+
+/* Anki built-in type comparison classes */
+.typeBad { color: #e74c3c; }
+.typeGood { color: #27ae60; }
+.typeMissed { color: #f39c12; }
+
+/* Movie clip (back) */
+.clip-wrap { max-width: 460px; margin: 0 auto 6px; }
+.clip-wrap video { width: 100%; border-radius: 12px; display: block; background: #000; }
+.clip-tools { display: flex; justify-content: center; gap: 6px; margin: 6px 0 2px; }
+.clip-tools button { font-size: 13px; padding: 3px 10px; border-radius: 14px; border: 1px solid #c9ccd2; background: #fff; color: #333; }
+.clip-tools button.on { background: #667eea; border-color: #667eea; color: #fff; }
+.clip-text { font-size: 17px; color: #333; margin: 4px 0 2px; }
+.clip-text b { color: #0f3460; background: #fff3c4; padding: 0 3px; border-radius: 4px; }
+.clip-source { font-size: 12px; color: #888; margin-bottom: 8px; }
+.night_mode .clip-text { color: #ddd; }
+.night_mode .clip-text b { color: #1a1a2e; }

@@ -43,4 +43,7 @@
   --app-anki-label: #ffb77c;
   --app-anki-label-container: #6e3900;
   --app-anki-on-label-container: #ffdcc3;
+  --app-warning: #ffb870;
+  --app-warning-container: #693c00;
+  --app-on-warning-container: #ffdcbe;
 }

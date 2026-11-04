@@ -1,6 +1,11 @@
 import { create } from 'zustand'
 
-export type ToastOptions = { durationMs?: number; action?: { label: string; run: () => void } }
+export type ToastOptions = {
+  durationMs?: number
+  action?: { label: string; run: () => void }
+  /** Default is the bottom-center snackbar; `top` is for short status confirmations in the player. */
+  placement?: 'bottom' | 'top'
+}
 
 type ToastState = {
   message: string | null

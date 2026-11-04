@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, type RefObject } from 'react'
+import { notify } from '@/common/api/notify'
 import { api } from '@/common/api/tauri'
 import type { SessionState } from '@/common/types/ipc'
-import { toast } from '@/common/ui/toast'
 import { MseStream } from './lib/MseStream'
 import { rangeAt, toRanges } from './lib/mseBuffer'
 import { usePlaybackStore } from './store/playback'
@@ -74,7 +74,7 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
       (t) => api.mediaOpenStream(sessionId, t, audioRef.current).then((s) => s.url),
       (m) => {
         patch({ buffering: false })
-        toast(m)
+        notify('error', m)
       },
     )
     mseRef.current = mse
@@ -90,7 +90,7 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
       off('error', () => {
         // Decode errors (corrupt torrent bytes) are recovered by MseStream itself.
         if (v.error?.code === MediaError.MEDIA_ERR_DECODE) return patch({ buffering: true })
-        if (v.getAttribute('src')) toast(`Ошибка видео (код ${v.error?.code ?? '?'}): ${v.error?.message ?? ''}`)
+        if (v.getAttribute('src')) notify('error', `Ошибка видео (код ${v.error?.code ?? '?'}): ${v.error?.message ?? ''}`)
       }),
     ]
     patch({ duration, absTime: session.resumeAt, playing: false, buffering: true, rate: 1 })

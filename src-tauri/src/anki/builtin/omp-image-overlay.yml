@@ -1,0 +1,3 @@
+disabledExtensions: ["context-file:user:AGENTS.md","context-file:project:AGENTS.md"]
+memory: {backend: "off"}
+generate_image: {enabled: true}

@@ -28,6 +28,16 @@ pub struct Session {
     pub prefix: Mutex<Option<Arc<Vec<serde_json::Value>>>>,
     pub annot_cancel: Mutex<CancellationToken>,
     pub annot_priority: std::sync::atomic::AtomicU32,
+    /// Embedded subtitles being read out of the video file; `None` when no load is running.
+    pub embedded: Mutex<Option<EmbeddedState>>,
+    /// The modal's answer: `true` = load, `false` = decline. Dropped means declined too.
+    pub embedded_decision: Mutex<Option<tokio::sync::oneshot::Sender<bool>>>,
+    /// The file's Matroska structure and the chosen track's cues, read once per session.
+    pub embedded_index: tokio::sync::OnceCell<Result<Arc<crate::subs::embedded::Index>, String>>,
+    /// Cancels the running loader; replaced by every new load, a child of `cancel`.
+    pub embedded_cancel: Mutex<CancellationToken>,
+    /// Nudges the analysis scheduler whenever another batch of cues has been appended.
+    pub cues_grew: tokio::sync::Notify,
 }
 
 impl Session {
@@ -84,7 +94,7 @@ pub fn parse_season_episode(s: &str) -> Option<(u32, u32)> {
     Some((c[1].parse().ok()?, c[2].parse().ok()?))
 }
 
-fn resume_position(last: f64, from_req: Option<f64>, duration: f64) -> f64 {
+pub(crate) fn resume_position(last: f64, from_req: Option<f64>, duration: f64) -> f64 {
     let t = last.max(from_req.unwrap_or(0.0));
     if duration > 0.0 && t > duration - 60.0 { 0.0 } else { t }
 }
@@ -117,6 +127,7 @@ pub fn state_of(st: &AppState, s: &Session, p: &Probe, resume_at: f64, sub_offse
         playlist: s.req.playlist.iter().map(|i| PlaylistTitle { title: i.title.clone() }).collect(),
         playlist_index: s.req.playlist.iter().position(|i| &i.url == url),
         llm_enabled: st.cfg().llm_enabled(),
+        torrent: crate::subs::torrserver::target(&s.src).is_some(),
     }
 }
 
@@ -175,6 +186,7 @@ pub async fn open(st: &Arc<AppState>, req: SessionRequest, file_size: Option<u64
         }).await?;
     }
 
+    let cancel = CancellationToken::new();
     let session = Arc::new(Session {
         id: uuid::Uuid::new_v4().to_string(),
         media_id: media_id.clone(),
@@ -185,10 +197,15 @@ pub async fn open(st: &Arc<AppState>, req: SessionRequest, file_size: Option<u64
         ffmpeg: Default::default(),
         gen: AtomicU64::new(0),
         flow: Mutex::new(None),
-        cancel: CancellationToken::new(),
+        embedded_cancel: Mutex::new(cancel.child_token()),
+        cancel,
         prefix: Mutex::new(None),
         annot_cancel: Mutex::new(CancellationToken::new()),
         annot_priority: Default::default(),
+        embedded: Mutex::new(None),
+        embedded_decision: Mutex::new(None),
+        embedded_index: Default::default(),
+        cues_grew: Default::default(),
     });
     st.sessions.replace(Some(session.clone()));
     let _ = st.app.emit("session:loading", serde_json::json!({ "title": req.title }));
@@ -223,7 +240,7 @@ async fn finish_open(st: &Arc<AppState>, s: &Arc<Session>) -> Result<(), String>
     }
     tauri::async_runtime::spawn(crate::subs::acquire::run(st.clone(), s.clone()));
     let st3 = st.clone();
-    tauri::async_runtime::spawn(async move { crate::tutor::anki_index::refresh(&st3).await });
+    tauri::async_runtime::spawn(async move { crate::anki::index::refresh(&st3).await });
     Ok(())
 }
 

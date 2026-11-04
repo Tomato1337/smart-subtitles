@@ -11,7 +11,7 @@ describe('lemma', () => {
   })
 })
 
-const card = (word: string, status: AnkiCard['status'] = 'new'): AnkiCard => ({ word, translation: 'x', status, interval: 0 })
+const card = (word: string, status: AnkiCard['status'] = 'new'): AnkiCard => ({ word, translation: 'x', status, interval: 0, lapses: 0 })
 
 describe('matcher', () => {
   const index = buildIndex([card('bring up'), card('bring')])

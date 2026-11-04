@@ -1,13 +1,16 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { ChatMessage } from '@/common/types/ipc'
 import { Icon } from '@/common/ui/Icon'
 import { IconButton } from '@/common/ui/IconButton'
-import { toast } from '@/common/ui/toast'
 import { formatTime } from '@/common/utilities/time'
+import { CARD_PHASE_RU, useCardsStore } from '@/modules/Cards'
+import { useHotkeysStore, withKey } from '@/modules/Hotkeys'
 import { useAgentStore } from '../store/agentStore'
 import { agentKey, useAgentActions, type Locate } from '../useAgent'
+import { ChatUsageBar } from './ChatUsageBar'
 import { Markdown } from './Markdown'
 
 const TOOL_LABEL: Record<string, string> = {
@@ -19,6 +22,7 @@ function Proposal({ mediaId, m }: { mediaId: string; m: ChatMessage }) {
   const words = m.words ?? []
   const [picked, setPicked] = useState<Set<number>>(() => new Set(words.map((_, i) => i)))
   const [busy, setBusy] = useState(false)
+  const phase = useCardsStore((s) => (m.proposalId === null ? undefined : s.phases[m.proposalId]))
   const open = m.status === 'pending' || m.status === 'failed'
   const refresh = () => qc.invalidateQueries({ queryKey: agentKey(mediaId) })
 
@@ -28,7 +32,7 @@ function Proposal({ mediaId, m }: { mediaId: string; m: ChatMessage }) {
     try {
       await api.cardsAdd(m.proposalId!, [...picked])
     } catch (e) {
-      toast(errorText(e))
+      notify('error', errorText(e))
     } finally {
       setBusy(false)
       void refresh()
@@ -52,7 +56,7 @@ function Proposal({ mediaId, m }: { mediaId: string; m: ChatMessage }) {
           <button type="button" onClick={() => void api.cardsDismiss(m.proposalId!).then(refresh)} className="type-label-large rounded-full px-3 py-1.5 text-[var(--md-sys-color-primary)]">Отклонить</button>
         </div>
       ) : (
-        <div className="type-label-medium mt-2 text-[var(--md-sys-color-on-surface-variant)]">{m.status === 'added' ? 'Добавлено' : m.status === 'dismissed' ? 'Отклонено' : 'Добавляется в фоне…'}</div>
+        <div className="type-label-medium mt-2 text-[var(--md-sys-color-on-surface-variant)]">{m.status === 'added' ? 'Добавлено в Anki' : m.status === 'dismissed' ? 'Отклонено' : phase ? CARD_PHASE_RU[phase] : 'Добавляется в фоне…'}</div>
       )}
       {m.status === 'failed' && <div className="type-body-small mt-1 text-[var(--md-sys-color-error)]">Не получилось — можно повторить</div>}
     </div>
@@ -75,6 +79,7 @@ const BUBBLE = 'type-body-medium break-words rounded-[var(--md-sys-shape-corner-
 /** Film chat with the agent (480 px, extra-large corners, level-3 surface): one thread per film, every message carries the learner's position. */
 export function AgentPanel({ mediaId, locate, here, cueTime, cueText, onSeekCue, onSeekTime }: PanelProps) {
   const { open, setOpen, live: l } = useAgentStore()
+  const hotkey = useHotkeysStore((s) => s.bindings)
   const { ask } = useAgentActions(mediaId, locate)
   const [text, setText] = useState('')
   const list = useRef<HTMLDivElement>(null)
@@ -105,7 +110,7 @@ export function AgentPanel({ mediaId, locate, here, cueTime, cueText, onSeekCue,
           <div className="type-title-medium">Агент</div>
           <div className="type-body-small truncate text-[var(--md-sys-color-on-surface-variant)]">{here}</div>
         </div>
-        <IconButton icon="close" label="Закрыть (C)" onClick={() => setOpen(false)} />
+        <IconButton icon="close" label={withKey('Закрыть', hotkey.chat)} onClick={() => setOpen(false)} />
       </div>
       <div ref={list} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden px-4 py-2">
         {history.data?.length === 0 && !l.busy && (
@@ -146,6 +151,7 @@ export function AgentPanel({ mediaId, locate, here, cueTime, cueText, onSeekCue,
         />
         <IconButton icon="send" label="Отправить" disabled={!text.trim() || l.busy} onClick={submit} />
       </div>
+      <ChatUsageBar mediaId={mediaId} />
     </aside>
   )
 }

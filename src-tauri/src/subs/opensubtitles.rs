@@ -2,14 +2,27 @@ use super::moviehash;
 use crate::{session::Session, state::AppState};
 use anyhow::{anyhow, bail};
 use serde_json::{json, Value};
-use std::{sync::Mutex, time::{Duration, Instant}};
+use std::{path::PathBuf, sync::Mutex, time::{Duration, Instant}};
 
 const BASE: &str = "https://api.opensubtitles.com/api/v1";
 static TOKEN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 
-pub struct Found { pub bytes: Vec<u8>, pub label: String, pub exact: bool }
+/// One subtitle file the search found; `exact` marks a moviehash match.
+#[derive(Debug, Clone)]
+pub struct Hit {
+    pub file_id: i64,
+    pub release: String,
+    pub exact: bool,
+    pub hearing_impaired: bool,
+    pub downloads: i64,
+}
+
+pub struct Found { pub bytes: Vec<u8>, pub label: String, pub exact: bool, pub file_id: i64 }
 
 pub enum Outcome { Found(Found), NotFound, QuotaExhausted }
+
+/// A `/download` answer: the file itself, or the daily quota is gone.
+pub enum Download { Bytes(Vec<u8>), QuotaExhausted }
 
 fn req(st: &AppState, b: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     b.header("Api-Key", &st.cfg().opensubtitles.api_key).header("User-Agent", "smart-subtitle v0.1").header("Accept", "application/json")
@@ -42,24 +55,32 @@ async fn token(st: &AppState) -> anyhow::Result<String> {
 }
 
 /// Orders search hits: hash match first, then non-HI, dropping machine/foreign-parts results, then by downloads.
-pub fn pick(data: &[Value]) -> Option<(&Value, bool)> {
+pub fn rank(data: &[Value]) -> Vec<Hit> {
     let flag = |a: &Value, k: &str| a[k].as_bool().unwrap_or(false);
-    let mut c: Vec<&Value> = data
+    let mut c: Vec<Hit> = data
         .iter()
         .filter(|d| {
             let a = &d["attributes"];
             let forced = a["release"].as_str().is_some_and(|r| r.to_lowercase().contains("forced"));
             !forced && !flag(a, "ai_translated") && !flag(a, "machine_translated") && !flag(a, "foreign_parts_only") && a["files"][0]["file_id"].is_number()
         })
+        .map(|d| {
+            let a = &d["attributes"];
+            Hit {
+                file_id: a["files"][0]["file_id"].as_i64().unwrap_or(0),
+                release: a["release"].as_str().unwrap_or("OpenSubtitles").to_string(),
+                exact: flag(a, "moviehash_match"),
+                hearing_impaired: flag(a, "hearing_impaired"),
+                downloads: a["download_count"].as_i64().unwrap_or(0),
+            }
+        })
         .collect();
-    c.sort_by_key(|d| {
-        let a = &d["attributes"];
-        (!flag(a, "moviehash_match"), flag(a, "hearing_impaired"), std::cmp::Reverse(a["download_count"].as_i64().unwrap_or(0)))
-    });
-    c.first().map(|d| (*d, d["attributes"]["moviehash_match"].as_bool().unwrap_or(false)))
+    c.sort_by_key(|h| (!h.exact, h.hearing_impaired, std::cmp::Reverse(h.downloads)));
+    c
 }
 
-pub async fn fetch(st: &AppState, s: &Session) -> anyhow::Result<Outcome> {
+/// English candidates for the session's film, best first; downloading them is a separate, quota-bound step.
+pub async fn search(st: &AppState, s: &Session) -> anyhow::Result<Vec<Hit>> {
     let hash = match moviehash::head_tail(&st.http, &s.src.clone()).await {
         Ok((size, h, t)) => Some(moviehash::moviehash(size, &h, &t)),
         Err(e) => { crate::logs::log("app", &format!("moviehash: {e}")); None }
@@ -90,14 +111,17 @@ pub async fn fetch(st: &AppState, s: &Session) -> anyhow::Result<Outcome> {
     let r = send(req(st, st.http.get(format!("{BASE}/subtitles")).query(&q))).await?;
     if !r.status().is_success() { bail!("OpenSubtitles search: HTTP {}", r.status()); }
     let v: Value = r.json().await?;
-    let data = v["data"].as_array().cloned().unwrap_or_default();
-    let Some((hit, exact)) = pick(&data) else { return Ok(Outcome::NotFound) };
-    let file_id = hit["attributes"]["files"][0]["file_id"].clone();
-    let label = hit["attributes"]["release"].as_str().unwrap_or("OpenSubtitles").to_string();
+    Ok(rank(v["data"].as_array().map(Vec::as_slice).unwrap_or_default()))
+}
 
-    let cache = crate::config::cache_dir().join("opensubtitles").join(format!("{file_id}.srt"));
+pub fn cache_path(file_id: i64) -> PathBuf {
+    crate::config::cache_dir().join("opensubtitles").join(format!("{file_id}.srt"))
+}
+
+pub async fn download(st: &AppState, file_id: i64) -> anyhow::Result<Download> {
+    let cache = cache_path(file_id);
     if let Ok(bytes) = tokio::fs::read(&cache).await {
-        return Ok(Outcome::Found(Found { bytes, label, exact }));
+        return Ok(Download::Bytes(bytes));
     }
     // Anonymous downloads work with the API key alone (smaller daily quota); login only raises it.
     let mut dl = req(st, st.http.post(format!("{BASE}/download")).json(&json!({ "file_id": file_id, "sub_format": "srt" })));
@@ -108,13 +132,21 @@ pub async fn fetch(st: &AppState, s: &Session) -> anyhow::Result<Outcome> {
     let status = r.status().as_u16();
     let d: Value = r.json().await.unwrap_or(Value::Null);
     let Some(link) = d["link"].as_str() else {
-        if status == 406 || d["remaining"].as_i64() == Some(0) { return Ok(Outcome::QuotaExhausted); }
+        if status == 406 || d["remaining"].as_i64() == Some(0) { return Ok(Download::QuotaExhausted); }
         bail!("OpenSubtitles download: HTTP {status}");
     };
     let bytes = st.http.get(link).send().await?.error_for_status()?.bytes().await?.to_vec();
     if let Some(dir) = cache.parent() { let _ = tokio::fs::create_dir_all(dir).await; }
     let _ = tokio::fs::write(&cache, &bytes).await;
-    Ok(Outcome::Found(Found { bytes, label, exact }))
+    Ok(Download::Bytes(bytes))
+}
+
+pub async fn fetch(st: &AppState, s: &Session) -> anyhow::Result<Outcome> {
+    let Some(hit) = search(st, s).await?.into_iter().next() else { return Ok(Outcome::NotFound) };
+    match download(st, hit.file_id).await? {
+        Download::Bytes(bytes) => Ok(Outcome::Found(Found { bytes, label: hit.release, exact: hit.exact, file_id: hit.file_id })),
+        Download::QuotaExhausted => Ok(Outcome::QuotaExhausted),
+    }
 }
 
 #[cfg(test)]
@@ -128,13 +160,13 @@ mod tests {
     #[test]
     fn selection_order() {
         let d = vec![hit(1, false, false, 900, false), hit(2, true, true, 10, false), hit(3, true, false, 5, false), hit(4, true, false, 99, true)];
-        let (h, exact) = pick(&d).unwrap();
-        assert_eq!(h["attributes"]["files"][0]["file_id"], 3);
-        assert!(exact);
+        let r = rank(&d);
+        assert_eq!(r[0].file_id, 3);
+        assert!(r[0].exact);
         let d = vec![hit(1, false, true, 900, false), hit(2, false, false, 10, false), hit(3, false, false, 50, false)];
-        let (h, exact) = pick(&d).unwrap();
-        assert_eq!(h["attributes"]["files"][0]["file_id"], 3);
-        assert!(!exact);
-        assert!(pick(&[hit(9, true, false, 1, true)]).is_none());
+        let r = rank(&d);
+        assert_eq!(r[0].file_id, 3);
+        assert!(!r[0].exact);
+        assert!(rank(&[hit(9, true, false, 1, true)]).is_empty());
     }
 }

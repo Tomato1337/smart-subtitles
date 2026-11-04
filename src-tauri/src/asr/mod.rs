@@ -8,7 +8,6 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
-use tauri::Emitter;
 use tokio::process::Command;
 
 /// Embedded once the venv is ready; rewriting it each run keeps script and Rust in step.
@@ -51,7 +50,7 @@ fn executable(p: &Path) -> bool {
 }
 
 /// `uv` from PATH, then the two usual install locations.
-fn find_uv() -> Option<PathBuf> {
+pub(crate) fn find_uv() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path) {
             let p = dir.join("uv");
@@ -89,7 +88,7 @@ async fn ensure_env(st: &AppState) -> anyhow::Result<PathBuf> {
         Some(uv) => uv,
         None => bail!("uv не найден — установите uv: https://docs.astral.sh/uv/"),
     };
-    let _ = st.app.emit("toast", serde_json::json!({ "message": "Устанавливаю распознавание речи (один раз, ~450 МБ)…" }));
+    crate::notify::info(st, "Устанавливаю распознавание речи (один раз, ~450 МБ)…");
     std::fs::create_dir_all(asr_dir())?;
 
     let mut c = Command::new(&uv);
