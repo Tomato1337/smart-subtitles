@@ -191,7 +191,7 @@ function Form({ saved, providers, onCollapse, onOpenWizard }: { saved: AppConfig
         </Section>
 
         <Section icon="memory" title="Видео">
-          <Field label="Устройство VAAPI" hint="Аппаратное декодирование на Linux; на macOS не используется">
+          <Field label="Устройство VAAPI" hint="Аппаратное декодирование на Linux; на macOS и Windows не используется">
             <Text value={cfg.ffmpeg.vaapiDevice} onChange={(vaapiDevice) => set('ffmpeg', { vaapiDevice })} />
           </Field>
         </Section>

@@ -7,8 +7,8 @@ const DOT_COLOR: Record<SignalDot, string> = {
  bad: 'var(--md-sys-color-error)',
  weak: 'var(--app-warning)',
  good: 'var(--app-kind-collocation)',
- on: 'var(--md-sys-color-on-surface)',
- off: 'color-mix(in srgb, var(--md-sys-color-on-surface) 18%, transparent)',
+ on: 'var(--app-on-video)',
+ off: 'color-mix(in srgb, var(--app-on-video) 18%, transparent)',
 }
 
 /**
@@ -38,7 +38,7 @@ export function TorrentSignalLine({ sessionId, enabled }: { sessionId: string; e
    aria-label={label}
    title={label}
    data-tour="torrent"
-   className="type-label-small flex flex-wrap items-center gap-x-2 gap-y-1 text-[var(--md-sys-color-on-surface-variant)]"
+   className="type-label-small flex flex-wrap items-center gap-x-2 gap-y-1 text-[color-mix(in_srgb,var(--app-on-video)_75%,transparent)]"
   >
    <span aria-hidden="true" className="flex items-center gap-1">
     {signalDots(h.bufferPercent).map((dot, i) => (
@@ -46,9 +46,9 @@ export function TorrentSignalLine({ sessionId, enabled }: { sessionId: string; e
     ))}
    </span>
    <span className="tabular-nums">{h.activePeers} / {h.totalPeers}</span>
-   <span aria-hidden="true" className="text-[var(--md-sys-color-outline)]">•</span>
+   <span aria-hidden="true" className="text-[color-mix(in_srgb,var(--app-on-video)_45%,transparent)]">•</span>
    <span className="tabular-nums">{h.connectedSeeders} подкл.</span>
-   <span aria-hidden="true" className="text-[var(--md-sys-color-outline)]">•</span>
+   <span aria-hidden="true" className="text-[color-mix(in_srgb,var(--app-on-video)_45%,transparent)]">•</span>
    <span className="tabular-nums">{speed} Мбит/с</span>
   </div>
  )

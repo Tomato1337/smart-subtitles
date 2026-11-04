@@ -39,7 +39,10 @@ function title(c: SubCandidate): string {
 }
 
 function itemHint(c: SubCandidate): string | null {
- if (c.source === 'embedded') return `${c.cues} реплик · ≈ ${formatBytes(c.bytes)}`
+ if (c.source === 'embedded') {
+  // A file on disk is extracted whole, so there is nothing to estimate.
+  return c.cues === null || c.bytes === null ? 'из файла на диске' : `${c.cues} реплик · ≈ ${formatBytes(c.bytes)}`
+ }
  if (c.source !== 'opensubtitles') return null
  return [
   c.exact ? 'совпадает с файлом' : 'по названию',

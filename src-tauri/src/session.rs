@@ -108,7 +108,7 @@ pub fn state_of(st: &AppState, s: &Session, p: &Probe, resume_at: f64, sub_offse
     let has_poster = s.req.card.as_ref().and_then(|c| c.poster.as_ref()).is_some()
         || crate::poster::poster_path(&s.media_id).exists();
     let poster_url = has_poster
-        .then(|| format!("http://127.0.0.1:{}/media/poster/{}", st.cfg().server.port, crate::poster::poster_key(&s.media_id)));
+        .then(|| crate::poster::url(st.listen_port, &s.media_id));
     SessionState {
         session_id: s.id.clone(),
         media_id: s.media_id.clone(),

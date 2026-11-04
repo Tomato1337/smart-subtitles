@@ -518,8 +518,8 @@ async fn clip_audio(clip: &Path) -> Result<Vec<u8>, String> {
     let out = std::env::temp_dir().join(format!("smartsubs-clip-{}.mp3", uuid::Uuid::new_v4()));
     let o = tokio::time::timeout(
         Duration::from_secs(120),
-        tokio::process::Command::new("nice")
-            .args(["-n", "10", "ffmpeg", "-v", "error", "-y", "-i"])
+        crate::proc::background("ffmpeg")
+            .args(["-v", "error", "-y", "-i"])
             .arg(clip)
             .args(["-vn", "-c:a", "libmp3lame", "-q:a", "4"])
             .arg(&out)

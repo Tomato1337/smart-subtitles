@@ -5,7 +5,7 @@ import { Switch } from '@/common/ui/Switch'
 const SOURCES: [SubtitleSource, string, string][] = [
  ['torrserver', 'TorrServer', 'Файлы субтитров внутри раздачи'],
  ['sidecar', 'Субтитры из Lampa', 'Файлы, которые Lampa передала вместе с видео'],
- ['embedded', 'Встроенные в видео', 'Дорожка внутри MKV; TorrServer докачивает части файла'],
+ ['embedded', 'Встроенные в видео', 'Дорожка внутри видео; из TorrServer докачиваются части файла, с диска читается сразу'],
  ['opensubtitles', 'OpenSubtitles', 'Поиск по фильму; скачивание тратит дневной лимит'],
 ]
 

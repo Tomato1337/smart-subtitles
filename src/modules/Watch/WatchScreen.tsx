@@ -68,6 +68,13 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
  }, [p])
  const agent = useAgentActions(session.mediaId, locate)
  const chatOpen = useAgentStore((s) => s.open)
+ // The page behind the player is black too: whatever shows through a rounded or composited edge
+ // (the video card's corners) must not be the light-theme surface.
+ useEffect(() => {
+  const prev = document.body.style.background
+  document.body.style.background = '#000'
+  return () => { document.body.style.background = prev }
+ }, [])
  const hotkey = useHotkeysStore((s) => s.bindings)
  const explain = useExplainStore()
  const openDraft = useCardsStore((s) => s.openDraft)
@@ -292,19 +299,25 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
  const openEpisode = (i: number) => api.sessionOpenPlaylistItem(i).catch((e) => notify('error', errorText(e)))
  useMediaSession(session, p, openEpisode)
 
+ const showSidebar = subs.sidebarOpen && !subs.hideMode
  return (
-  <div className="flex size-full bg-[var(--md-sys-color-surface)]">
-   {subs.sidebarOpen && !subs.hideMode && (
+  <div
+   className="grid size-full bg-black"
+   style={{ gridTemplateColumns: [showSidebar && '360px', 'minmax(0,1fr)', chatOpen && '400px'].filter(Boolean).join(' ') }}
+  >
+   {showSidebar && (
     <Sidebar
      mediaId={session.mediaId}
      onReplay={replay}
      onSlowReplay={slowReplay}
      onCard={(cue) => cardFor(cue.idx, null)}
      onExplain={explainCue}
-     renderEn={(cue, ann, active) => <CueLine cue={cue} ann={ann} live={active} onPick={pickSpan} onHover={(pk) => (pk ? explain.hoverOpen(pk) : explain.hoverLeave())} />}
+     renderEn={(cue, ann, active) => <CueLine cue={cue} ann={ann} live={active} onPick={pickSpan} onHover={(pk) => (pk ? explain.hoverOpen(pk) : explain.hoverLeave())} shareHover showShared />}
     />
    )}
-   <div className="relative min-w-0 flex-1 overflow-hidden bg-black" style={{ cursor: visible ? 'default' : 'none' }}>
+   {/* Flush against the dialog list (no gutter, square corners on that side); rounded only on the side
+       of the agent panel. Alone it fills the window edge to edge, so fullscreen has no corner cut-outs. */}
+   <div className={`relative min-w-0 overflow-hidden bg-black ${chatOpen ? 'rounded-r-[var(--md-sys-shape-corner-extra-large)]' : ''}`} style={{ cursor: visible ? 'default' : 'none' }}>
     <VideoSurface />
     <SubsStatusBanner mediaId={session.mediaId} llmEnabled={session.llmEnabled} onChoose={() => setSubsOpen(true)} />
     <SubtitleOverlay
@@ -313,16 +326,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
      onCard={(cue) => cardFor(cue.idx, null)}
      onExplain={explainCue}
      above={(cue) => (subs.patterns ? <PatternBadges ann={subs.annotations.get(cue.idx)} /> : null)}
-     renderEn={(cue, ann, karaoke) => <CueLine cue={cue} ann={ann} karaoke={karaoke} onPick={pickSpan} />}
-    />
-    <AgentPanel
-     mediaId={session.mediaId}
-     locate={locate}
-     here={<AgentHere />}
-     cueTime={(i) => { const c = cueByIdx(i); return c ? formatTime(c.start + useSubsStore.getState().offset) : null }}
-     cueText={(i) => cueByIdx(i)?.text ?? ''}
-     onSeekCue={seekCue}
-     onSeekTime={(t) => p.seek(t)}
+     renderEn={(cue, ann, karaoke) => <CueLine cue={cue} ann={ann} karaoke={karaoke} onPick={pickSpan} shareHover showShared />}
     />
     <div className={`absolute inset-x-0 top-0 transition-opacity duration-200 ${visible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
      <TopBar
@@ -331,13 +335,16 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
       onOpenEpisode={openEpisode}
       rightSlot={(
        <>
-        <NotificationButton className="relative size-10" />
-        <IconButton icon="forum" label={withKey('Чат с агентом', hotkey.chat)} data-tour="chat" selected={chatOpen} onClick={() => useAgentStore.getState().toggle()} />
+        <NotificationButton className="relative size-12" />
+        <IconButton icon="forum" label={withKey('Чат с агентом', hotkey.chat)} data-tour="chat" variant="tonal" size="lg" selected={chatOpen} onClick={() => useAgentStore.getState().toggle()} />
        </>
       )}
      />
     </div>
-    <div className={`absolute inset-x-0 bottom-0 transition-opacity duration-200 ${visible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
+    <div
+     className={`absolute inset-x-4 bottom-4 transition-opacity duration-200 ${visible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+     style={{ containerType: 'inline-size', containerName: 'dock' }}
+    >
      <ControlBar
       onPrevCue={() => cueStep(-1)}
       onNextCue={() => cueStep(1)}
@@ -352,9 +359,9 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
       leftSlot={
        <>
         <IconButton icon="menu" label={withKey('Диалоги', hotkey.sidebar)} data-tour="dialogs" selected={subs.sidebarOpen} onClick={() => subs.set({ sidebarOpen: !subs.sidebarOpen })} />
-        <div data-tour="subs-lang" className="flex items-center gap-1">
-         <button type="button" aria-pressed={subs.showEn} onClick={() => subs.set({ showEn: !subs.showEn })} className={`state-layer state-on-surface type-label-large relative rounded-full px-3 py-1.5 ${subs.showEn ? 'bg-[var(--md-sys-color-secondary-container)] text-[var(--md-sys-color-on-secondary-container)]' : 'border border-[var(--md-sys-color-outline)]'}`}>EN</button>
-         <button type="button" aria-pressed={subs.showRu} onClick={() => subs.set({ showRu: !subs.showRu })} className={`state-layer state-on-surface type-label-large relative rounded-full px-3 py-1.5 ${subs.showRu ? 'bg-[var(--md-sys-color-secondary-container)] text-[var(--md-sys-color-on-secondary-container)]' : 'border border-[var(--md-sys-color-outline)]'}`}>РУ</button>
+        <div data-tour="subs-lang" className="mx-1 flex gap-0.5">
+         <button type="button" aria-pressed={subs.showEn} onClick={() => subs.set({ showEn: !subs.showEn })} className={`morph state-layer state-on-surface type-label-large relative h-10 min-w-12 px-3 font-semibold ${subs.showEn ? 'rounded-[20px] bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)]' : 'rounded-l-[20px] rounded-r-[var(--md-sys-shape-corner-small)] bg-[var(--md-sys-color-surface-container-highest)] text-[var(--md-sys-color-on-surface-variant)]'}`}>EN</button>
+         <button type="button" aria-pressed={subs.showRu} onClick={() => subs.set({ showRu: !subs.showRu })} className={`morph state-layer state-on-surface type-label-large relative h-10 min-w-12 px-3 font-semibold ${subs.showRu ? 'rounded-[20px] bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)]' : 'rounded-r-[20px] rounded-l-[var(--md-sys-shape-corner-small)] bg-[var(--md-sys-color-surface-container-highest)] text-[var(--md-sys-color-on-surface-variant)]'}`}>РУ</button>
         </div>
        </>
       }
@@ -375,6 +382,15 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
      />
     </div>
    </div>
+   <AgentPanel
+    mediaId={session.mediaId}
+    locate={locate}
+    here={<AgentHere />}
+    cueTime={(i) => { const c = cueByIdx(i); return c ? formatTime(c.start + useSubsStore.getState().offset) : null }}
+    cueText={(i) => cueByIdx(i)?.text ?? ''}
+    onSeekCue={seekCue}
+    onSeekTime={(t) => p.seek(t)}
+   />
    <ExplainPopover mediaId={session.mediaId} onCard={cardFor} onAsk={askSpan} />
    <CardDraftModal mediaId={session.mediaId} />
    <PatternCard

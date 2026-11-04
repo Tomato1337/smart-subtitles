@@ -1,6 +1,6 @@
 # Smart Subtitles — guide for agents
 
-Smart Subtitles is a Linux/macOS desktop player for learning English from films and series. It shows English subtitles with a Russian translation, highlights idioms, phrasal verbs and grammar patterns, explains any phrase in context, runs a tutor chat about the film and writes Anki cards with a movie clip, audio and an AI picture. This guide explains how the app works and lets you, an agent, inspect and change its settings on behalf of the user.
+Smart Subtitles is a Linux, macOS and Windows desktop player for learning English from films and series. It shows English subtitles with a Russian translation, highlights idioms, phrasal verbs and grammar patterns, explains any phrase in context, runs a tutor chat about the film and writes Anki cards with a movie clip, audio and an AI picture. This guide explains how the app works and lets you, an agent, inspect and change its settings on behalf of the user.
 
 The API works only while the app is running; if a request fails with a connection error, ask the user to start Smart Subtitles. Base URL: `http://127.0.0.1:{port}`. Send requests without an `Origin` header (plain `curl`), otherwise they are rejected with 403; the `Host` must be `127.0.0.1:{port}` or `localhost:{port}`.
 
@@ -18,8 +18,8 @@ The API works only while the app is running; if a request fails with a connectio
 - **Video.** `ffprobe` reads the streams, `ffmpeg` remuxes the video into fragmented MP4 for the built-in MSE player: H.264 is copied, HDR is tone-mapped to SDR through VAAPI (`ffmpeg.vaapiDevice`, Linux only), other codecs are re-encoded, audio becomes AAC. Nothing is downloaded in full.
 - **Subtitles.** English subtitles come from the first source in `subtitles.sources` that has them:
   - `torrserver`: subtitle files inside the torrent, through TorrServer's `/subs` API (MatriX.147+).
-  - `sidecar`: subtitle files Lampa passed with the video.
-  - `embedded`: a text track inside an MKV. Only the subtitle blocks are read, block by block through HTTP Range requests; the user first sees how much TorrServer will download and confirms.
+  - `sidecar`: subtitle files Lampa passed with the video; for a local file, `.srt`/`.vtt`/`.ass` files next to it whose name starts with the video's name.
+  - `embedded`: a text track inside the video. From a stream, only the subtitle blocks of an MKV are read, block by block through HTTP Range requests; the user first sees how much TorrServer will download and confirms. From a file on disk, ffmpeg extracts the whole track at once, with no confirmation (any container; bitmap tracks such as PGS/VobSub are skipped).
   - `opensubtitles`: search by file hash and TMDB id (season/episode for series); needs `opensubtitles.apiKey`.
   The result is stored per film, so a film opens with the same subtitles next time. In the player, «Выбрать субтитры…» lists every candidate and switches between them; «Загрузить файл…» in that dialog takes a local file. A timing offset is found automatically with faster-whisper (run through `uv`), and the user can adjust it by hand.
 - **Dialog analysis.** The LLM translates every line and marks idioms, phrasal verbs, collocations, slang, reductions and the 48 grammar patterns, in batches of 40 lines, starting from where the user is watching. Before a film's analysis starts, the app asks for consent and shows the token estimate; «Рассчитать стоимость» turns it into dollars (from the price catalog, or a guess by the `cost` task). «Запомнить для этой модели» sets `annot.auto` and `annot.rememberedModel`, so later films start without the question while the analysis model stays the same. The player then waits until the lines around the start point are analyzed («Пропустить» starts at once); the rest continues in the background.
@@ -132,7 +132,7 @@ Take provider ids and model names from `GET /api/setup/llm/providers`; the ones 
 | `tutor.apiUrl` | string | `http://127.0.0.1:4820` | Tutor API address. |
 | `tutor.useImageSettings` | bool | `true` | Take the image backend from tutor instead of `images.*`. |
 | `learner.cefr` | string | `A2` | Learner level, one of `A1`, `A2`, `B1`, `B2`, `C1`, `C2`; it decides what gets highlighted and how it is explained. |
-| `ffmpeg.vaapiDevice` | string | `/dev/dri/renderD128` | VAAPI device for hardware decoding and HDR tone mapping on Linux; unused on macOS. |
+| `ffmpeg.vaapiDevice` | string | `/dev/dri/renderD128` | VAAPI device for hardware decoding and HDR tone mapping on Linux; unused on macOS and Windows. |
 
 Secret fields, masked as `***` in GET: `llm.apiKey`, `opensubtitles.apiKey`, `opensubtitles.password`, `torrserver.password`, `images.openai.apiKey`, `images.runware.apiKey`, `images.gemini.apiKey`.
 
@@ -149,11 +149,11 @@ Settings that live in the UI only (browser `localStorage`, not reachable through
 
 ## Files and troubleshooting
 
-`configPath` from `/api/setup` is the config file; the other files sit next to it (Linux: `~/.config/smart-subtitle/`, macOS: `~/Library/Application Support/smart-subtitle/`). Prefer the API to editing `config.json` by hand: a hand edit takes effect only after a restart and is not validated.
+`configPath` from `/api/setup` is the config file; the other files sit next to it (Linux: `~/.config/smart-subtitle/`, macOS: `~/Library/Application Support/smart-subtitle/`, Windows: `%APPDATA%\smart-subtitle\`). Prefer the API to editing `config.json` by hand: a hand edit takes effect only after a restart and is not validated.
 
 | File | Contents |
 |---|---|
-| `config.json` | Settings, mode 600. |
+| `config.json` | Settings; mode 600 on Linux and macOS. |
 | `data.db` | SQLite: films and positions, subtitles, analysis, explanations, chat, card proposals, notifications, LLM usage. |
 | `logs/app.log` | Sessions, subtitles, Anki, settings. |
 | `logs/llm.log` | LLM requests and errors (bodies are logged with secrets redacted). |
@@ -161,7 +161,7 @@ Settings that live in the UI only (browser `localStorage`, not reachable through
 | `logs/asr.log` | Whisper subtitle sync. |
 | `logs/events.log` | HTTP requests and UI events. |
 
-The cache (subtitles, clips, card images, posters, the Whisper environment, the models.dev price index) is in `~/.cache/smart-subtitle/` on Linux and `~/Library/Caches/smart-subtitle/` on macOS.
+The cache (subtitles, clips, card images, posters, the Whisper environment, the models.dev price index) is in `~/.cache/smart-subtitle/` on Linux, `~/Library/Caches/smart-subtitle/` on macOS and `%LOCALAPPDATA%\smart-subtitle\` on Windows.
 
 | Symptom | Check |
 |---|---|

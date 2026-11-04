@@ -166,8 +166,8 @@ async fn store(key: &str, bytes: &[u8]) -> Result<PathBuf, String> {
     // Lower priority: playback must not stutter while a card is built.
     let o = tokio::time::timeout(
         Duration::from_secs(120),
-        tokio::process::Command::new("nice")
-            .args(["-n", "10", "ffmpeg", "-v", "error", "-y", "-i"])
+        crate::proc::background("ffmpeg")
+            .args(["-v", "error", "-y", "-i"])
             .arg(&src)
             .args(["-vf", &vf, "-c:v", "libwebp", "-quality", "82"])
             .arg(&dest)
@@ -349,7 +349,7 @@ async fn omp_image(spec: &Spec, prompt: &str) -> Result<Vec<u8>, String> {
     );
     // JSON mode first; the text mode retry only when the tool never ran (its output has no tool result).
     for extra in [vec!["--mode", "json"], vec!["--mode", "text", "--print-thoughts"]] {
-        let mut cmd = tokio::process::Command::new(&omp);
+        let mut cmd = crate::proc::command(&omp);
         cmd.args(["-p"])
             .args(&extra)
             .args(["--no-session", "--no-skills", "--no-rules", "--no-extensions", "--config"])
@@ -359,7 +359,7 @@ async fn omp_image(spec: &Spec, prompt: &str) -> Result<Vec<u8>, String> {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
-            .env("PATH", child_path(&std::env::var("PATH").unwrap_or_default()))
+            .env("PATH", crate::proc::without_npm_bins(&std::env::var_os("PATH").unwrap_or_default()))
             .kill_on_drop(true);
         #[cfg(unix)]
         cmd.process_group(0);
@@ -377,14 +377,17 @@ async fn omp_image(spec: &Spec, prompt: &str) -> Result<Vec<u8>, String> {
     Err("omp: нет картинки в ответе".into())
 }
 
-/// Runs omp, returns its stdout; a timeout kills the whole process group.
+/// Runs omp, returns its stdout; a timeout kills the whole process group (on Windows only omp itself,
+/// through `kill_on_drop`).
 async fn run_omp(mut cmd: tokio::process::Command) -> Result<String, String> {
     let child = cmd.spawn().map_err(|e| format!("omp: {e}"))?;
+    #[cfg(unix)]
     let pid = child.id();
     match tokio::time::timeout(Duration::from_secs(240), child.wait_with_output()).await {
         Ok(Ok(o)) => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
         Ok(Err(e)) => Err(format!("omp: {e}")),
         Err(_) => {
+            #[cfg(unix)]
             if let Some(pid) = pid {
                 let _ = tokio::process::Command::new("kill").args(["-KILL", &format!("-{pid}")]).status().await;
             }
@@ -395,29 +398,12 @@ async fn run_omp(mut cmd: tokio::process::Command) -> Result<String, String> {
 
 /// `omp` from PATH without `node_modules/.bin`, then its usual install location.
 fn omp_bin() -> Option<PathBuf> {
-    let path = child_path(&std::env::var("PATH").unwrap_or_default());
+    let path = crate::proc::without_npm_bins(&std::env::var_os("PATH").unwrap_or_default());
     let mut dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
     if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join(".local/bin"));
+        dirs.push(home.join(".local").join("bin"));
     }
-    dirs.into_iter().map(|d| d.join("omp")).find(|p| executable(p))
-}
-
-#[cfg(unix)]
-fn executable(p: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn executable(p: &Path) -> bool {
-    p.is_file()
-}
-
-/// PATH for the child without `node_modules/.bin`: `npm run tauri dev` prepends every parent one, and a
-/// stray `~/node_modules/.bin/omp` (bun script) would shadow the real omp used for images.
-fn child_path(path: &str) -> String {
-    path.split(':').filter(|d| !d.trim_end_matches('/').ends_with("node_modules/.bin")).collect::<Vec<_>>().join(":")
+    crate::proc::find_in("omp", dirs)
 }
 
 #[cfg(test)]
@@ -463,11 +449,6 @@ mod tests {
         assert_eq!(s.api_key, "g");
         assert_eq!(s.model, "gemini-2.5-flash-image");
         assert_eq!(Spec::from_images(&config::Images { backend: "none".into(), ..Default::default() }), Spec::none());
-    }
-
-    #[test]
-    fn child_path_drops_npm_bins() {
-        assert_eq!(child_path("/p/node_modules/.bin:/home/u/node_modules/.bin/:/home/u/.local/bin:/usr/bin"), "/home/u/.local/bin:/usr/bin");
     }
 
     #[test]

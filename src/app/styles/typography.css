@@ -1,9 +1,13 @@
-@import '@fontsource/roboto-flex/latin.css';
-@import '@fontsource/roboto-flex/cyrillic.css';
-@import '@material-symbols/font-400/outlined.css';
+@import '@fontsource-variable/roboto-flex/wdth.css';
+@import '@material-symbols/font-400/rounded.css';
 
 :root {
-  --md-ref-typeface-brand: 'Roboto Flex', system-ui, sans-serif;
+  --md-ref-typeface-brand: 'Roboto Flex Variable', system-ui, sans-serif;
+
+  --app-emph-weight: 720;
+  --app-emph-width: 118%;
+  --app-display-weight: 820;
+  --app-display-width: 128%;
 
   --md-sys-typescale-display-large-size: 57px;  --md-sys-typescale-display-large-line-height: 64px; --md-sys-typescale-display-large-weight: 400; --md-sys-typescale-display-large-tracking: -0.25px;
   --md-sys-typescale-display-medium-size: 45px; --md-sys-typescale-display-medium-line-height: 52px; --md-sys-typescale-display-medium-weight: 400; --md-sys-typescale-display-medium-tracking: 0;
@@ -43,4 +47,8 @@
   .type-label-large { font-family: var(--md-ref-typeface-brand); font-size: var(--md-sys-typescale-label-large-size); line-height: var(--md-sys-typescale-label-large-line-height); font-weight: var(--md-sys-typescale-label-large-weight); letter-spacing: var(--md-sys-typescale-label-large-tracking); }
   .type-label-medium { font-family: var(--md-ref-typeface-brand); font-size: var(--md-sys-typescale-label-medium-size); line-height: var(--md-sys-typescale-label-medium-line-height); font-weight: var(--md-sys-typescale-label-medium-weight); letter-spacing: var(--md-sys-typescale-label-medium-tracking); }
   .type-label-small { font-family: var(--md-ref-typeface-brand); font-size: var(--md-sys-typescale-label-small-size); line-height: var(--md-sys-typescale-label-small-line-height); font-weight: var(--md-sys-typescale-label-small-weight); letter-spacing: var(--md-sys-typescale-label-small-tracking); }
+
+  /* Expressive emphasis: pair with a type-* size class. */
+  .type-emph { font-weight: var(--app-emph-weight); font-stretch: var(--app-emph-width); letter-spacing: 0; }
+  .type-hero { font-family: var(--md-ref-typeface-brand); font-size: 3.5rem; line-height: 1; font-weight: var(--app-display-weight); font-stretch: var(--app-display-width); letter-spacing: -0.01em; }
 }

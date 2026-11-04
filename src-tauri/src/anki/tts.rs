@@ -10,7 +10,7 @@ pub async fn speak(text: &str, voice: &str, out: &Path) -> Result<(), String> {
     let out = out.to_path_buf();
     let o = tokio::time::timeout(
         Duration::from_secs(120),
-        tokio::process::Command::new(&uv)
+        crate::proc::command(&uv)
             .args(["tool", "run", "edge-tts", "--voice", voice, "--text", text, "--write-media"])
             .arg(&out)
             .kill_on_drop(true)

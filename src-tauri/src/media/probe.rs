@@ -2,7 +2,6 @@ use crate::types::AudioTrack;
 use anyhow::{anyhow, Context};
 use serde::Deserialize;
 use std::time::Duration;
-use tokio::process::Command;
 
 #[derive(Debug, Clone)]
 pub struct VideoInfo {
@@ -79,8 +78,9 @@ pub fn parse_probe(json: &[u8]) -> anyhow::Result<Probe> {
 }
 
 pub async fn probe(url: &str) -> anyhow::Result<Probe> {
-    let fut = Command::new("ffprobe")
-        .args(["-v", "error", "-show_format", "-show_streams", "-of", "json", url])
+    let fut = crate::proc::command("ffprobe")
+        .args(["-v", "error", "-show_format", "-show_streams", "-of", "json"])
+        .arg(super::input(url))
         .kill_on_drop(true)
         .output();
     let out = tokio::time::timeout(Duration::from_secs(120), fut)

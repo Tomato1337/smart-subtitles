@@ -20,7 +20,7 @@ pub fn stream_args(url: &str, start: f64, audio_index: u32, p: &Probe, mode: Vid
     if mode == VideoMode::Vaapi {
         a.extend(["-hwaccel", "vaapi", "-hwaccel_device", vaapi_dev, "-hwaccel_output_format", "vaapi"].map(String::from));
     }
-    a.extend(["-copyts".into(), "-ss".into(), start.to_string(), "-i".into(), url.into()]);
+    a.extend(["-copyts".into(), "-ss".into(), start.to_string(), "-i".into(), super::input(url)]);
     a.extend(["-map".into(), format!("0:{}", p.video.index), "-map".into(), format!("0:{audio_index}")]);
     a.extend(["-c:a", "aac", "-b:a", "192k", "-ac", "2", "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"].map(String::from));
     match mode {

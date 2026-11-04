@@ -41,6 +41,8 @@ export type RecentMedia = {
  annot: 'noSubs' | 'off' | 'new' | 'partial' | 'done' | 'failed'
  annotDone: number
  annotTotal: number
+ /** Cached poster on the local media server; null when none is cached yet. */
+ posterUrl: string | null
 }
 
 export const api = {

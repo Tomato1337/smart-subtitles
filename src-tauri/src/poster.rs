@@ -10,6 +10,11 @@ pub fn poster_key(media_id: &str) -> String { hex::encode(Sha1::digest(media_id.
 
 pub fn poster_path(media_id: &str) -> PathBuf { dir().join(poster_key(media_id)) }
 
+/// URL of a cached poster on the local media server.
+pub fn url(port: u16, media_id: &str) -> String {
+    format!("http://127.0.0.1:{port}/media/poster/{}", poster_key(media_id))
+}
+
 fn dir() -> PathBuf { crate::config::cache_dir().join("posters") }
 
 fn valid_key(key: &str) -> bool {

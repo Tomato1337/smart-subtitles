@@ -188,7 +188,7 @@ export function HighlightGuide({ open, onClose }: { open: boolean; onClose: () =
         ...anki?.style,
         ...(layers.has('pattern') && PATTERN_UNDERLINE),
         ...(spot && !layers.has(spot) && { opacity: 0.25 }),
-        ...(selected && inside(t, selected) && { background: 'color-mix(in srgb, var(--md-sys-color-primary) 22%, transparent)' }),
+        ...(selected && inside(t, selected) && { backgroundColor: 'color-mix(in srgb, var(--md-sys-color-primary) 22%, transparent)' }),
       }
       return { style, label: anki?.label }
     }

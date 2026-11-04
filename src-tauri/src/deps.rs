@@ -2,7 +2,7 @@
 //! without ffmpeg/ffprobe there is no video, uv only disables optional features.
 
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use crate::proc::find;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,28 +27,7 @@ pub struct DepsStatus {
     pub notice: Option<String>,
 }
 
-#[cfg(unix)]
-fn executable(p: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn executable(p: &Path) -> bool {
-    p.is_file()
-}
-
-/// Looks in PATH and in the two directories the official uv installer uses.
-fn find(name: &str) -> Option<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
-    if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join(".local/bin"));
-        dirs.push(home.join(".cargo/bin"));
-    }
-    dirs.into_iter().map(|d| d.join(name)).find(|p| executable(p))
-}
-
-/// Install command for a distro package, guessed from /etc/os-release.
+/// Install command for a distro package, guessed from /etc/os-release; winget on Windows.
 fn pkg_install(pkg: &str) -> String {
     #[cfg(target_os = "macos")]
     {
@@ -72,7 +51,11 @@ fn pkg_install(pkg: &str) -> String {
             format!("установите пакет {pkg}")
         }
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        format!("winget install {pkg}")
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         format!("установите {pkg}")
     }
@@ -83,7 +66,11 @@ fn uv_install() -> String {
     {
         "brew install uv".into()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        "powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"".into()
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         "curl -LsSf https://astral.sh/uv/install.sh | sh".into()
     }

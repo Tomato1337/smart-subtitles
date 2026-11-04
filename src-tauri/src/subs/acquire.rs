@@ -1,4 +1,4 @@
-use super::{embedded, opensubtitles as os, parse, sidecar, store, torrserver};
+use super::{embedded, local, opensubtitles as os, parse, sidecar, store, torrserver};
 use crate::{notify::{self, Level}, session::Session, state::AppState, types::SubsStatus};
 use sha1::{Digest, Sha1};
 use std::{path::PathBuf, sync::Arc};
@@ -56,7 +56,10 @@ pub async fn install(
     let _ = st.app.emit("subs:offset", serde_json::json!({ "mediaId": s.media_id, "offset": 0.0 }));
     let _ = st.app.emit("subs:updated", serde_json::json!({ "mediaId": s.media_id }));
     crate::llm::annotate::restart(st, s);
-    super::sync::spawn(st, s);
+    // A track of the video file itself is already in time with it.
+    if kind != "embedded" {
+        super::sync::spawn(st, s);
+    }
     Ok(n)
 }
 
@@ -228,7 +231,10 @@ pub async fn run(st: Arc<AppState>, s: Arc<Session>) {
         let got = match id.as_str() {
             "torrserver" => try_torrserver(&st, &s).await,
             "sidecar" => try_sidecar(&st, &s).await,
-            "embedded" => embedded::start(&st, &s, None, false).await,
+            "embedded" => match local::path(&s.src) {
+                Some(file) => local::start(&st, &s, &file).await,
+                None => embedded::start(&st, &s, None, false).await,
+            },
             "opensubtitles" => try_opensubtitles(&st, &s).await,
             _ => None,
         };

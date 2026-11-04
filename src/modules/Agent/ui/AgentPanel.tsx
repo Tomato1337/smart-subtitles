@@ -5,6 +5,7 @@ import { api, errorText } from '@/common/api/tauri'
 import type { ChatMessage } from '@/common/types/ipc'
 import { Icon } from '@/common/ui/Icon'
 import { IconButton } from '@/common/ui/IconButton'
+import { shapeClip } from '@/common/ui/shapes'
 import { formatTime } from '@/common/utilities/time'
 import { CARD_PHASE_RU, useCardsStore } from '@/modules/Cards'
 import { useHotkeysStore, withKey } from '@/modules/Hotkeys'
@@ -74,7 +75,7 @@ type PanelProps = {
   onSeekTime: (t: number) => void
 }
 
-const BUBBLE = 'type-body-medium break-words rounded-[var(--md-sys-shape-corner-large)] px-3.5 py-2.5'
+const BUBBLE = 'type-body-medium break-words'
 
 /** Film chat with the agent (480 px, extra-large corners, level-3 surface): one thread per film, every message carries the learner's position. */
 export function AgentPanel({ mediaId, locate, here, cueTime, cueText, onSeekCue, onSeekTime }: PanelProps) {
@@ -103,11 +104,13 @@ export function AgentPanel({ mediaId, locate, here, cueTime, cueText, onSeekCue,
   }
 
   return (
-    <aside className="md-slide absolute inset-y-3 right-3 z-[120] flex w-[480px] max-w-[calc(100%-24px)] flex-col bg-[var(--md-sys-color-surface-container-high)] shadow-xl" style={{ borderRadius: 'var(--md-sys-shape-corner-extra-large)', userSelect: 'text' }} aria-label="Агент">
-      <div className="flex items-start gap-2 p-4 pb-2">
-        <span className="pt-0.5"><Icon name="auto_awesome" /></span>
+    <aside className="md-slide ml-2 flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--md-sys-shape-corner-extra-large)] bg-[var(--md-sys-color-surface-container-low)]" style={{ userSelect: 'text' }} aria-label="Агент">
+      <div className="flex items-center gap-3 pl-4 pr-2 pt-4 pb-3">
+        <span aria-hidden="true" className="grid size-11 shrink-0 place-items-center bg-[var(--md-sys-color-tertiary-container)] text-[var(--md-sys-color-on-tertiary-container)]" style={{ clipPath: shapeClip.burst12, WebkitClipPath: shapeClip.burst12 }}>
+          <Icon name="auto_awesome" fill />
+        </span>
         <div className="min-w-0 flex-1">
-          <div className="type-title-medium">Агент</div>
+          <h2 className="type-title-large type-emph">Агент</h2>
           <div className="type-body-small truncate text-[var(--md-sys-color-on-surface-variant)]">{here}</div>
         </div>
         <IconButton icon="close" label={withKey('Закрыть', hotkey.chat)} onClick={() => setOpen(false)} />
@@ -120,7 +123,7 @@ export function AgentPanel({ mediaId, locate, here, cueTime, cueText, onSeekCue,
         )}
         {history.data?.map((m) => {
           if (m.role === 'proposal') return <Proposal key={m.id} mediaId={mediaId} m={m} />
-          if (m.role === 'assistant') return <div key={m.id} className={`${BUBBLE} self-stretch bg-[var(--md-sys-color-surface-container-highest)]`}>{md(m.text)}</div>
+          if (m.role === 'assistant') return <div key={m.id} className={`${BUBBLE} self-stretch`}>{md(m.text)}</div>
           const w = where(m)
           return (
             <div key={m.id} className="flex max-w-[85%] flex-col items-end gap-1 self-end">
@@ -129,27 +132,27 @@ export function AgentPanel({ mediaId, locate, here, cueTime, cueText, onSeekCue,
                   <Icon name="schedule" size={14} />{w.label}
                 </button>
               )}
-              <div className={`${BUBBLE} whitespace-pre-wrap bg-[var(--md-sys-color-secondary-container)] text-[var(--md-sys-color-on-secondary-container)]`}>{m.text}</div>
+              <div className={`${BUBBLE} whitespace-pre-wrap rounded-[var(--md-sys-shape-corner-large-increased)] bg-[var(--md-sys-color-secondary-container)] px-3.5 py-2.5 text-[var(--md-sys-color-on-secondary-container)]`}>{m.text}</div>
             </div>
           )
         })}
         {l.busy && (
-          <div className={`${BUBBLE} self-stretch bg-[var(--md-sys-color-surface-container-highest)]`}>
+          <div className={`${BUBBLE} self-stretch`}>
             {l.text ? md(l.text) : <span className="text-[var(--md-sys-color-on-surface-variant)]">{l.tool ? TOOL_LABEL[l.tool] ?? 'работаю…' : 'думаю…'}</span>}
           </div>
         )}
         {l.error && <div className="type-body-small text-[var(--md-sys-color-error)]">{l.error}</div>}
       </div>
-      <div className="flex items-end gap-2 p-3">
+      <div className="flex items-end gap-2 p-3 pl-4">
         <textarea
           value={text}
           rows={1}
           placeholder="Спросить про фильм или эту сцену…"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }}
-          className="type-body-medium max-h-32 min-w-0 flex-1 resize-none rounded-[var(--md-sys-shape-corner-large)] bg-[var(--md-sys-color-surface-container-highest)] px-4 py-2.5 outline-none"
+          className="type-body-medium max-h-32 min-h-[52px] min-w-0 flex-1 resize-none rounded-[26px] bg-[var(--md-sys-color-surface-container-highest)] px-6 py-3.5 outline-none"
         />
-        <IconButton icon="send" label="Отправить" disabled={!text.trim() || l.busy} onClick={submit} />
+        <IconButton icon="arrow_upward" fill variant="filled" shape="cookie9" className="!size-[52px]" label="Отправить" disabled={!text.trim() || l.busy} onClick={submit} />
       </div>
       <ChatUsageBar mediaId={mediaId} />
     </aside>

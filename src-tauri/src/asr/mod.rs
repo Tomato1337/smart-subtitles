@@ -38,29 +38,9 @@ pub fn pcm_temp() -> anyhow::Result<TempFile> {
     Ok(TempFile(dir.join(format!("{}.f32", uuid::Uuid::new_v4()))))
 }
 
-#[cfg(unix)]
-fn executable(p: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn executable(p: &Path) -> bool {
-    p.is_file()
-}
-
 /// `uv` from PATH, then the two usual install locations.
 pub(crate) fn find_uv() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let p = dir.join("uv");
-            if executable(&p) {
-                return Some(p);
-            }
-        }
-    }
-    let home = dirs::home_dir()?;
-    [home.join(".local/bin/uv"), home.join(".cargo/bin/uv")].into_iter().find(|p| executable(p))
+    crate::proc::find("uv")
 }
 
 async fn output(cmd: Command, secs: u64) -> anyhow::Result<Output> {
@@ -79,7 +59,8 @@ fn failure(o: &Output) -> String {
 /// Interpreter of the venv, installing faster-whisper once (marker file records the requirement).
 async fn ensure_env(st: &AppState) -> anyhow::Result<PathBuf> {
     let venv = asr_dir().join("venv");
-    let python = venv.join("bin/python");
+    // uv lays a venv out the way Python does on this OS.
+    let python = if cfg!(windows) { venv.join("Scripts").join("python.exe") } else { venv.join("bin").join("python") };
     let marker = venv.join(".smartsubs-ready");
     if std::fs::read_to_string(&marker).is_ok_and(|m| m.trim() == REQUIREMENT) {
         return Ok(python);
@@ -91,7 +72,7 @@ async fn ensure_env(st: &AppState) -> anyhow::Result<PathBuf> {
     crate::notify::info(st, "Устанавливаю распознавание речи (один раз, ~450 МБ)…");
     std::fs::create_dir_all(asr_dir())?;
 
-    let mut c = Command::new(&uv);
+    let mut c = crate::proc::command(&uv);
     c.args(["venv", "--allow-existing"]).arg(&venv);
     match output(c, 300).await {
         Ok(o) if o.status.success() => {}
@@ -99,7 +80,7 @@ async fn ensure_env(st: &AppState) -> anyhow::Result<PathBuf> {
         Err(e) => bail!("uv: {e}"),
     }
 
-    let mut c = Command::new(&uv);
+    let mut c = crate::proc::command(&uv);
     c.args(["pip", "install", "--python"]).arg(&python).arg(REQUIREMENT);
     match output(c, 900).await {
         Ok(o) if o.status.success() => {}
@@ -117,11 +98,11 @@ async fn ensure_env(st: &AppState) -> anyhow::Result<PathBuf> {
 pub async fn extract_pcm(src: &str, audio_index: u32, start: f64, dur: f64, out: &Path) -> anyhow::Result<()> {
     let mut a: Vec<String> = ["-hide_banner", "-v", "error", "-y", "-ss"].iter().map(|s| s.to_string()).collect();
     a.push(format!("{start:.3}"));
-    a.extend(["-t".into(), format!("{dur:.3}"), "-i".into(), src.into()]);
+    a.extend(["-t".into(), format!("{dur:.3}"), "-i".into(), crate::media::input(src)]);
     a.extend(["-map".into(), format!("0:{audio_index}"), "-vn".into()]);
     a.extend(["-ac", "1", "-ar", "16000", "-f", "f32le"].map(String::from));
     a.push(out.to_string_lossy().into_owned());
-    let o = tokio::time::timeout(Duration::from_secs(180), Command::new("nice").args(["-n", "10", "ffmpeg"]).args(&a).kill_on_drop(true).output())
+    let o = tokio::time::timeout(Duration::from_secs(180), crate::proc::background("ffmpeg").args(&a).kill_on_drop(true).output())
         .await
         .map_err(|_| anyhow!("ffmpeg: таймаут"))??;
     if !o.status.success() {
@@ -142,8 +123,8 @@ pub async fn transcribe(st: &AppState, files: &[PathBuf]) -> anyhow::Result<Vec<
     tokio::fs::write(&script, ASR_PY).await?;
 
     let threads = THREADS.to_string();
-    let mut c = Command::new("nice");
-    c.args(["-n", "10"]).arg(&python).arg(&script).args([MODEL, &threads]).args(files);
+    let mut c = crate::proc::background(&python);
+    c.arg(&script).args([MODEL, &threads]).args(files);
     c.env("HF_HUB_DISABLE_TELEMETRY", "1");
     let o = output(c, 600).await.map_err(|e| anyhow!("распознавание речи: {e}"))?;
     if !o.status.success() {

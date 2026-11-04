@@ -1,0 +1,22 @@
+# Arch Linux package repacked from the release .deb (the same binary Debian/Ubuntu get).
+# Local install: makepkg -si   (downloads the .deb of `pkgver` from GitHub Releases)
+# CI: .github/workflows/release.yml puts the freshly built .deb next to this file and sets pkgver.
+pkgname=smart-subtitle-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Video player with smart English subtitles, LLM translations and Anki cards"
+arch=('x86_64')
+url="https://github.com/Tomato1337/smart-subtitles"
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3' 'ffmpeg' 'hicolor-icon-theme')
+optdepends=('uv: subtitle auto-sync and word audio on cards'
+            'anki: flashcards (with the AnkiConnect add-on)')
+provides=('smart-subtitle')
+conflicts=('smart-subtitle')
+options=('!strip' '!debug')
+source=("smart-subtitle_${pkgver}_amd64.deb::${url}/releases/download/v${pkgver}/smart-subtitle_${pkgver}_amd64.deb")
+sha256sums=('SKIP')
+
+package() {
+  bsdtar -xf "${srcdir}"/data.tar.* -C "${pkgdir}"
+}

@@ -1,6 +1,6 @@
 # Smart Subtitles — notes for coding agents
 
-Desktop player (Tauri 2: Rust backend + React frontend) for learning English from films: bilingual subtitles, LLM translation and highlighting, a tutor chat, Anki cards with movie clips. Linux (Fedora) and macOS. The UI and user-facing strings are Russian; code, comments and agent docs are English.
+Desktop player (Tauri 2: Rust backend + React frontend) for learning English from films: bilingual subtitles, LLM translation and highlighting, a tutor chat, Anki cards with movie clips. Linux (developed on Fedora), macOS and Windows. The UI and user-facing strings are Russian; code, comments and agent docs are English.
 
 Two audiences, two documents:
 
@@ -16,7 +16,7 @@ npm run type-check                                 # tsc -b (TypeScript 7)
 npm run lint                                       # oxlint src --deny-warnings (no ESLint)
 npm test                                           # vitest
 cargo test --manifest-path src-tauri/Cargo.toml    # Rust unit tests
-npm run build:rpm / npm run build:mac              # packages; CI release: .github/workflows/release.yml on tag v*
+npm run build:rpm | build:deb | build:appimage | build:mac | build:windows   # one package each
 ```
 
 Run all four checks before handing work back. The dev app restart kills the current ffmpeg stream and session.
@@ -34,6 +34,7 @@ src-tauri/src/
   state.rs session.rs  AppState, the open film (one session at a time)
   db.rs             SQLite schema + numbered migrations (PRAGMA user_version)
   notify.rs logs.rs deps.rs poster.rs theme.rs patterns.rs
+  proc.rs           finding and starting external tools on every OS (see Conventions)
   media/            ffprobe, ffmpeg stream args (copy / VAAPI tonemap / x264), keyframes, clips
   subs/             parse/clean, sources: torrserver (/subs API), sidecar, embedded (mkv.rs EBML reader), opensubtitles;
                     acquire.rs (source chain), choose.rs (chooser), store.rs, sync.rs (whisper offset)
@@ -47,6 +48,8 @@ src/                FEOD layers: common → modules → pages → app
   common/types/ipc.ts      TS mirror of the Rust IPC/config types
   modules/<Name>/index.ts  the only public API of a module
 lampa-plugin/smartsubs.js  Lampa plugin; also served by the app at /lampa/smartsubs.js
+packaging/arch/PKGBUILD    Arch package, repacked from the release .deb
+.github/workflows/release.yml  every package; a v* tag attaches them to one draft release, a manual run only builds artifacts
 ```
 
 ## Conventions
@@ -56,6 +59,8 @@ lampa-plugin/smartsubs.js  Lampa plugin; also served by the app at /lampa/smarts
 - Backend → UI communication is Tauri events (`subs:status`, `annot:progress`, `cards:result`, `config:changed`, `notification:added`, …). Errors and warnings the user must see go through `notify::push` (stored, shown in the notification center); transient messages through `notify::info`.
 - Logging: `logs::log("<name>", …)` writes `logs/<name>.log` next to `config.json` (`app`, `llm`, `ffmpeg`, `asr`, `events`). Never log secrets; `logs::redact` masks URL userinfo and key-shaped strings, keep it in the path of anything third-party.
 - Comments explain why, not what; keep them current when behaviour changes.
+- External tools (ffmpeg, ffprobe, uv, omp) start only through `proc::command` (foreground) or `proc::background` (`nice -n 10` on Unix, below-normal priority on Windows; both hide the console window on Windows), and are looked up with `proc::find`/`find_in`, which add `.exe`/`.cmd` on Windows. Never `Command::new("nice")` or a hard-coded `/` path separator. Pass a session source to ffmpeg/ffprobe through `media::input`: ffmpeg does not percent-decode `file://` URLs.
+- Platform code is `#[cfg(unix)]`/`#[cfg(windows)]`/`#[cfg(target_os = …)]`. With no Windows machine at hand, check it with `cargo check --target x86_64-pc-windows-gnu` (needs a mingw C compiler, e.g. a `zig cc` wrapper) or a manual run of the release workflow.
 
 ## Changing the config
 
@@ -80,14 +85,15 @@ Never edit `SCHEMA` for existing installs: append `MIGRATION_<n>` in `db.rs`, ru
 - The ffmpeg stream is a live fMP4 pipe: no byte ranges except from 0; seeking restarts ffmpeg.
 - The embedded-subtitle reader only appends cues at the tail, so `cue.idx` stays the start-time rank everything keys on.
 - Annotation batches are 40 cues (`annotate::BATCH`, mirrored in `Watch/AnnotGate.tsx`).
-- macOS apps started from Finder get a minimal `PATH`; `lib.rs` appends the Homebrew prefixes.
+- macOS apps started from Finder get a minimal `PATH`; `lib.rs` appends the Homebrew prefixes. On Windows a tool installed while the app runs is found only after a restart (`PATH` is inherited at start).
+- `smartsubs://` is registered by the rpm/deb/Arch `.desktop` file; an AppImage and the Windows build register it themselves at every start (`register_all` in `lib.rs`).
 - The machine may have `http_proxy` set; reqwest reaches loopback services directly through `no_proxy`.
 
 ## Files on the user's machine
 
-Linux paths (macOS: `~/Library/Application Support/smart-subtitle/` and `~/Library/Caches/smart-subtitle/`):
+Linux paths (macOS: `~/Library/Application Support/smart-subtitle/` and `~/Library/Caches/smart-subtitle/`; Windows: `%APPDATA%\smart-subtitle\` and `%LOCALAPPDATA%\smart-subtitle\`):
 
-- `~/.config/smart-subtitle/config.json` (mode 600, holds keys), `data.db`, `logs/`
+- `~/.config/smart-subtitle/config.json` (mode 600 on Unix, holds keys), `data.db`, `logs/`
 - `~/.cache/smart-subtitle/`: subtitles, clips, card images, posters, the whisper `uv` environment, `models-dev.json`
 
 Never print or commit the contents of `config.json`; refer to fields by path.

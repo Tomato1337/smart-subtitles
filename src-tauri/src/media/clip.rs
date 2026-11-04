@@ -1,7 +1,7 @@
 use crate::logs;
 use anyhow::{anyhow, bail};
 use std::{path::{Path, PathBuf}, time::Duration};
-use tokio::process::Command;
+use crate::proc;
 
 pub struct ClipSpec<'a> {
     pub src: &'a str,
@@ -22,7 +22,7 @@ pub fn clip_args(c: &ClipSpec, out: &Path) -> Vec<String> {
     let vf = if c.hdr { format!("zscale=t=linear:npl=100,tonemap=hable,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,{scale}") } else { scale.to_string() };
     let mut a: Vec<String> = ["-hide_banner", "-v", "error", "-y", "-ss"].map(String::from).to_vec();
     a.push(format!("{ss:.3}"));
-    a.extend(["-t".into(), format!("{t:.3}"), "-i".into(), c.src.into()]);
+    a.extend(["-t".into(), format!("{t:.3}"), "-i".into(), super::input(c.src)]);
     a.extend(["-map".into(), format!("0:{}", c.video_index), "-map".into(), format!("0:{}", c.audio_index), "-vf".into(), vf]);
     a.extend(["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "40", "-deadline", "good", "-cpu-used", "5", "-row-mt", "1", "-c:a", "libopus", "-b:a", "32k", "-ac", "1"].map(String::from));
     a.push(out.to_string_lossy().into_owned());
@@ -40,7 +40,7 @@ pub async fn make(c: &ClipSpec<'_>, file_name: &str) -> anyhow::Result<PathBuf> 
     if tokio::fs::metadata(&out).await.is_ok_and(|m| m.len() > 0) { return Ok(out); }
     let part = dir.join(format!("{file_name}.part.webm"));
     let args = clip_args(c, &part);
-    let o = tokio::time::timeout(Duration::from_secs(180), Command::new("nice").args(["-n", "10", "ffmpeg"]).args(&args).kill_on_drop(true).output())
+    let o = tokio::time::timeout(Duration::from_secs(180), proc::background("ffmpeg").args(&args).kill_on_drop(true).output())
         .await
         .map_err(|_| anyhow!("ffmpeg: таймаут"))??;
     if !o.status.success() {

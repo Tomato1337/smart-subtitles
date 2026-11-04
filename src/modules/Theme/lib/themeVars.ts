@@ -50,5 +50,7 @@ export function themeVars(t: ThemeInput): Record<string, string> {
  out['--app-warning'] = hexFromArgb(warn.color)
  out['--app-warning-container'] = hexFromArgb(warn.colorContainer)
  out['--app-on-warning-container'] = hexFromArgb(warn.onColorContainer)
+ // Dialog list text: pure white / black, the tinted on-surface roles read worse over tonal rows.
+ out['--app-dialog-text'] = group === 'light' ? '#000000' : '#ffffff'
  return out
 }

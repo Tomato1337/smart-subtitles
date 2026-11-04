@@ -151,7 +151,8 @@ export type SubsList = { cues: Cue[]; annotations: CueAnnotation[] }
 export type SubCandidate =
  | { source: 'torrserver'; track: number; title: string; lang: string }
  | { source: 'sidecar'; url: string; label: string }
- | { source: 'embedded'; track: number; title: string; cues: number; bytes: number }
+ /** `cues`/`bytes`: what a streamed read would download; `null` for a file on disk, extracted whole. */
+ | { source: 'embedded'; track: number; title: string; cues: number | null; bytes: number | null }
  | { source: 'opensubtitles'; fileId: number; release: string; exact: boolean; hearingImpaired: boolean; downloads: number; cached: boolean }
 
 /** Everything the chooser shows: the installed candidate, every option, and the empty sources. */

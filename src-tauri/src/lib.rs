@@ -10,6 +10,7 @@ mod media;
 mod notify;
 mod patterns;
 mod poster;
+mod proc;
 mod server;
 mod session;
 mod setup;
@@ -24,8 +25,12 @@ use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
 use tauri::{Manager, RunEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 
+/// VAAPI exists only on Linux; elsewhere video that needs re-encoding goes through libx264.
 pub(crate) async fn vaapi_selftest(dev: &str) -> bool {
-    let out = tokio::process::Command::new("ffmpeg")
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    let out = proc::command("ffmpeg")
         .args(["-hide_banner", "-v", "error", "-init_hw_device", &format!("vaapi=va:{dev}"), "-f", "lavfi", "-i", "testsrc=s=320x240:d=1", "-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-f", "null", "-"])
         .output()
         .await;
@@ -114,6 +119,18 @@ pub fn run() {
 
             let h = app.handle().clone();
             app.deep_link().on_open_url(move |_| session::show_main_window(&h));
+            // deb/rpm register smartsubs:// through their .desktop file; an AppImage has no installer, and on
+            // Windows the per-user registry entry keeps pointing at the exe that runs now.
+            #[cfg(target_os = "linux")]
+            let register = app.env().appimage.is_some();
+            #[cfg(windows)]
+            let register = true;
+            #[cfg(any(windows, target_os = "linux"))]
+            if register {
+                if let Err(e) = app.deep_link().register_all() {
+                    logs::log("app", &format!("smartsubs:// не зарегистрирован: {e}"));
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

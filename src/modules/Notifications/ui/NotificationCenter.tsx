@@ -42,12 +42,16 @@ function Card({ n, action, onClose, closeIcon, closeLabel, exiting = false, floa
  const style = LEVEL[n.level]
  const enter = top ? 'toast-in-top' : 'toast-in'
  const leave = top ? 'toast-out-top' : 'toast-out'
- const surface = floating ? `bg-[var(--md-sys-color-surface-container-high)] shadow-lg ${exiting ? leave : enter}` : ''
+ const surface = floating
+  ? `bg-[var(--md-sys-color-surface-container-high)] shadow-lg ${exiting ? leave : enter}`
+  : 'bg-[var(--md-sys-color-surface-container-highest)]'
  return (
   <div
-   className={`relative flex items-start gap-2 py-2 pr-1 pl-3 ${surface}`}
-   style={{ borderLeft: `4px solid ${style.stripe}`, borderRadius: floating ? 'var(--md-sys-shape-corner-medium)' : undefined }}
+   className={`relative flex items-start gap-2 py-2 pr-1 pl-5 ${surface}`}
+   style={{ borderRadius: 'var(--md-sys-shape-corner-medium)' }}
   >
+   {/* An inset pill rather than a border-left: it stays inside the rounded corners of the card. */}
+   <span aria-hidden className="absolute top-2 bottom-2 left-1.5 w-1 rounded-full" style={{ background: style.stripe }} />
    <span className="shrink-0" style={{ color: style.stripe }}><Icon name={style.icon} /></span>
    <div className="min-w-0 grow">
     <div className="type-body-medium select-text whitespace-pre-wrap break-words">{n.message}</div>
@@ -145,7 +149,7 @@ function LiveToasts({ top }: { top: boolean }) {
  // Home: newest at the bottom (near the button). Player: newest at the top, right under the top bar.
  const deck = top ? [...shown].reverse() : shown
  return (
-  <div ref={boxRef} className={`fixed z-[200] flex w-[min(90vw,380px)] flex-col gap-2 ${top ? 'top-16 right-3' : 'bottom-20 left-4'}`}>
+  <div ref={boxRef} className={`fixed z-[200] flex w-[min(90vw,380px)] flex-col gap-2 ${top ? 'top-18 right-3' : 'bottom-20 left-4'}`}>
    {deck.map((l) => {
     const n = items.find((x) => x.id === l.id)
     if (!n) return null
@@ -224,7 +228,7 @@ export function NotificationCenter() {
      ref={panelRef}
      aria-label="Центр уведомлений"
      role="dialog"
-     className={`md-pop fixed z-[200] flex max-h-[60vh] w-[min(90vw,420px)] flex-col bg-[var(--md-sys-color-surface-container-high)] shadow-xl ${player ? 'top-16 right-3 origin-top-right' : 'bottom-20 left-4 origin-bottom-left'}`}
+     className={`md-pop fixed z-[200] flex max-h-[60vh] w-[min(90vw,420px)] flex-col bg-[var(--md-sys-color-surface-container-high)] shadow-xl ${player ? 'top-18 right-3 origin-top-right' : 'bottom-20 left-4 origin-bottom-left'}`}
      style={{ borderRadius: 'var(--md-sys-shape-corner-large)' }}
     >
      <div className="flex items-center gap-2 py-2 pr-2 pl-4">
@@ -239,7 +243,7 @@ export function NotificationCenter() {
       <IconButton icon="close" label="Закрыть" onClick={() => setOpen(false)} />
      </div>
      {/* overflow-x-hidden: a tooltip's abs-positioned box must not create a horizontal scrollbar. */}
-     <div className="overflow-x-hidden overflow-y-auto pb-2">
+     <div className="flex flex-col gap-1.5 overflow-x-hidden overflow-y-auto px-2 pb-2">
       {[...items].reverse().map((n) => <Row key={n.id} n={n} />)}
      </div>
     </div>

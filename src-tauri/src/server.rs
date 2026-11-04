@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::{process::Stdio, sync::{atomic::{AtomicBool, Ordering}, Arc}, time::Duration};
 use tauri::Emitter;
-use tokio::{io::{AsyncBufReadExt, AsyncReadExt, BufReader}, process::Command};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
 const PLUGIN_JS: &str = include_str!("../../lampa-plugin/smartsubs.js");
 
@@ -128,7 +128,7 @@ async fn stream(State(st): State<Arc<AppState>>, Path(sid): Path<String>, Query(
         let _ = old.start_kill();
         let _ = old.wait().await;
     }
-    let mut child = match Command::new("ffmpeg").args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).spawn() {
+    let mut child = match crate::proc::command("ffmpeg").args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).spawn() {
         Ok(c) => c,
         Err(e) => return err(StatusCode::BAD_GATEWAY, format!("ffmpeg: {e}")),
     };

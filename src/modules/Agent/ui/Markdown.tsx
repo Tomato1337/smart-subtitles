@@ -25,8 +25,8 @@ const urlTransform = (url: string) => (url.startsWith('cue:') ? url : defaultUrl
 /** Agent reply as Markdown (GFM) in the app's type scale; cue numbers jump to the cue. */
 export const Markdown = memo(function Markdown({ text, cueTime, cueText, onCue }: Props) {
   const components: Components = {
-    h1: ({ children }) => <h3 className="type-title-medium mb-2 mt-3 first:mt-0">{children}</h3>,
-    h2: ({ children }) => <h3 className="type-title-medium mb-2 mt-3 first:mt-0">{children}</h3>,
+    h1: ({ children }) => <h3 className="type-title-medium type-emph mb-2 mt-3 first:mt-0">{children}</h3>,
+    h2: ({ children }) => <h3 className="type-title-medium type-emph mb-2 mt-3 first:mt-0">{children}</h3>,
     h3: ({ children }) => <h4 className="type-title-small mb-1.5 mt-3 first:mt-0">{children}</h4>,
     h4: ({ children }) => <h4 className="type-title-small mb-1.5 mt-3 first:mt-0">{children}</h4>,
     p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
@@ -46,8 +46,8 @@ export const Markdown = memo(function Markdown({ text, cueTime, cueText, onCue }
       ),
     pre: ({ children }) => <pre className="mb-2 overflow-x-auto rounded-[var(--md-sys-shape-corner-small)] bg-[var(--md-sys-color-surface-container)] p-2 text-[0.92em] last:mb-0">{children}</pre>,
     table: ({ children }) => <div className="mb-2 overflow-x-auto last:mb-0"><table className="w-full border-collapse text-left">{children}</table></div>,
-    th: ({ children }) => <th className="border-b border-[var(--md-sys-color-outline-variant)] px-2 py-1 font-semibold">{children}</th>,
-    td: ({ children }) => <td className="border-b border-[var(--md-sys-color-outline-variant)] px-2 py-1 align-top">{children}</td>,
+    th: ({ children }) => <th className="border-b border-[var(--md-sys-color-outline-variant)] px-2 py-1 font-semibold text-[var(--md-sys-color-on-surface-variant)]">{children}</th>,
+    td: ({ children }) => <td className="border-t border-[var(--md-sys-color-outline-variant)] px-2 py-1 align-top">{children}</td>,
     a: ({ href, children }) => {
       const m = href?.match(/^cue:(\d+)$/)
       if (m) {
@@ -59,9 +59,9 @@ export const Markdown = memo(function Markdown({ text, cueTime, cueText, onCue }
             type="button"
             title={cueText(i)}
             onClick={() => onCue(i)}
-            className="type-label-medium mx-0.5 inline-flex items-center gap-1 rounded-full bg-[var(--md-sys-color-secondary-container)] px-1.5 align-baseline leading-5 text-[var(--md-sys-color-on-secondary-container)] hover:brightness-110"
+            className="morph type-label-medium mx-0.5 inline-flex h-7 items-center gap-0.5 rounded-[var(--md-sys-shape-corner-small)] bg-[var(--md-sys-color-secondary-container)] pl-1 pr-2 align-middle font-semibold tabular-nums text-[var(--md-sys-color-on-secondary-container)] active:rounded-[14px]"
           >
-            <Icon name="play_arrow" size={14} />{time}
+            <Icon name="play_arrow" size={18} fill />{time}
           </button>
         )
       }

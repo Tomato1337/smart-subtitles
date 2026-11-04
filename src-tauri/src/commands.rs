@@ -159,6 +159,7 @@ pub struct RecentMedia {
     pub annot: String,
     pub annot_done: u32,
     pub annot_total: u32,
+    pub poster_url: Option<String>,
 }
 
 /// Badge of a film's dialog analysis on the home screen.
@@ -174,7 +175,8 @@ fn annot_badge(cues: u32, consent: Option<&str>, done: u32, failed: u32) -> &'st
 
 #[tauri::command]
 pub async fn media_recent(st: St<'_>) -> Res<Vec<RecentMedia>> {
-    st.db(|c| {
+    let port = st.listen_port;
+    st.db(move |c| {
         let mut q = c.prepare(
             "SELECT id,title,original_title,season,episode,duration,last_position,source_url,kind,\
                     (SELECT count(*) FROM cue WHERE media_id=media.id),\
@@ -184,12 +186,14 @@ pub async fn media_recent(st: St<'_>) -> Res<Vec<RecentMedia>> {
              FROM media ORDER BY updated_at DESC LIMIT 20",
         )?;
         let rows = q.query_map([], |r| {
+            let media_id: String = r.get(0)?;
             let cues: u32 = r.get(9)?;
             let consent: Option<String> = r.get(10)?;
             let done: u32 = r.get(11)?;
             let failed: u32 = r.get(12)?;
             Ok(RecentMedia {
-                media_id: r.get(0)?, title: r.get(1)?, original_title: r.get(2)?, season: r.get(3)?, episode: r.get(4)?,
+                poster_url: crate::poster::poster_path(&media_id).exists().then(|| crate::poster::url(port, &media_id)),
+                media_id, title: r.get(1)?, original_title: r.get(2)?, season: r.get(3)?, episode: r.get(4)?,
                 duration: r.get(5)?, last_position: r.get(6)?, source_url: r.get(7)?, kind: r.get(8)?,
                 annot: annot_badge(cues, consent.as_deref(), done, failed).into(),
                 annot_done: done,

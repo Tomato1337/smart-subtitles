@@ -136,9 +136,10 @@ impl SubsStatus {
 pub enum SubCandidate {
     Torrserver { track: u32, title: String, lang: String },
     Sidecar { url: String, label: String },
-    /// A text track inside the video file itself; `bytes` is the download the estimate promises.
+    /// A text track inside the video file itself. `cues` and `bytes` are what a streamed read
+    /// would download; a file on disk is extracted whole and has no estimate (`None`).
     #[serde(rename_all = "camelCase")]
-    Embedded { track: u64, title: String, cues: u32, bytes: u64 },
+    Embedded { track: u64, title: String, cues: Option<u32>, bytes: Option<u64> },
     #[serde(rename_all = "camelCase")]
     Opensubtitles { file_id: i64, release: String, exact: bool, hearing_impaired: bool, downloads: i64, cached: bool },
 }
@@ -238,7 +239,7 @@ mod tests {
         let side = SubCandidate::Sidecar { url: "http://x/a.srt".into(), label: "a".into() };
         assert_eq!(serde_json::to_value(&side).unwrap(), serde_json::json!({ "source": "sidecar", "url": "http://x/a.srt", "label": "a" }));
         assert_eq!(side.key(), "sidecar:http://x/a.srt");
-        let emb = SubCandidate::Embedded { track: 3, title: "ENG · US".into(), cues: 916, bytes: 1_932_735_283 };
+        let emb = SubCandidate::Embedded { track: 3, title: "ENG · US".into(), cues: Some(916), bytes: Some(1_932_735_283) };
         assert_eq!(
             serde_json::to_value(&emb).unwrap(),
             serde_json::json!({ "source": "embedded", "track": 3, "title": "ENG · US", "cues": 916, "bytes": 1_932_735_283u64 })

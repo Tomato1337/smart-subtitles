@@ -72,19 +72,17 @@ export function ExplainPopover({ mediaId, onCard, onAsk }: Props) {
       ref={ref}
       onMouseEnter={popoverEnter}
       onMouseLeave={popoverLeave}
-      className="md-pop fixed z-[150] w-[340px] max-w-[calc(100vw-16px)] bg-[var(--md-sys-color-surface-container)] p-4 text-[var(--md-sys-color-on-surface)] shadow-lg"
-      style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999, borderRadius: 'var(--md-sys-shape-corner-large)', userSelect: 'text' }}
+      className="md-pop fixed z-[150] w-[360px] max-w-[calc(100vw-16px)] bg-[var(--md-sys-color-surface-container-high)] pb-3 pl-6 pr-3 pt-4 text-[var(--md-sys-color-on-surface)]"
+      style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999, borderRadius: 'var(--md-sys-shape-corner-extra-large)', boxShadow: '0 8px 28px rgb(0 0 0 / 0.5)', userSelect: 'text' }}
     >
       <div className="flex items-center gap-1">
-        <span className="type-title-medium min-w-0 flex-1 break-words font-bold">{e?.chunk || target.span}</span>
-        <button type="button" aria-label="Произношение" onClick={() => speak(target.span)} className="flex size-8 items-center justify-center rounded-full text-[var(--md-sys-color-on-surface-variant)] hover:text-[var(--md-sys-color-on-surface)]">
-          <Icon name="volume_up" size={20} />
-        </button>
-        <IconButton icon="close" label="Закрыть" onClick={close} className="!size-8" />
+        <span className="type-title-large type-emph min-w-0 flex-1 break-words">{e?.chunk || target.span}</span>
+        <IconButton icon="volume_up" label="Произношение" onClick={() => speak(target.span)} />
+        <IconButton icon="close" label="Закрыть" onClick={close} />
       </div>
       <div className="mt-1 min-h-6">
-        {translation && <span className="type-title-medium font-bold">{translation}</span>}
-        {e?.word_type && <span className="type-body-small ml-2 text-[var(--md-sys-color-on-surface-variant)]">{e.word_type}</span>}
+        {translation && <span className="type-body-large text-[1.125rem] leading-snug">{translation}</span>}
+        {e?.word_type && <div className="type-body-medium mt-1 text-[var(--md-sys-color-on-surface-variant)]">{e.word_type}</div>}
         {q.isLoading && <span className="type-body-small ml-2 text-[var(--md-sys-color-on-surface-variant)]">думаю…</span>}
         {q.isError && <div className="type-body-small text-[var(--md-sys-color-error)]">{errorText(q.error)}</div>}
       </div>
@@ -92,18 +90,18 @@ export function ExplainPopover({ mediaId, onCard, onAsk }: Props) {
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex gap-2">
           {entry ? (
-            <span className="type-label-large px-3 py-1.5 text-[var(--md-sys-color-on-surface-variant)]">Уже в колоде</span>
+            <span className="type-label-large inline-flex h-10 items-center rounded-full px-3 text-[var(--md-sys-color-on-surface-variant)]">Уже в колоде</span>
           ) : (
-            <button type="button" onClick={() => { close(); onCard(target.cueIdx, target.span) }} className="state-layer type-label-large relative flex items-center gap-1 whitespace-nowrap rounded-[var(--md-sys-shape-corner-medium)] px-3 py-1.5" style={{ background: 'var(--app-anki-label-container)', color: 'var(--app-anki-on-label-container)' }}>
-              <Icon name="add" size={18} /> В Anki
+            <button type="button" onClick={() => { close(); onCard(target.cueIdx, target.span) }} className="morph state-layer type-label-large relative inline-flex h-10 items-center gap-1 whitespace-nowrap rounded-[20px] pl-3 pr-4 font-semibold active:rounded-[var(--md-sys-shape-corner-medium)]" style={{ background: 'var(--app-anki-label-container)', color: 'var(--app-anki-on-label-container)' }}>
+              <Icon name="add" size={20} /> В Anki
             </button>
           )}
-          <button type="button" onClick={() => { close(); onAsk(target.cueIdx, target.span) }} className="state-layer state-on-surface type-label-large relative flex items-center gap-1 whitespace-nowrap rounded-[var(--md-sys-shape-corner-medium)] bg-[var(--md-sys-color-surface-container-highest)] px-3 py-1.5">
-            <Icon name="auto_awesome" size={18} /> Спросить
+          <button type="button" onClick={() => { close(); onAsk(target.cueIdx, target.span) }} className="morph state-layer type-label-large relative inline-flex h-10 items-center gap-1 whitespace-nowrap rounded-[20px] bg-[var(--md-sys-color-tertiary-container)] pl-3 pr-4 font-semibold text-[var(--md-sys-color-on-tertiary-container)] active:rounded-[var(--md-sys-shape-corner-medium)]">
+            <Icon name="auto_awesome" size={20} fill /> Спросить
           </button>
         </div>
         {e && (
-          <button type="button" onClick={() => setMore((v) => !v)} className="type-label-large flex items-center whitespace-nowrap text-[var(--md-sys-color-on-surface-variant)]">
+          <button type="button" onClick={() => setMore((v) => !v)} className="morph state-layer type-label-large relative inline-flex h-10 items-center gap-1 whitespace-nowrap rounded-[20px] pl-3 pr-4 font-semibold text-[var(--md-sys-color-primary)]">
             Все значения <Icon name={more ? 'expand_less' : 'expand_more'} size={20} />
           </button>
         )}

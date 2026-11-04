@@ -1,6 +1,6 @@
 //! The subtitle chooser: every English candidate the sources offer, and switching to one of them.
 
-use super::{acquire, embedded, mkv, opensubtitles as os, parse, sidecar, store, torrserver};
+use super::{acquire, embedded, local, mkv, opensubtitles as os, parse, sidecar, store, torrserver};
 use crate::{
     session::Session,
     state::AppState,
@@ -53,8 +53,21 @@ async fn torrserver_candidates(st: &Arc<AppState>, s: &Arc<Session>) -> (Vec<Can
     (items, Vec::new())
 }
 
-/// Every English text track of the video file; the sizes are what reading them would download.
+/// Every English text track of the video file; for a stream the sizes are what reading them would
+/// download, a file on disk is read whole without an estimate.
 async fn embedded_candidates(st: &Arc<AppState>, s: &Arc<Session>) -> (Vec<CandidateEntry>, Vec<SourceNote>) {
+    if let Some(file) = local::path(&s.src) {
+        return match local::tracks(&file).await {
+            Ok(tracks) => (
+                tracks
+                    .iter()
+                    .map(|t| entry(SubCandidate::Embedded { track: t.number, title: embedded::track_label(t), cues: None, bytes: None }))
+                    .collect(),
+                Vec::new(),
+            ),
+            Err(e) => (Vec::new(), vec![note("embedded", e)]),
+        };
+    }
     let idx = match embedded::index(st, s, None).await {
         Ok(i) => i,
         Err(e) => return (Vec::new(), vec![note("embedded", e)]),
@@ -73,8 +86,8 @@ async fn embedded_candidates(st: &Arc<AppState>, s: &Arc<Session>) -> (Vec<Candi
         items.push(entry(SubCandidate::Embedded {
             track: t.number,
             title: embedded::track_label(t),
-            cues: cues.len() as u32,
-            bytes,
+            cues: Some(cues.len() as u32),
+            bytes: Some(bytes),
         }));
     }
     if items.is_empty() {
@@ -160,8 +173,11 @@ pub async fn select(st: &Arc<AppState>, s: &Arc<Session>, c: SubCandidate) -> Re
             };
             ("opensubtitles", release.clone(), *exact, bytes)
         }
-        // Choosing a track here is the user's consent: no confirmation modal, no `install`.
+        // Choosing a track here is the user's consent: no confirmation modal.
         SubCandidate::Embedded { track, .. } => {
+            if let Some(file) = local::path(&s.src) {
+                return local::select(st, s, &file, *track).await;
+            }
             return match embedded::start(st, s, Some(*track), true).await {
                 Some(()) => Ok(()),
                 None => Err("встроенные субтитры недоступны".into()),

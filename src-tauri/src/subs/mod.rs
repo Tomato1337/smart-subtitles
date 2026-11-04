@@ -2,6 +2,7 @@ pub mod acquire;
 pub mod choose;
 pub mod clean;
 pub mod embedded;
+pub mod local;
 pub mod mkv;
 pub mod moviehash;
 pub mod opensubtitles;

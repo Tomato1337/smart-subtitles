@@ -13,14 +13,20 @@ body {
   user-select: none;
 }
 *:focus-visible { outline: 3px solid var(--md-sys-color-secondary); outline-offset: 2px; }
-
-.material-symbols-outlined {
-  font-family: 'Material Symbols Outlined';
-  font-size: 24px;
-  line-height: 1;
-  font-variation-settings: 'FILL' 1, 'wght' 400, 'opsz' 24;
-  user-select: none;
+/* Every control that does something shows the hand; Tailwind's preflight leaves buttons on the arrow.
+   In the base layer so a `cursor-*` utility on a specific element still wins. */
+@layer base {
+  button:not(:disabled), a[href], summary, select:not(:disabled),
+  [role='button'], [role='menuitem'], [role='menuitemradio'], [role='menuitemcheckbox'], [role='tab'], [role='switch'], [role='option'],
+  input:is([type='checkbox'], [type='radio'], [type='range'], [type='color']):not(:disabled) { cursor: pointer; }
+  :is(button, select, input):disabled, [aria-disabled='true'] { cursor: default; }
 }
+
+.material-symbols-rounded { font-family: 'Material Symbols Rounded'; font-size: 24px; line-height: 1; font-variation-settings: 'FILL' 0, 'wght' 400, 'opsz' 24; user-select: none; }
+.material-symbols-rounded.icon-fill { font-variation-settings: 'FILL' 1, 'wght' 400, 'opsz' 24; }
+
+/* Over-video colours are fixed: video is always dark, in either theme mode. */
+:root { --app-on-video: #f3f2f7; --app-video-scrim: rgb(0 0 0 / 0.55); }
 
 /* plain tooltip, 500 ms delay */
 [data-tip] { position: relative; }
@@ -133,3 +139,52 @@ body {
 .toast-in-top { animation: toast-in-top 260ms var(--md-sys-motion-emphasized-decelerate); }
 @keyframes toast-out-top { to { opacity: 0; transform: translateY(-44px) scale(0.12); } }
 .toast-out-top { animation: toast-out-top 240ms var(--md-sys-motion-emphasized-accelerate) forwards; transform-origin: top right; }
+
+/*
+ * Expressive press + radius morph. The global reduced-motion rule above turns these off.
+ * - Morph on :active, never :hover: a hover radius change moves the hit-tested corner under a
+ *   resting pointer, which drops :hover, which restores the corner, and the button flickers.
+ * - Radii are finite (half the height for a pill): rounded-full is calc(infinity * 1px), which
+ *   cannot be interpolated, so the shape would jump instead of morphing.
+ * - NEVER put .morph (or any background/radius/transform transition) on a [data-tip] element.
+ *   WebKitGTK restarts an element's running transitions from its ::after's values when that pseudo
+ *   is shown, so on hover the button jumped to the tooltip's colour and 4px corners and animated
+ *   back, again on every re-render. Tooltip hosts put the animated parts on child spans instead.
+ */
+.morph { transition: border-radius 420ms var(--md-sys-motion-spring-default-spatial), background-color 220ms var(--md-sys-motion-emphasized-decelerate), transform 220ms var(--md-sys-motion-spring-fast-spatial); }
+.morph:active { transform: scale(0.94); }
+
+/* IconButton parts (see IconButton.tsx). The host has a static radius for the focus ring only. */
+.btn { border-radius: var(--btn-radius); }
+.btn-surface, .btn-state {
+  position: absolute; inset: 0; pointer-events: none; border-radius: var(--btn-radius);
+  transition: border-radius 420ms var(--md-sys-motion-spring-default-spatial), transform 220ms var(--md-sys-motion-spring-fast-spatial), opacity 150ms linear, background-color 220ms var(--md-sys-motion-emphasized-decelerate);
+}
+.btn-surface { background: var(--btn-bg); }
+.btn-state { background: var(--state-color); opacity: 0; }
+.btn-glyph { transition: transform 220ms var(--md-sys-motion-spring-fast-spatial); }
+.btn:hover > .btn-state { opacity: 0.08; }
+.btn:active > .btn-state { opacity: 0.1; }
+.btn:active > .btn-surface, .btn:active > .btn-state { border-radius: var(--btn-press-radius, var(--btn-radius)); transform: scale(0.94); }
+.btn:active > .btn-glyph { transform: scale(0.94); }
+
+/* Wavy progress line. Every colour is a hook so a container can override it. */
+.wavy { display: block; }
+.wavy svg { width: 100%; height: 100%; overflow: visible; display: block; }
+.wavy .w-wave { fill: none; stroke: var(--wave-active, var(--md-sys-color-primary)); stroke-linecap: round; stroke-linejoin: round; }
+.wavy .w-track { stroke: var(--wave-track, var(--md-sys-color-secondary-container)); stroke-linecap: round; }
+.wavy .w-buffer { stroke: var(--wave-buffer, var(--md-sys-color-outline-variant)); stroke-linecap: round; }
+.wavy .w-stop, .wavy .w-thumb { fill: var(--wave-active, var(--md-sys-color-primary)); }
+/* The travel is a compositor-friendly transform: one wavelength per period, seamless loop. */
+@keyframes wavy-travel { from { transform: translateX(0); } to { transform: translateX(var(--wave-len, 0px)); } }
+.wavy-run { animation: wavy-travel var(--wave-period, 1.111s) linear infinite; }
+.wavy-paused { animation-play-state: paused; }
+
+/* Volume slider: a 4px tonal track with a 4x20 bar thumb. */
+.m3-range { appearance: none; -webkit-appearance: none; width: 88px; height: 24px; background: transparent; accent-color: var(--md-sys-color-primary); }
+.m3-range::-webkit-slider-runnable-track { height: 4px; border-radius: 9999px; background: linear-gradient(to right, var(--md-sys-color-primary) var(--fill), var(--md-sys-color-secondary-container) var(--fill)); }
+.m3-range::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 4px; height: 20px; margin-top: -8px; border-radius: 9999px; background: var(--md-sys-color-primary); }
+@container dock (max-width: 760px) { .m3-range { display: none; } }
+
+.wavy-spinner { animation: md-spin 1.6s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .wavy-spinner { animation: md-spin 6s linear infinite !important; } }

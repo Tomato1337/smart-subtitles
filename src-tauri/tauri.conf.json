@@ -44,6 +44,16 @@
       "rpm": {
         "desktopTemplate": "linux/smart-subtitle.desktop.hbs",
         "depends": ["/usr/bin/ffmpeg", "/usr/bin/ffprobe"]
+      },
+      "deb": {
+        "desktopTemplate": "linux/smart-subtitle.desktop.hbs",
+        "depends": ["ffmpeg"]
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["Russian", "English"]
       }
     }
   },

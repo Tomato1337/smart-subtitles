@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { usePlaybackStore } from '@/modules/Player'
 import { subtitleVisibility } from '../lib/reveal'
 import { useSubsStore } from '../store/subsStore'
@@ -21,9 +21,22 @@ type Props = {
 const EN_SHADOW = '0 2px 6px var(--md-sys-color-scrim), 0 0 2px var(--md-sys-color-scrim)'
 const RU_SHADOW = '0 1px 4px var(--md-sys-color-scrim)'
 
+/** Bottom of the default spot: above the control bar while it shows, near the edge otherwise. */
+const BASE_LIFTED = 172
+const BASE = 48
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+type Pos = { x: number; y: number }
+/** Horizontal padding of the overlay wrapper (`px-16`). */
+const PAD_X = 64
+
 export function SubtitleOverlay({ onReplay, onCard, onExplain, above, renderEn, lifted }: Props) {
   const focused = useFocusedCue()
-  const { showEn, showRu, hideMode, reveal, annotations, setReveal } = useSubsStore()
+  const { showEn, showRu, hideMode, reveal, annotations, setReveal, position, set } = useSubsStore()
+  /** Position while the handle is held; written to the (persisted) store once on release. */
+  const [dragPos, setDragPos] = useState<Pos | null>(null)
+  const drag = useRef<{ px: number; py: number; from: Pos; w: number; h: number; half: number } | null>(null)
+  const box = useRef<HTMLDivElement>(null)
   const absTime = usePlaybackStore((s) => s.absTime)
   const playing = usePlaybackStore((s) => s.playing)
   /** Phrase that just left the screen: fades out under the incoming one. */
@@ -57,12 +70,12 @@ export function SubtitleOverlay({ onReplay, onCard, onExplain, above, renderEn, 
       <>
         {withBadges && above?.(c)}
         {showEn && (
-          <div className="type-display-small whitespace-pre-line text-[var(--md-sys-color-on-surface)]" style={{ textShadow: EN_SHADOW }}>
+          <div className="type-display-small font-semibold whitespace-pre-line text-[var(--app-on-video)]" style={{ textShadow: EN_SHADOW }}>
             {renderEn(c, ann, karaoke)}
           </div>
         )}
         {showRu && ann?.ru && (
-          <div className="type-title-large mt-1 whitespace-pre-line text-[var(--md-sys-color-on-surface-variant)]" style={{ textShadow: RU_SHADOW }}>
+          <div className="type-title-large mt-1 whitespace-pre-line text-[var(--app-on-video)]" style={{ textShadow: RU_SHADOW }}>
             {ann.ru}
           </div>
         )}
@@ -72,17 +85,60 @@ export function SubtitleOverlay({ onReplay, onCard, onExplain, above, renderEn, 
 
   if (!cue && !leaving) return null
 
+  const base = lifted ? BASE_LIFTED : BASE
+  const pos = dragPos ?? position
+
+  const startDrag = (e: ReactPointerEvent<HTMLElement>) => {
+    const wrap = box.current
+    const line = wrap?.firstElementChild
+    const area = wrap?.offsetParent?.getBoundingClientRect()
+    if (!wrap || !line || !area) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    // `left` percentages resolve against the wrapper's content box (inside its px-16 padding).
+    const w = wrap.clientWidth - 2 * PAD_X
+    const half = Math.min(0.5, line.getBoundingClientRect().width / 2 / w)
+    drag.current = { px: e.clientX, py: e.clientY, from: pos ?? { x: 0.5, y: base / area.height }, w, h: area.height, half }
+  }
+  const moveDrag = (e: ReactPointerEvent<HTMLElement>) => {
+    const d = drag.current
+    if (!d) return
+    // The pointer moves the line by the same distance; the bounds keep the whole line on screen.
+    setDragPos({ x: clamp(d.from.x + (e.clientX - d.px) / d.w, d.half, 1 - d.half), y: clamp(d.from.y - (e.clientY - d.py) / d.h, 0, 0.85) })
+  }
+  const endDrag = () => {
+    if (!drag.current) return
+    drag.current = null
+    if (dragPos) set({ position: dragPos })
+    setDragPos(null)
+  }
+
   return (
     <div
-      className="group pointer-events-none absolute inset-x-0 flex justify-center px-16 transition-[bottom] duration-200"
-      style={{ bottom: lifted ? 150 : 48 }}
+      ref={box}
+      className={`group pointer-events-none absolute inset-x-0 flex justify-center px-16 ${dragPos ? '' : 'transition-[bottom] duration-200'}`}
+      // A moved line still steps up over the control bar when it was left below it.
+      style={{ bottom: pos ? `max(${pos.y * 100}%, ${base}px)` : base }}
     >
-      <div className="relative max-w-[min(90%,1100px)] text-center">
+      <div
+        className="relative max-w-[min(90%,1100px)] text-center"
+        style={{ '--chunk-underline': '3px', left: pos ? `${(pos.x - 0.5) * 100}%` : undefined } as CSSProperties}
+      >
         {cue && (
-          <div data-tour="cue-actions" className={`mb-1 flex justify-center gap-1 transition-opacity duration-150 pointer-events-auto ${playing ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}>
-            <IconButton icon="replay" label="Повторить" onClick={() => onReplay(cue)} />
-            <IconButton icon="add_card" label="Фразу в Anki" onClick={() => onCard(cue)} />
-            <IconButton icon="auto_awesome" label="Объяснить фразу агентом" onClick={() => onExplain(cue)} />
+          <div data-tour="cue-actions" className={`mb-1 flex justify-center gap-1 transition-opacity duration-150 pointer-events-auto ${playing && !dragPos ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}>
+            <IconButton icon="replay" label="Повторить" variant="scrim" onClick={() => onReplay(cue)} />
+            <IconButton icon="add_card" label="Фразу в Anki" variant="scrim" onClick={() => onCard(cue)} />
+            <IconButton icon="auto_awesome" label="Объяснить фразу агентом" variant="scrim" fill onClick={() => onExplain(cue)} />
+            <IconButton
+              icon="open_with"
+              label="Перетащить субтитры (двойной клик — на место)"
+              variant="scrim"
+              className="cursor-move touch-none"
+              onPointerDown={startDrag}
+              onPointerMove={moveDrag}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+              onDoubleClick={() => set({ position: null })}
+            />
           </div>
         )}
         {cue && <div key={cue.idx} data-tour="subtitle" className="sub-in pointer-events-auto">{text(cue, vis.karaoke, true)}</div>}
