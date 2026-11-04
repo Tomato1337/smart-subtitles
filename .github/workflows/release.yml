@@ -21,17 +21,30 @@ jobs:
     outputs:
       id: ${{ steps.draft.outputs.id }}
     steps:
+      - uses: actions/checkout@v4
       - id: draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
+          # Packages are named after the app version: a tag that disagrees would ship 0.1.0 files as v0.2.0.
+          version=$(jq -r .version src-tauri/tauri.conf.json)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Тег $TAG не совпадает с версией $version в src-tauri/tauri.conf.json"
+            exit 1
+          fi
+          # A re-run reuses the release of this tag; drafts are only visible in the list.
           id=$(gh api "repos/$GH_REPO/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)
           if [ -z "$id" ]; then
-            gh release create "$TAG" --draft --verify-tag --title "Smart Subtitles $TAG" --notes \
-              'Fedora — `.rpm`, Debian/Ubuntu — `.deb`, любой Linux — `.AppImage`, Arch — `.pkg.tar.zst`, macOS (Apple Silicon и Intel) — `.dmg`, Windows — `-setup.exe`. Установка описана в README.'
-            id=$(gh api "repos/$GH_REPO/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)
+            # The id comes from the create response itself: the release list lags behind a fresh draft.
+            id=$(gh api --method POST "repos/$GH_REPO/releases" -f tag_name="$TAG" -f name="Smart Subtitles $TAG" -F draft=true \
+              -f body='Fedora — `.rpm`, Debian/Ubuntu — `.deb`, любой Linux — `.AppImage`, Arch — `.pkg.tar.zst`, macOS (Apple Silicon и Intel) — `.dmg`, Windows — `-setup.exe`. Установка описана в README.' \
+              --jq .id)
+          fi
+          if [ -z "$id" ]; then
+            echo "::error::Не удалось создать релиз $TAG"
+            exit 1
           fi
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
