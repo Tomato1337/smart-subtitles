@@ -2,8 +2,8 @@ import { create } from 'zustand'
 
 /**
  * The word under the pointer in the overlay or the dialog list, shared so the list can light up
- * every occurrence of it. Kept out of `subsStore`: the sidebar reads that store whole and would
- * re-render on every hover.
+ * every occurrence of it. Kept out of `subsStore`: every reader of that store would re-render on
+ * every hover.
  */
 export const useHoverWord = create<{ word: string | null; setWord: (w: string | null) => void }>((set) => ({
  word: null,

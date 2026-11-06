@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { usePlaybackStore } from '@/modules/Player'
 import { subtitleVisibility } from '../lib/reveal'
 import { useSubsStore } from '../store/subsStore'
-import { useFocusedCue } from '../useActiveCue'
+import { useFocusedCue, useSpokenFraction } from '../useActiveCue'
 import { IconButton } from '@/common/ui/IconButton'
 import type { Cue, CueAnnotation } from '@/common/types/ipc'
 
@@ -10,8 +11,8 @@ type Props = {
   onReplay: (cue: Cue) => void
   onCard: (cue: Cue) => void
   onExplain: (cue: Cue) => void
-  /** Rendered above the text line (grammar badges). */
-  above?: (cue: Cue) => ReactNode
+  /** Rendered above the text line (grammar badges). Keep it stable (useCallback), like `renderEn`. */
+  above?: (cue: Cue, ann: CueAnnotation | undefined) => ReactNode
   /** Renders the English line (clickable tokens); `karaoke` is the spoken part of the cue (lit words). */
   renderEn: (cue: Cue, ann: CueAnnotation | undefined, karaoke: number | undefined) => ReactNode
   /** Lift above the control bar while it is visible. */
@@ -30,26 +31,68 @@ type Pos = { x: number; y: number }
 /** Horizontal padding of the overlay wrapper (`px-16`). */
 const PAD_X = 64
 
-export function SubtitleOverlay({ onReplay, onCard, onExplain, above, renderEn, lifted }: Props) {
+type LineProps = {
+  cue: Cue
+  ann: CueAnnotation | undefined
+  /** The incoming line follows playback (karaoke); the leaving one stays fully lit. */
+  live: boolean
+  showEn: boolean
+  showRu: boolean
+  above: Props['above']
+  renderEn: Props['renderEn']
+}
+
+/**
+ * One subtitle line. Its own component: the karaoke clock re-renders only this line, once per
+ * newly lit word, instead of the whole overlay at every 10 Hz tick of the playback time.
+ */
+const Line = memo(function Line({ cue, ann, live, showEn, showRu, above, renderEn }: LineProps) {
+  const spoken = useSpokenFraction(live ? cue : null)
+  return (
+    <>
+      {live && above?.(cue, ann)}
+      {showEn && (
+        <div className="type-display-small font-semibold whitespace-pre-line text-[var(--app-on-video)]" style={{ textShadow: EN_SHADOW }}>
+          {renderEn(cue, ann, live ? spoken : 1)}
+        </div>
+      )}
+      {showRu && ann?.ru && (
+        <div className="type-title-large mt-1 whitespace-pre-line text-[var(--app-on-video)]" style={{ textShadow: RU_SHADOW }}>
+          {ann.ru}
+        </div>
+      )}
+    </>
+  )
+})
+
+/** Memoized: re-renders come from its own subscriptions (focused phrase, settings), not from the player screen. */
+export const SubtitleOverlay = memo(function SubtitleOverlay({ onReplay, onCard, onExplain, above, renderEn, lifted }: Props) {
   const focused = useFocusedCue()
-  const { showEn, showRu, hideMode, reveal, annotations, setReveal, position, set } = useSubsStore()
+  // Only what the overlay shows: the whole store also changes on analysis progress, status, embedded load…
+  const { showEn, showRu, hideMode, reveal, annotations, setReveal, position, set, offset } = useSubsStore(useShallow((s) => ({
+    showEn: s.showEn, showRu: s.showRu, hideMode: s.hideMode, reveal: s.reveal, annotations: s.annotations,
+    setReveal: s.setReveal, position: s.position, set: s.set, offset: s.offset,
+  })))
   /** Position while the handle is held; written to the (persisted) store once on release. */
   const [dragPos, setDragPos] = useState<Pos | null>(null)
   const drag = useRef<{ px: number; py: number; from: Pos; w: number; h: number; half: number } | null>(null)
   const box = useRef<HTMLDivElement>(null)
-  const absTime = usePlaybackStore((s) => s.absTime)
   const playing = usePlaybackStore((s) => s.playing)
+  // A boolean, so the clock re-renders the overlay only when the line appears or hides (hidden mode).
+  const visible = usePlaybackStore((s) => focused !== null && subtitleVisibility(hideMode, reveal, s.absTime, focused, offset).visible)
   /** Phrase that just left the screen: fades out under the incoming one. */
   const [leaving, setLeaving] = useState<Cue | null>(null)
   const shown = useRef<Cue | null>(null)
 
+  // The reveal window closes by the clock without re-rendering the overlay at every tick.
   useEffect(() => {
-    if (reveal && absTime >= reveal.until) setReveal(null)
-  }, [reveal, absTime, setReveal])
+    if (!reveal) return
+    const check = (t: number) => { if (t >= reveal.until) setReveal(null) }
+    check(usePlaybackStore.getState().absTime)
+    return usePlaybackStore.subscribe((s) => check(s.absTime))
+  }, [reveal, setReveal])
 
-  const offset = useSubsStore.getState().offset
-  const vis = focused ? subtitleVisibility(hideMode, reveal, absTime, focused, offset) : { visible: false }
-  const cue = vis.visible ? focused : null
+  const cue = visible ? focused : null
 
   useLayoutEffect(() => {
     const prev = shown.current
@@ -64,24 +107,9 @@ export function SubtitleOverlay({ onReplay, onCard, onExplain, above, renderEn, 
     return () => clearTimeout(t)
   }, [leaving])
 
-  const text = (c: Cue, karaoke: number | undefined, withBadges: boolean) => {
-    const ann = annotations.get(c.idx)
-    return (
-      <>
-        {withBadges && above?.(c)}
-        {showEn && (
-          <div className="type-display-small font-semibold whitespace-pre-line text-[var(--app-on-video)]" style={{ textShadow: EN_SHADOW }}>
-            {renderEn(c, ann, karaoke)}
-          </div>
-        )}
-        {showRu && ann?.ru && (
-          <div className="type-title-large mt-1 whitespace-pre-line text-[var(--app-on-video)]" style={{ textShadow: RU_SHADOW }}>
-            {ann.ru}
-          </div>
-        )}
-      </>
-    )
-  }
+  const line = (c: Cue, live: boolean) => (
+    <Line cue={c} ann={annotations.get(c.idx)} live={live} showEn={showEn} showRu={showRu} above={above} renderEn={renderEn} />
+  )
 
   if (!cue && !leaving) return null
 
@@ -141,7 +169,7 @@ export function SubtitleOverlay({ onReplay, onCard, onExplain, above, renderEn, 
             />
           </div>
         )}
-        {cue && <div key={cue.idx} data-tour="subtitle" className="sub-in pointer-events-auto">{text(cue, vis.karaoke, true)}</div>}
+        {cue && <div key={cue.idx} data-tour="subtitle" className="sub-in pointer-events-auto">{line(cue, true)}</div>}
         {leaving && leaving.idx !== cue?.idx && (
           <div
             key={`out-${leaving.idx}`}
@@ -149,10 +177,10 @@ export function SubtitleOverlay({ onReplay, onCard, onExplain, above, renderEn, 
             className="sub-out absolute inset-x-0 bottom-0"
             onAnimationEnd={(e) => { if (e.target === e.currentTarget) setLeaving(null) }}
           >
-            {text(leaving, 1, false)}
+            {line(leaving, false)}
           </div>
         )}
       </div>
     </div>
   )
-}
+})

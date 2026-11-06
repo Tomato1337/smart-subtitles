@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { SessionState } from '@/common/types/ipc'
@@ -42,7 +43,8 @@ type Props = {
  */
 export function AnnotGate({ session, open, resumeOnClose, onOpenChange }: Props) {
  const p = usePlayer()
- const subs = useSubsStore()
+ // What the gate reads (SubsSnapshot + analysis state); not the whole store, which also changes on status, reveal…
+ const subs = useSubsStore(useShallow((s) => ({ cues: s.cues, offset: s.offset, annotations: s.annotations, failedBatches: s.failedBatches, annot: s.annot })))
  const playing = usePlaybackStore((s) => s.playing)
  const annot = subs.annot
 

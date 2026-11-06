@@ -2,7 +2,8 @@ import { useMemo } from 'react'
 import { usePlaybackStore } from '@/modules/Player'
 import type { Cue } from '@/common/types/ipc'
 import { findCueIndex, focusedCueIndex } from './lib/cues'
-import { spokenFraction } from './lib/reveal'
+import { litFraction, spokenFraction } from './lib/reveal'
+import { tokenize } from './lib/tokens'
 import { useSubsStore } from './store/subsStore'
 
 /** Cue being spoken right now (or -1), re-rendering only when the index itself changes. */
@@ -25,8 +26,12 @@ export function useFocusedCue() {
   return useMemo(() => (idx >= 0 ? cues[idx] : null), [idx, cues])
 }
 
-/** Spoken part of `cue` (0..1, step 0.01) for the karaoke highlight; undefined and no re-renders when `cue` is null. */
+/**
+ * Spoken part of `cue` (0..1) for the karaoke highlight, in steps of its words (see `litFraction`):
+ * the caller re-renders only when another word lights up. Undefined and no re-renders when `cue` is null.
+ */
 export function useSpokenFraction(cue: Cue | null): number | undefined {
   const offset = useSubsStore((s) => s.offset)
-  return usePlaybackStore((s) => (cue ? Math.round(spokenFraction(s.absTime, cue, offset) * 100) / 100 : undefined))
+  const starts = useMemo(() => (cue ? tokenize(cue.text).map((t) => t.start / cue.text.length) : null), [cue])
+  return usePlaybackStore((s) => (cue && starts ? litFraction(starts, spokenFraction(s.absTime, cue, offset)) : undefined))
 }

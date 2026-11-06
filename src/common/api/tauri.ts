@@ -54,6 +54,8 @@ export const api = {
  mediaRecent: () => call<RecentMedia[]>('media_recent'),
  /** Forgets the analysis consent of a film, so reopening it asks again. */
  mediaResetAnnot: (mediaId: string) => call<void>('media_reset_annot', { mediaId }),
+ /** Hides a film from «Недавних» or brings it back; nothing else about the film is deleted. */
+ mediaSetHidden: (mediaId: string, hidden: boolean) => call<void>('media_set_hidden', { mediaId, hidden }),
  mediaOpenStream: (sessionId: string, at: number, audioIndex: number) =>
   call<OpenStream>('media_open_stream', { sessionId, at, audioIndex }),
  /** TorrServer peers, speed and buffer health; null for non-torrent sources and while it is silent. */

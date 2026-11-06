@@ -34,6 +34,10 @@ CREATE INDEX llm_usage_media_task ON llm_usage(media_id, task);";
 /// and the user's consent to keep downloading it.
 const MIGRATION_7: &str = "CREATE TABLE embedded_load(media_id TEXT PRIMARY KEY, track INTEGER NOT NULL, label TEXT NOT NULL, next_cue INTEGER NOT NULL, total_cues INTEGER NOT NULL);";
 
+/// v8: the film was removed from «Недавних» by the user. Only the list entry is hidden: the analysis,
+/// the chat and the position stay, and opening the film again brings it back (`session::open`).
+const MIGRATION_8: &str = "ALTER TABLE media ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;";
+
 pub fn open(path: &std::path::Path) -> anyhow::Result<Connection> {
     let conn = Connection::open(path)?;
     init(&conn)?;
@@ -86,6 +90,12 @@ pub fn init(conn: &Connection) -> anyhow::Result<()> {
         tx.pragma_update(None, "user_version", 7)?;
         tx.commit()?;
     }
+    if v < 8 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_8)?;
+        tx.pragma_update(None, "user_version", 8)?;
+        tx.commit()?;
+    }
     conn.execute(
         "UPDATE proposal SET status='failed', error='Прервано перезапуском' WHERE status='adding'",
         [],
@@ -118,12 +128,24 @@ mod tests {
         c.pragma_update(None, "user_version", 1).unwrap();
         init(&c).unwrap();
         let v: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-        assert_eq!(v, 7);
+        assert_eq!(v, 8);
         c.execute("INSERT INTO sub_sync(media_id,source_path,status,offset,support,detail,created_at) VALUES('m','/s.srt','done',0.5,7,NULL,0)", []).unwrap();
         init(&c).unwrap();
         let v: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-        assert_eq!(v, 7);
+        assert_eq!(v, 8);
         let n: i64 = c.query_row("SELECT count(*) FROM sub_sync", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn media_is_visible_until_hidden() {
+        let c = Connection::open_in_memory().unwrap();
+        init(&c).unwrap();
+        c.execute("INSERT INTO media(id,kind,source_url,title,updated_at) VALUES('m','lampa','u','t',0)", []).unwrap();
+        let hidden: bool = c.query_row("SELECT hidden FROM media WHERE id='m'", [], |r| r.get(0)).unwrap();
+        assert!(!hidden);
+        c.execute("UPDATE media SET hidden=?1 WHERE id='m'", [true]).unwrap();
+        let n: i64 = c.query_row("SELECT count(*) FROM media WHERE hidden=0", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
     }
 }

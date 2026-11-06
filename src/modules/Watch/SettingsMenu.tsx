@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { SessionState } from '@/common/types/ipc'
@@ -19,8 +20,10 @@ export function SettingsMenu({ session, onChanged, onTour, onGuide, onHotkeys, o
   const p = usePlayer()
   const [open, setOpen] = useState(false)
   const [audio, setAudio] = useState(session.audioIndex)
-  const subs = useSubsStore()
-  const anki = useAnkiStore()
+  const subs = useSubsStore(useShallow((s) => ({
+    hideMode: s.hideMode, patterns: s.patterns, consent: s.annot?.consent, hasCues: s.cues.length > 0, offset: s.offset, set: s.set,
+  })))
+  const anki = useAnkiStore(useShallow((s) => ({ labelMode: s.labelMode, setLabelMode: s.setLabelMode })))
   const hotkey = useHotkeysStore((s) => s.bindings)
   // Tutor is an add-on: its menu item only exists while the integration is on.
   const config = useQuery({ queryKey: ['config'], queryFn: api.configGet })
@@ -42,7 +45,7 @@ export function SettingsMenu({ session, onChanged, onTour, onGuide, onHotkeys, o
           onClick={() => subs.set(subs.hideMode ? { hideMode: false } : { hideMode: true, sidebarOpen: false })}
         />
         <MenuItem label="Конструкции" on={subs.patterns} onClick={() => subs.set({ patterns: !subs.patterns })} />
-        {session.llmEnabled && subs.annot?.consent !== 'on' && subs.cues.length > 0 && (
+        {session.llmEnabled && subs.consent !== 'on' && subs.hasCues && (
           <MenuItem label="Разобрать диалоги…" icon="translate" onClick={() => { setOpen(false); onAnnotate() }} />
         )}
         <MenuItem label="Обзор возможностей" icon="tour" onClick={() => { setOpen(false); onTour() }} />

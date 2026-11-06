@@ -119,6 +119,13 @@ body {
 /* Base style is the end state: if the fill is dropped (WebKitGTK) or unmount lags, the old line must not flash back. */
 .sub-out { opacity: 0; transform: translateY(-14px); animation: sub-out 220ms var(--md-sys-motion-emphasized-accelerate) forwards; }
 @media (prefers-reduced-motion: reduce) { .sub-out { display: none; } }
+/* Actions of the focused dialog row. Only opacity/transform: the old height expand re-laid out the
+   whole list every frame at each phrase change, and on WebKitGTK the film stalled with it. */
+@keyframes row-actions-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.row-actions-in { animation: row-actions-in 260ms var(--md-sys-motion-emphasized-decelerate); }
+/* Wave travel is a CSS transform on an SVG path, which WebKit repaints on the main thread every frame:
+   stop it while its dock is hidden. */
+.wavy-idle .wavy-run { animation-play-state: paused; }
 /* Notification popup: flies in from the left edge… */
 @keyframes toast-in { from { opacity: 0; transform: translateX(-120%); } to { opacity: 1; transform: none; } }
 .toast-in { animation: toast-in 260ms var(--md-sys-motion-emphasized-decelerate); }

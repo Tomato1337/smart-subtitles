@@ -43,7 +43,9 @@ export function CueText({ cue, chunks, karaoke, onPick, onHover, decorate, share
  const [hoverChunk, setHoverChunk] = useState<Chunk | null>(null)
  const dragFrom = useRef<number | null>(null)
  const total = cue.text.length
- const shared = useHoverWord((s) => (showShared ? s.word : null))
+ // Only texts that contain the hovered word re-render (every dialog row used to, on every hover).
+ const words = useMemo(() => new Set(tokens.filter((t) => t.isWord).map((t) => wordKey(t.text))), [tokens])
+ const shared = useHoverWord((s) => (showShared && s.word !== null && words.has(s.word) ? s.word : null))
  const setShared = useHoverWord((s) => s.setWord)
  // The overlay unmounts a cue under a resting pointer without mouseleave: drop the word it published.
  const published = useRef(false)

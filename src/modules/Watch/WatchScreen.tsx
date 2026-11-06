@@ -1,9 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { useShallow } from 'zustand/react/shallow'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
-import type { Cue, SessionState } from '@/common/types/ipc'
+import type { Cue, CueAnnotation, SessionState } from '@/common/types/ipc'
 import { formatTime } from '@/common/utilities/time'
 import { comboOf } from '@/common/utilities/keys'
 import { IconButton } from '@/common/ui/IconButton'
@@ -48,11 +49,25 @@ function AgentHere() {
  return <>Сейчас {formatTime(sec)}{line}</>
 }
 
+/**
+ * Its own component: the active cue index changes at every cue start and end, and in `WatchLayout`
+ * each change re-rendered the whole player screen, a main-thread stall that froze the film for a moment.
+ */
+function PatternExposure({ mediaId }: { mediaId: string }) {
+ usePatternExposure(mediaId, useActiveCueIndex())
+ return null
+}
+
 function WatchLayout({ session, onBack }: { session: SessionState; onBack: () => void }) {
  const p = usePlayer()
  const playing = usePlaybackStore((s) => s.playing)
  const visible = useIdleVisible(!playing)
- const subs = useSubsStore()
+ // Selected fields only: a whole-store subscription re-rendered the entire player screen (video, overlay,
+ // dialog list, dock) on every analysis batch, status or progress update of the subtitles.
+ const subs = useSubsStore(useShallow((s) => ({
+  sidebarOpen: s.sidebarOpen, hideMode: s.hideMode, showEn: s.showEn, showRu: s.showRu, patterns: s.patterns,
+  set: s.set, embedded: s.embedded, annot: s.annot, hasCues: s.cues.length > 0,
+ })))
  const slow = useRef<{ win: SlowWindow; timer: ReturnType<typeof setInterval> } | null>(null)
  const replayEnd = useRef<{ win: ReplayWindow; timer: ReturnType<typeof setInterval> } | null>(null)
  useSubtitlesData(session.mediaId, session.subOffset)
@@ -76,9 +91,9 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
   return () => { document.body.style.background = prev }
  }, [])
  const hotkey = useHotkeysStore((s) => s.bindings)
- const explain = useExplainStore()
+ // The actions only: the popover target changes on every hover, which must not re-render this screen.
+ const explain = useExplainStore(useShallow((s) => ({ pinOpen: s.pinOpen, hoverOpen: s.hoverOpen, hoverLeave: s.hoverLeave })))
  const openDraft = useCardsStore((s) => s.openDraft)
- usePatternExposure(session.mediaId, useActiveCueIndex())
  const [guide, setGuide] = useState(false)
  const [hotkeysOpen, setHotkeysOpen] = useState(false)
  const [subsOpen, setSubsOpen] = useState(false)
@@ -99,7 +114,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
  // when the tour appears would leave it running underneath.
  useEffect(() => { if (tourShown && playing) p.pause() }, [tourShown, playing, p])
  const decided = useRef(false)
- // The gate effect re-runs on every store change, so its answer must outlive the effect itself;
+ // The gate effect re-runs on every analysis update, so its answer must outlive the effect itself;
  // only unmounting may drop it (StrictMode runs the body and the cleanup twice, hence the reset).
  const mounted = useRef(true)
  useEffect(() => {
@@ -113,11 +128,13 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
   if (seenConsent.current !== null && consent === null) decided.current = false
   seenConsent.current = consent
  }, [consent])
+ const annot = subs.annot
+ const hasCues = subs.hasCues
  useEffect(() => {
   // The subtitle hold comes first: the analysis dialog only appears once the film can start.
-  if (decided.current || !subs.annot || subs.cues.length === 0 || hold !== null) return
+  if (decided.current || !annot || !hasCues || hold !== null) return
   decided.current = true
-  if (session.llmEnabled && subs.annot.consent === null && subs.annot.done < subs.annot.total) {
+  if (session.llmEnabled && annot.consent === null && annot.done < annot.total) {
    // A model the user already trusted for this film's analysis needs no question.
    void api.annotModel().then(async (m) => {
     if (!mounted.current) return
@@ -146,17 +163,32 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
     setResumeOnClose(true)
     setGate('ask')
    })
-  } else if (subs.annot.consent === 'on' && !headReady(session, subs)) {
+  } else if (annot.consent === 'on' && !headReady(session, useSubsStore.getState())) {
    // The user already agreed earlier: wait for the batches at the resume point, then play.
    setResumeOnClose(true)
    setGate('wait')
   }
- }, [subs, session, hold])
+ }, [annot, hasCues, session, hold])
 
  const cueByIdx = (i: number) => useSubsStore.getState().cues[i]
- const pickSpan = (pk: SpanPick) => { p.pause(); explain.pinOpen(pk) }
- const cardFor = (cueIdx: number, span: string | null) => { p.pause(); openDraft(cueIdx, span) }
- const explainCue = (cue: Cue) => { p.pause(); void agent.askOnce(cueExplainPrompt(cue.text), cue.idx) }
+ // Stable callbacks: the dialog rows and subtitle lines are memoized on them.
+ const { pinOpen, hoverOpen, hoverLeave } = explain
+ const { askOnce } = agent
+ const pickSpan = useCallback((pk: SpanPick) => { p.pause(); pinOpen(pk) }, [p, pinOpen])
+ const hoverSpan = useCallback((pk: SpanPick | null) => (pk ? hoverOpen(pk) : hoverLeave()), [hoverOpen, hoverLeave])
+ const cardFor = useCallback((cueIdx: number, span: string | null) => { p.pause(); openDraft(cueIdx, span) }, [p, openDraft])
+ const cardForCue = useCallback((cue: Cue) => cardFor(cue.idx, null), [cardFor])
+ const explainCue = useCallback((cue: Cue) => { p.pause(); void askOnce(cueExplainPrompt(cue.text), cue.idx) }, [p, askOnce])
+ const sidebarEn = useCallback(
+  (cue: Cue, ann: CueAnnotation | undefined, active: boolean) => <CueLine cue={cue} ann={ann} live={active} onPick={pickSpan} onHover={hoverSpan} shareHover showShared />,
+  [pickSpan, hoverSpan],
+ )
+ const overlayEn = useCallback(
+  (cue: Cue, ann: CueAnnotation | undefined, karaoke: number | undefined) => <CueLine cue={cue} ann={ann} karaoke={karaoke} onPick={pickSpan} shareHover showShared />,
+  [pickSpan],
+ )
+ const showPatterns = subs.patterns
+ const overlayAbove = useCallback((_: Cue, ann: CueAnnotation | undefined) => (showPatterns ? <PatternBadges ann={ann} /> : null), [showPatterns])
  const askSpan = (cueIdx: number, span: string) => { p.pause(); void agent.ask(`Объясни «${span}» в этой реплике: перевод, смысл в сцене, грамматика.`, cueIdx) }
  const askPattern = (id: string) => {
   p.pause()
@@ -310,23 +342,24 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
      mediaId={session.mediaId}
      onReplay={replay}
      onSlowReplay={slowReplay}
-     onCard={(cue) => cardFor(cue.idx, null)}
+     onCard={cardForCue}
      onExplain={explainCue}
-     renderEn={(cue, ann, active) => <CueLine cue={cue} ann={ann} live={active} onPick={pickSpan} onHover={(pk) => (pk ? explain.hoverOpen(pk) : explain.hoverLeave())} shareHover showShared />}
+     renderEn={sidebarEn}
     />
    )}
    {/* Flush against the dialog list (no gutter, square corners on that side); rounded only on the side
        of the agent panel. Alone it fills the window edge to edge, so fullscreen has no corner cut-outs. */}
    <div className={`relative min-w-0 overflow-hidden bg-black ${chatOpen ? 'rounded-r-[var(--md-sys-shape-corner-extra-large)]' : ''}`} style={{ cursor: visible ? 'default' : 'none' }}>
+    <PatternExposure mediaId={session.mediaId} />
     <VideoSurface />
     <SubsStatusBanner mediaId={session.mediaId} llmEnabled={session.llmEnabled} onChoose={() => setSubsOpen(true)} />
     <SubtitleOverlay
      lifted={visible}
      onReplay={replay}
-     onCard={(cue) => cardFor(cue.idx, null)}
+     onCard={cardForCue}
      onExplain={explainCue}
-     above={(cue) => (subs.patterns ? <PatternBadges ann={subs.annotations.get(cue.idx)} /> : null)}
-     renderEn={(cue, ann, karaoke) => <CueLine cue={cue} ann={ann} karaoke={karaoke} onPick={pickSpan} shareHover showShared />}
+     above={overlayAbove}
+     renderEn={overlayEn}
     />
     <div className={`absolute inset-x-0 top-0 transition-opacity duration-200 ${visible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
      <TopBar
@@ -342,7 +375,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
      />
     </div>
     <div
-     className={`absolute inset-x-4 bottom-4 transition-opacity duration-200 ${visible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+     className={`absolute inset-x-4 bottom-4 transition-opacity duration-200 ${visible ? 'opacity-100' : 'wavy-idle pointer-events-none opacity-0'}`}
      style={{ containerType: 'inline-size', containerName: 'dock' }}
     >
      <ControlBar

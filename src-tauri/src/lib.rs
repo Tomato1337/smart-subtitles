@@ -145,6 +145,7 @@ pub fn run() {
             commands::media_set_sub_offset,
             commands::media_recent,
             commands::media_reset_annot,
+            commands::media_set_hidden,
             commands::session_reopen,
             commands::subs_list,
             commands::subs_load_file,

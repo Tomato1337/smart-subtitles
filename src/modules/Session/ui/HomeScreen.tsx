@@ -6,6 +6,7 @@ import { Cover } from '@/common/ui/Cover'
 import { Icon } from '@/common/ui/Icon'
 import { IconButton } from '@/common/ui/IconButton'
 import { shapeClip } from '@/common/ui/shapes'
+import { toast } from '@/common/ui/toast'
 import { WavyProgress } from '@/common/ui/WavyProgress'
 import { WavySpinner } from '@/common/ui/WavySpinner'
 import { formatTime } from '@/common/utilities/time'
@@ -74,6 +75,26 @@ export function HomeScreen() {
     void qc.invalidateQueries({ queryKey: ['recent'] })
   }
 
+  /**
+   * Removes a film from the list at once and offers «Отменить»: the backend only hides the row
+   * (`media.hidden`), so undo and reopening the film bring it back with its analysis and position.
+   * Focus moves to the same control of the neighbouring row, otherwise it would fall to <body>.
+   */
+  const forget = (m: RecentMedia, from: HTMLElement) => {
+    const li = from.closest('li')
+    const next = li?.nextElementSibling ?? li?.previousElementSibling
+    next?.querySelector<HTMLElement>(from.hasAttribute('data-forget') ? '[data-forget]' : '[data-reopen]')?.focus()
+    qc.setQueryData<RecentMedia[]>(['recent'], (list) => list?.filter((x) => x.mediaId !== m.mediaId))
+    const refresh = () => void qc.invalidateQueries({ queryKey: ['recent'] })
+    const failed = (e: unknown) => { notify('error', errorText(e)); refresh() }
+    const hiding = api.mediaSetHidden(m.mediaId, true).then(refresh, failed)
+    toast(`Удалено из недавних: «${m.title}»`, {
+      durationMs: 6000,
+      // After `hiding`: two invokes are not ordered, and the undo must be the last write.
+      action: { label: 'Отменить', run: () => { void hiding.then(() => api.mediaSetHidden(m.mediaId, false)).then(refresh, failed) } },
+    })
+  }
+
   return (
     <div className="mx-auto flex h-full max-w-[880px] flex-col px-6 pb-6 pt-10">
       <h1 className="type-hero">Smart Subtitles</h1>
@@ -107,16 +128,19 @@ export function HomeScreen() {
       ) : (
         <ul className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
           {recent.data?.map((m) => (
-            <li key={m.mediaId} className="grid grid-cols-[56px_minmax(0,1fr)] items-center gap-4 rounded-[var(--md-sys-shape-corner-extra-small)] bg-[var(--md-sys-color-surface-container)] py-2 pl-2 pr-1 transition-colors first:rounded-t-[var(--md-sys-shape-corner-extra-large)] last:rounded-b-[var(--md-sys-shape-corner-extra-large)] hover:bg-[var(--md-sys-color-surface-container-high)]">
+            <li key={m.mediaId} className="grid grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-4 rounded-[var(--md-sys-shape-corner-extra-small)] bg-[var(--md-sys-color-surface-container)] py-2 pl-2 pr-3 transition-colors first:rounded-t-[var(--md-sys-shape-corner-extra-large)] last:rounded-b-[var(--md-sys-shape-corner-extra-large)] hover:bg-[var(--md-sys-color-surface-container-high)]">
               <span className="relative block h-[84px] w-14">
                 <Cover src={m.posterUrl} title={m.title} className="size-full" />
                 <AnnotBadge m={m} />
               </span>
               <button
                 type="button"
+                data-reopen
+                aria-keyshortcuts="Delete"
                 disabled={!!loading}
                 onClick={() => api.sessionReopen(m.mediaId).catch((e) => notify('error', errorText(e)))}
-                className="flex min-h-16 min-w-0 items-center justify-between gap-4 rounded-[var(--md-sys-shape-corner-large)] py-2 pr-4 text-left disabled:opacity-60"
+                onKeyDown={(e) => { if (e.key === 'Delete') forget(m, e.currentTarget) }}
+                className="flex min-h-16 min-w-0 items-center justify-between gap-4 rounded-[var(--md-sys-shape-corner-large)] py-2 text-left disabled:opacity-60"
               >
                 <span className="min-w-0">
                   <span className="type-title-medium block truncate font-semibold">
@@ -129,6 +153,7 @@ export function HomeScreen() {
                   {m.duration ? <WavyProgress className="h-3 w-32" value={m.lastPosition / m.duration} amp={2} len={14} stroke={3} animated={false} /> : null}
                 </span>
               </button>
+              <IconButton icon="close" label="Удалить из недавних" tipPos="left" data-forget onClick={(e) => forget(m, e.currentTarget)} />
             </li>
           ))}
         </ul>

@@ -183,7 +183,7 @@ pub async fn media_recent(st: St<'_>) -> Res<Vec<RecentMedia>> {
                     annot,\
                     (SELECT count(*) FROM annot_batch WHERE media_id=media.id AND status='done'),\
                     (SELECT count(*) FROM annot_batch WHERE media_id=media.id AND status='failed')\
-             FROM media ORDER BY updated_at DESC LIMIT 20",
+             FROM media WHERE hidden=0 ORDER BY updated_at DESC LIMIT 20",
         )?;
         let rows = q.query_map([], |r| {
             let media_id: String = r.get(0)?;
@@ -208,6 +208,14 @@ pub async fn media_recent(st: St<'_>) -> Res<Vec<RecentMedia>> {
 #[tauri::command]
 pub async fn media_reset_annot(st: St<'_>, media_id: String) -> Res<()> {
     st.db(move |c| { c.execute("UPDATE media SET annot=NULL WHERE id=?1", [&media_id])?; Ok(()) }).await
+}
+
+/// Removes a film from «Недавних» (`hidden=true`) or puts it back (the snackbar's «Отменить»).
+/// Nothing else is deleted: the analysis, the chat and the position are kept, and opening the film
+/// again shows it in the list once more.
+#[tauri::command]
+pub async fn media_set_hidden(st: St<'_>, media_id: String, hidden: bool) -> Res<()> {
+    st.db(move |c| { c.execute("UPDATE media SET hidden=?1 WHERE id=?2", rusqlite::params![hidden, media_id])?; Ok(()) }).await
 }
 
 #[tauri::command]

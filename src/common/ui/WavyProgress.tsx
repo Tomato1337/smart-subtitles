@@ -1,4 +1,4 @@
-import { useCallback, useId, useLayoutEffect, useRef, type CSSProperties } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, type CSSProperties } from 'react'
 import { waveGeom } from './wave'
 
 type Props = {
@@ -8,6 +8,11 @@ type Props = {
  len: number
  stroke: number
  animated: boolean
+ /**
+  * While `animated`, the value is read from this every animation frame and drawn through refs,
+  * without a React render per frame (`value` still applies when paused).
+  */
+ clock?: () => number
  thumb?: boolean
  className?: string
 }
@@ -19,6 +24,10 @@ const PHASE_HZ = 0.9
  * Wavy progress line. The travel is a CSS transform of a pre-built path (no per-frame JavaScript),
  * so the wave stays smooth and never invalidates the document styles, which used to make hover
  * transitions blink. Everything else is drawn through refs on prop changes only.
+ *
+ * The path spans the whole width and is built only when the geometry changes; progress moves just
+ * the clip, the stop and the thumb. Rebuilding a path of hundreds of points at every update (10 Hz
+ * on the timeline, every frame on the focused dialog row) was main-thread work for nothing.
  */
 export function WavyProgress(p: Props) {
  const span = useRef<HTMLSpanElement>(null)
@@ -30,7 +39,7 @@ export function WavyProgress(p: Props) {
  const thumb = useRef<SVGRectElement>(null)
  const clip = useRef<SVGRectElement>(null)
  const size = useRef({ w: 0, h: 0 })
- const drawn = useRef({ d: '', track: '', buffer: '', stop: '', thumb: '', clip: '' })
+ const drawn = useRef({ path: '', shown: '', track: '', buffer: '', stop: '', thumb: '', clip: '' })
  const latest = useRef(p)
  latest.current = p
  const clipId = `wavy-${useId().replace(/[^A-Za-z0-9_-]/g, '_')}`
@@ -41,14 +50,16 @@ export function WavyProgress(p: Props) {
   if (!root || !w) return
   const o = latest.current
   const s = o.stroke
+  const value = o.animated && o.clock ? o.clock() : o.value
   const g = waveGeom(w, h, {
-   value: o.value,
+   value,
    buffer: o.buffer,
    amp: o.amp,
    len: o.len,
    stroke: s,
    phase: 0,
    thumb: !!o.thumb,
+   path: false,
   })
   if (root.getAttribute('viewBox') !== `0 0 ${w} ${h}`) root.setAttribute('viewBox', `0 0 ${w} ${h}`)
   const line = (el: SVGLineElement | null, range: [number, number] | null, key: 'track' | 'buffer') => {
@@ -66,21 +77,29 @@ export function WavyProgress(p: Props) {
   }
   // The wave is built with phase 0 and a margin of one wavelength on both sides: the CSS
   // animation slides it by one wavelength per period, so no gap ever appears at the edges.
-  const x = Math.max(0, Math.min(1, o.value)) * w
+  // It is built ahead of the value in steps of an eighth of the width and the clip below cuts
+  // it at the value, so most updates leave the path alone.
+  const x = Math.max(0, Math.min(1, value)) * w
   const end = Math.max(s / 2, x - (o.thumb ? 8 : 5))
-  let d = ''
-  if (x > s) {
-   for (let px = s / 2 - o.len; px <= end + o.len; px += 1.5) {
+  const shown = x > s
+  const step = Math.max(64, w / 8)
+  const reach = Math.min(w, Math.ceil(end / step) * step) + o.len
+  const pathSig = `${w}|${h}|${o.amp}|${o.len}|${s}|${reach.toFixed(1)}`
+  if (wave.current && shown && drawn.current.path !== pathSig) {
+   drawn.current.path = pathSig
+   let d = ''
+   for (let px = s / 2 - o.len; px <= reach; px += 1.5) {
     const y = h / 2 + o.amp * Math.sin((px / o.len) * 2 * Math.PI)
     d += `${d ? 'L' : 'M'}${px.toFixed(1)} ${y.toFixed(2)}`
    }
-  }
-  if (wave.current && drawn.current.d !== d) {
-   drawn.current.d = d
    wave.current.setAttribute('d', d)
    wave.current.setAttribute('stroke-width', String(s))
   }
-  const clipSig = x > s ? `${(s / 2).toFixed(2)}|${end.toFixed(2)}|${h}` : ''
+  if (wave.current && drawn.current.shown !== String(shown)) {
+   drawn.current.shown = String(shown)
+   wave.current.style.display = shown ? '' : 'none'
+  }
+  const clipSig = shown ? `${(s / 2).toFixed(2)}|${end.toFixed(2)}|${h}` : ''
   if (clip.current && drawn.current.clip !== clipSig) {
    drawn.current.clip = clipSig
    clip.current.setAttribute('x', String(s / 2))
@@ -109,22 +128,41 @@ export function WavyProgress(p: Props) {
   }
  }, [])
 
- // The size is measured once and then only on resize: never inside an animation frame.
+ // The size comes from the ResizeObserver, never from an animation frame. Its first report arrives
+ // after layout and before paint, so mounting reads no `clientWidth`: that forced a synchronous
+ // layout in the middle of the commit, at every phrase change for the dialog row's wave.
  useLayoutEffect(() => {
   const el = span.current
   if (!el) return
   const measure = () => { size.current = { w: el.clientWidth, h: el.clientHeight } }
-  measure()
-  draw()
-  if (typeof ResizeObserver === 'undefined') return
-  const ro = new ResizeObserver(() => { measure(); draw() })
+  if (typeof ResizeObserver === 'undefined') {
+   measure()
+   draw()
+   return
+  }
+  const ro = new ResizeObserver(([e]) => {
+   const box = e?.contentRect
+   if (box) size.current = { w: box.width, h: box.height }
+   else measure()
+   draw()
+  })
   ro.observe(el)
   return () => ro.disconnect()
  }, [draw])
 
  useLayoutEffect(() => {
   draw()
- }, [p.value, p.buffer, p.thumb, p.stroke, draw])
+ }, [p.value, p.buffer, p.thumb, p.stroke, p.amp, p.len, draw])
+
+ // Follow the clock frame by frame; only attributes that changed are written (see `drawn`).
+ useEffect(() => {
+  if (!p.animated || !p.clock) return
+  let raf = requestAnimationFrame(function frame() {
+   draw()
+   raf = requestAnimationFrame(frame)
+  })
+  return () => cancelAnimationFrame(raf)
+ }, [p.animated, p.clock, draw])
 
  return (
   <span

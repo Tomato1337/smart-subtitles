@@ -9,6 +9,21 @@ export function spokenFraction(absTime: number, cue: Cue, offset: number): numbe
 }
 
 /**
+ * Karaoke value to render: `fraction` lowered to the start of the last token it has reached
+ * (`starts` = token starts as fractions of the text, ascending, as CueText compares them).
+ * CueText lights exactly the same tokens for both values, but this one only changes when the next
+ * word lights up, so the karaoke line re-renders a few times per phrase, not at every clock tick.
+ */
+export function litFraction(starts: readonly number[], fraction: number): number {
+ let lit = 0
+ for (const s of starts) {
+  if (s > fraction) break
+  lit = s
+ }
+ return lit
+}
+
+/**
  * Subtitle line state. In hidden mode text is shown only while a reveal window (opened by `A`) is running.
  * `karaoke` is the fraction of the cue already spoken: spoken words are lit, the rest dimmed, in both modes.
  */

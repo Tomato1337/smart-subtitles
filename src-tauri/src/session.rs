@@ -173,7 +173,7 @@ pub async fn open(st: &Arc<AppState>, req: SessionRequest, file_size: Option<u64
                  VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
                  ON CONFLICT(id) DO UPDATE SET source_url=excluded.source_url,title=excluded.title,original_title=excluded.original_title,
                    year=excluded.year,tmdb_id=excluded.tmdb_id,tmdb_type=excluded.tmdb_type,imdb_id=excluded.imdb_id,
-                   season=excluded.season,episode=excluded.episode,episode_title=excluded.episode_title,updated_at=excluded.updated_at",
+                   season=excluded.season,episode=excluded.episode,episode_title=excluded.episode_title,updated_at=excluded.updated_at,hidden=0",
                 rusqlite::params![
                     mid, kind, r.url,
                     card.map(|c| c.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| r.title.clone()),
