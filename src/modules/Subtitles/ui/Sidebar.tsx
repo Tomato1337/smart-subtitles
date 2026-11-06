@@ -1,12 +1,9 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type Ref } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { useShallow } from 'zustand/react/shallow'
+import { Icon, IconButton, Menu, MenuDivider, MenuItem, WavyProgress } from '@tomato1337/m3e-react'
 import { api } from '@/common/api/tauri'
 import type { Cue, CueAnnotation } from '@/common/types/ipc'
-import { Icon } from '@/common/ui/Icon'
-import { IconButton } from '@/common/ui/IconButton'
-import { Menu, MenuItem, MenuDivider } from '@/common/ui/Menu'
-import { WavyProgress } from '@/common/ui/WavyProgress'
 import { formatTime } from '@/common/utilities/time'
 import { usePlaybackStore, usePlayer } from '@/modules/Player'
 import { focusEnd } from '../lib/cues'
@@ -53,6 +50,8 @@ type Props = {
   * Keep it referentially stable (useCallback): rows are memoized and a new function re-renders all of them.
   */
  renderEn: (cue: Cue, ann: CueAnnotation | undefined, active: boolean) => ReactNode
+ /** The panel root, for the player screen's enter/exit presence. */
+ ref?: Ref<HTMLElement>
 }
 
 const FONT = { S: 'type-title-small', M: 'type-title-medium', L: 'type-title-large' } as const
@@ -65,10 +64,10 @@ const FONT_ACTIVE = { S: 'type-title-medium', M: 'type-title-large', L: 'type-ti
  */
 const ACTIVE_VARS = {
  '--active-bg': 'color-mix(in srgb, var(--md-sys-color-secondary-container) 65%, var(--md-sys-color-surface-container-lowest))',
- '--tonal-bg': 'color-mix(in srgb, var(--md-sys-color-on-secondary-container) 12%, transparent)',
- '--tonal-fg': 'var(--md-sys-color-on-secondary-container)',
- '--wave-active': 'var(--md-sys-color-on-secondary-container)',
- '--wave-track': 'color-mix(in srgb, var(--md-sys-color-on-secondary-container) 20%, transparent)',
+ '--m3e-icon-button-tonal-container': 'color-mix(in srgb, var(--md-sys-color-on-secondary-container) 12%, transparent)',
+ '--m3e-icon-button-tonal-content': 'var(--md-sys-color-on-secondary-container)',
+ '--m3e-wave-active': 'var(--md-sys-color-on-secondary-container)',
+ '--m3e-wave-track': 'color-mix(in srgb, var(--md-sys-color-on-secondary-container) 20%, transparent)',
 } as CSSProperties
 
 /** Row callbacks; one object for the whole list that never changes, so memoized rows stay put. */
@@ -82,14 +81,13 @@ type RowHandlers = {
 }
 
 function RowActions({ cue, on, compact }: { cue: Cue; on: RowHandlers; compact?: boolean }) {
- // The whole row seeks on click, so every action stops the propagation the old button did.
- const act = (fn: (c: Cue) => void) => (e: MouseEvent) => { e.stopPropagation(); fn(cue) }
+ const act = (fn: (c: Cue) => void) => () => fn(cue)
  const size = compact ? 'sm' : 'md'
  return (
   <div className={compact ? 'flex gap-1' : 'flex gap-2'}>
    <IconButton size={size} variant="tonal" icon="replay" label="Повторить" onClick={act(on.replay)} />
    <IconButton size={size} variant="tonal" icon="volume_up" label="Медленно" onClick={act(on.slow)} />
-   <IconButton size={size} variant={compact ? 'tonal' : 'anki'} icon="add" label="Фразу в Anki" onClick={act(on.card)} />
+   <IconButton size={size} variant="tonal" className={compact ? undefined : 'icon-button-anki'} icon="add" label="Фразу в Anki" onClick={act(on.card)} />
    <IconButton
     size={size}
     variant={compact ? 'tonal' : 'tertiary'}
@@ -128,40 +126,40 @@ type RowProps = {
  * action row fades in (opacity/transform, which the compositor animates).
  */
 const CueRow = memo(function CueRow({ cue, ann, active, focusFrom, focusTo, font, translation, needsRetry, on, renderEn }: RowProps) {
- const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-  if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
-  e.preventDefault()
-  on.seek(cue)
- }
+ // A plain container: the phrase itself is the seek button, the actions are its siblings, so no
+ // control sits inside another one. The inset focus ring stays inside the clipped, rounded row.
+ const tail = active || needsRetry
  return (
   <div
-   role="button"
-   tabIndex={0}
-   aria-current={active || undefined}
-   onClick={() => on.seek(cue)}
-   onKeyDown={onKeyDown}
    style={active ? ACTIVE_VARS : undefined}
-   className={`group relative cursor-pointer overflow-hidden transition-colors duration-300 ease-out ${active
-    ? 'my-1 rounded-[var(--md-sys-shape-corner-extra-large)] bg-[var(--active-bg)] px-4 pb-3 pt-4 text-[var(--md-sys-color-on-secondary-container)]'
-    : 'mx-2 my-0.5 rounded-[var(--md-sys-shape-corner-large)] px-4 py-3 hover:bg-[color-mix(in_srgb,var(--md-sys-color-on-surface)_6%,transparent)]'}`}
+   className={`group relative overflow-hidden transition-colors duration-300 ease-out ${active
+    ? 'my-1 rounded-[var(--md-sys-shape-corner-extra-large)] bg-[var(--active-bg)] pb-3 text-[var(--md-sys-color-on-secondary-container)]'
+    : 'mx-2 my-0.5 rounded-[var(--md-sys-shape-corner-large)] hover:bg-[color-mix(in_srgb,var(--md-sys-color-on-surface)_6%,transparent)]'}`}
   >
-   <div className={`type-label-medium font-semibold tabular-nums ${active ? 'text-[var(--md-sys-color-on-secondary-container)]' : 'text-[var(--md-sys-color-primary)]'}`}>{formatTime(cue.start)}</div>
-   <div
-    className={`${active ? FONT_ACTIVE[font] : FONT[font]} mt-3 min-w-0 whitespace-pre-line break-words font-semibold text-[var(--app-dialog-text)]`}
-    style={active ? { fontStretch: '108%' } : undefined}
+   <button
+    type="button"
+    aria-current={active || undefined}
+    onClick={() => on.seek(cue)}
+    className={`block w-full min-w-0 cursor-pointer rounded-[inherit] px-4 text-left focus-visible:-outline-offset-3 ${active ? 'pt-4' : 'pt-3'} ${tail ? '' : 'pb-3'}`}
    >
-    {renderEn(cue, ann, active)}
-   </div>
-   {translation && ann?.ru && (
-    <div className="type-body-medium mt-1 min-w-0 whitespace-pre-line break-words text-[var(--app-dialog-text)]">{ann.ru}</div>
-   )}
+    <span className={`type-label-medium block font-semibold tabular-nums ${active ? 'text-[var(--md-sys-color-on-secondary-container)]' : 'text-[var(--md-sys-color-primary)]'}`}>{formatTime(cue.start)}</span>
+    <span
+     className={`${active ? FONT_ACTIVE[font] : FONT[font]} mt-3 block min-w-0 whitespace-pre-line break-words font-semibold text-[var(--app-dialog-text)]`}
+     style={active ? { fontStretch: '108%' } : undefined}
+    >
+     {renderEn(cue, ann, active)}
+    </span>
+    {translation && ann?.ru && (
+     <span className="type-body-medium mt-1 block min-w-0 whitespace-pre-line break-words text-[var(--app-dialog-text)]">{ann.ru}</span>
+    )}
+   </button>
    {needsRetry && (
-    <button type="button" className={`type-label-small mt-1 flex items-center gap-1 ${active ? 'text-[var(--md-sys-color-on-secondary-container)]' : 'text-[var(--md-sys-color-primary)]'}`} onClick={(e) => { e.stopPropagation(); on.retry(cue) }}>
+    <button type="button" className={`type-label-small mx-4 mt-1 flex items-center gap-1 ${active ? 'text-[var(--md-sys-color-on-secondary-container)]' : 'mb-3 text-[var(--md-sys-color-primary)]'}`} onClick={() => on.retry(cue)}>
      <Icon name="refresh" size={14} /> перевести снова
     </button>
    )}
    {active ? (
-    <div className="row-actions-in">
+    <div className="row-actions-in px-4">
      <div className="pt-4"><RowActions cue={cue} on={on} /></div>
      <FocusProgress from={focusFrom} to={focusTo} />
     </div>
@@ -176,7 +174,7 @@ const CueRow = memo(function CueRow({ cue, ann, active, focusFrom, focusTo, font
 })
 
 /** Memoized: with stable callbacks from the player screen, its re-renders do not reach the list. */
-export const Sidebar = memo(function Sidebar({ mediaId, onReplay, onSlowReplay, onCard, onExplain, renderEn }: Props) {
+export const Sidebar = memo(function Sidebar({ mediaId, onReplay, onSlowReplay, onCard, onExplain, renderEn, ref }: Props) {
  const player = usePlayer()
  // Only the fields the list shows: the whole store also changes on analysis progress, reveal, status…
  const { cues, annotations, offset, showSidebarTranslation, sidebarFont, failedBatches, set } = useSubsStore(useShallow((s) => ({
@@ -221,20 +219,23 @@ export const Sidebar = memo(function Sidebar({ mediaId, onReplay, onSlowReplay, 
  }), [player])
 
  return (
-  <aside data-tour="sidebar" className="flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--md-sys-shape-corner-extra-large)] bg-[var(--md-sys-color-surface-container-low)]" aria-label="Диалоги">
+  <aside ref={ref} data-tour="sidebar" className="m3e-motion-from-left flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--md-sys-shape-corner-extra-large)] bg-[var(--md-sys-color-surface-container-low)]" aria-label="Диалоги">
    <div className="flex items-center justify-between pl-6 pr-2 pt-4 pb-2">
     <h2 className="type-title-large type-emph">Диалоги</h2>
-    <div className="relative flex">
-     <IconButton icon="tune" label="Настройки списка" data-menu-trigger onClick={() => setGear((v) => !v)} />
+    <div className="flex">
+     {/* The menu anchors to the wrapper of its own trigger. */}
+     <div className="relative">
+      <IconButton icon="tune" label="Настройки списка" aria-haspopup="menu" aria-expanded={gear} onClick={() => setGear((v) => !v)} />
+      <Menu open={gear} onClose={() => setGear(false)} align="end">
+       <MenuItem label="Показывать перевод" on={showSidebarTranslation} onClick={() => set({ showSidebarTranslation: !showSidebarTranslation })} />
+       <MenuDivider title="Размер шрифта" />
+       {(['S', 'M', 'L'] as const).map((s) => (
+        <MenuItem key={s} label={s} selected={sidebarFont === s} onClick={() => set({ sidebarFont: s })} />
+       ))}
+      </Menu>
+     </div>
      <IconButton icon="search" label="Поиск" selected={searching} onClick={() => { setSearching((v) => !v); setQuery('') }} />
      <IconButton icon="left_panel_close" label="Свернуть" onClick={() => set({ sidebarOpen: false })} />
-     <Menu open={gear} onClose={() => setGear(false)} align="right">
-      <MenuItem label="Показывать перевод" on={showSidebarTranslation} onClick={() => set({ showSidebarTranslation: !showSidebarTranslation })} />
-      <MenuDivider title="Размер шрифта" />
-      {(['S', 'M', 'L'] as const).map((s) => (
-       <MenuItem key={s} label={s} selected={sidebarFont === s} onClick={() => set({ sidebarFont: s })} />
-      ))}
-     </Menu>
     </div>
    </div>
    {searching && (
@@ -245,7 +246,7 @@ export const Sidebar = memo(function Sidebar({ mediaId, onReplay, onSlowReplay, 
       onChange={(e) => setQuery(e.target.value)}
       placeholder="Поиск по EN и RU"
       aria-label="Поиск по EN и RU"
-      className="type-body-medium h-10 w-full rounded-full bg-[var(--md-sys-color-surface-container-highest)] px-4 outline-none"
+      className="type-body-medium h-10 w-full rounded-full bg-[var(--md-sys-color-surface-container-highest)] px-4"
      />
     </div>
    )}

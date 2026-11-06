@@ -2,7 +2,7 @@ import { memo } from 'react'
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
-import { Icon } from '@/common/ui/Icon'
+import { Icon } from '@tomato1337/m3e-react'
 
 type Props = {
   text: string
@@ -59,7 +59,7 @@ export const Markdown = memo(function Markdown({ text, cueTime, cueText, onCue }
             type="button"
             title={cueText(i)}
             onClick={() => onCue(i)}
-            className="morph type-label-medium mx-0.5 inline-flex h-7 items-center gap-0.5 rounded-[var(--md-sys-shape-corner-small)] bg-[var(--md-sys-color-secondary-container)] pl-1 pr-2 align-middle font-semibold tabular-nums text-[var(--md-sys-color-on-secondary-container)] active:rounded-[14px]"
+            className="m3e-morph type-label-medium mx-0.5 inline-flex h-7 items-center gap-0.5 rounded-[var(--md-sys-shape-corner-small)] bg-[var(--md-sys-color-secondary-container)] pl-1 pr-2 align-middle font-semibold tabular-nums text-[var(--md-sys-color-on-secondary-container)] active:rounded-[14px]"
           >
             <Icon name="play_arrow" size={18} fill />{time}
           </button>

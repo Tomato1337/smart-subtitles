@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { Dialog, Icon, IconButton, Presence } from '@tomato1337/m3e-react'
 import type { AnkiCard, AnkiLabelMode, Chunk, ChunkKind, Cue } from '@/common/types/ipc'
-import { Icon } from '@/common/ui/Icon'
-import { IconButton } from '@/common/ui/IconButton'
 import { ankiTokenDecor, isLabelVisible, labelText, STATUS_RU } from '@/modules/Anki'
 import { keyLabel, useHotkeysStore } from '@/modules/Hotkeys'
 import { PatternChip, patternById } from '@/modules/Patterns'
@@ -148,6 +147,10 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
 
 /** Interactive legend for subtitle highlighting: live sample cues, a layer inspector and the reading rules. */
 export function HighlightGuide({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return <Presence>{open && <GuideDialog onClose={onClose} />}</Presence>
+}
+
+function GuideDialog({ onClose }: { onClose: () => void }) {
   const samples = useMemo(() => SAMPLES.map(build), [])
   const hotkey = useHotkeysStore((s) => s.bindings)
   const [hoverLayer, setHoverLayer] = useState<Layer | null>(null)
@@ -164,8 +167,6 @@ export function HighlightGuide({ open, onClose }: { open: boolean; onClose: () =
     const t = setInterval(() => setKaraoke((k) => (k >= 1 ? 0 : Math.min(1, k + 0.02))), 60)
     return () => clearInterval(t)
   }, [playing])
-
-  if (!open) return null
 
   const layersOf = (b: Built, t: { start: number; end: number }): Set<Layer> => {
     const out = new Set<Layer>()
@@ -260,113 +261,111 @@ export function HighlightGuide({ open, onClose }: { open: boolean; onClose: () =
   }
 
   return (
-    <div className="fixed inset-0 z-[190] flex items-center justify-center bg-[color-mix(in_srgb,var(--md-sys-color-scrim)_55%,transparent)]" onPointerDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div role="dialog" aria-label="Как читать подсветку" className="md-pop flex max-h-[90vh] w-[1040px] max-w-[96vw] flex-col bg-[var(--md-sys-color-surface-container-high)]" style={{ borderRadius: 'var(--md-sys-shape-corner-extra-large)' }}>
-        <div className="flex items-center justify-between px-6 pb-2 pt-5">
-          <div>
-            <h2 className="type-headline-small">Как читать подсветку</h2>
-            <p className="type-body-medium text-[var(--md-sys-color-on-surface-variant)]">Цвет линии говорит, что это за выражение. Тип линии говорит, откуда разметка: сплошная от разбора фразы, двойная от каталога грамматики, пунктир от твоей колоды Anki.</p>
-          </div>
-          <IconButton icon="close" label="Закрыть" onClick={onClose} />
+    <Dialog onClose={onClose} dismissible aria-labelledby="highlight-guide-title" className="max-h-[90vh] w-[1040px] max-w-[96vw] p-0">
+      <div className="flex items-center justify-between px-6 pb-2 pt-5">
+        <div>
+          <h2 id="highlight-guide-title" className="type-headline-small">Как читать подсветку</h2>
+          <p className="type-body-medium text-[var(--md-sys-color-on-surface-variant)]">Цвет линии говорит, что это за выражение. Тип линии говорит, откуда разметка: сплошная от разбора фразы, двойная от каталога грамматики, пунктир от твоей колоды Anki.</p>
         </div>
+        <IconButton icon="close" label="Закрыть" onClick={onClose} />
+      </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-[1fr_380px] gap-6 overflow-y-auto px-6 pb-6">
-          <section className="flex min-w-0 flex-col gap-4">
-            <div className="flex flex-col gap-5 rounded-[var(--md-sys-shape-corner-large)] bg-black px-6 py-6 text-center">
-              {samples.map((b, si) => {
-                const pats = showPatterns ? b.patterns.map((p) => patternById(p.id)).filter((p) => !!p) : []
-                return (
-                  <div key={si}>
-                    {pats.length > 0 && (
-                      <div className="mb-2 flex flex-wrap justify-center gap-2">
-                        {pats.map((p) => (
-                          <PatternChip key={p.id} onClick={() => setPinnedLayer((l) => (l === 'pattern' ? null : 'pattern'))}>{p.label} · {p.formula}</PatternChip>
-                        ))}
-                      </div>
-                    )}
-                    <div className="type-headline-medium text-[var(--md-sys-color-on-surface)]">{renderSample(b, si)}</div>
-                    <div className="type-body-large mt-1 text-[var(--md-sys-color-on-surface-variant)]">{b.ru}</div>
-                  </div>
-                )
-              })}
-            </div>
-
-            <div className="rounded-[var(--md-sys-shape-corner-large)] bg-[var(--md-sys-color-surface-container)] p-4">
-              <div className="type-label-large mb-2 text-[var(--md-sys-color-primary)]">Разбор</div>
-              {inspector()}
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="type-label-large w-32">Конструкции <Kbd>{keyLabel(hotkey.patterns)}</Kbd></span>
-                <Chip active={showPatterns} onClick={() => setShowPatterns((v) => !v)}>{showPatterns ? 'Вкл' : 'Выкл'}</Chip>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="type-label-large w-32">Подписи Anki</span>
-                {ANKI_MODES.map((m) => <Chip key={m.mode} active={ankiMode === m.mode} onClick={() => setAnkiMode(m.mode)}>{m.label}</Chip>)}
-              </div>
-              <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">«Только новые» подписывает карточки new и learning, «Все невыученные» добавляет young, трудные и пиявки. В примере bailed on имеет статус «молодое», поэтому в режиме «Только новые» подпись пропадает.</p>
-            </div>
-
-            <div className="rounded-[var(--md-sys-shape-corner-large)] bg-[var(--md-sys-color-surface-container)] p-4">
-              <div className="type-label-large mb-2 text-[var(--md-sys-color-primary)]">Уже произнесённое</div>
-              <p className="type-body-medium mb-3">Слова загораются по мере того, как их произносят, остальные приглушены. Так подсвечиваются и субтитры на видео, и активная реплика в «Диалогах». В режиме «Скрывать субтитры» текст появляется только по <Kbd>{keyLabel(hotkey.reveal)}</Kbd>: фильм отмотается на 5 секунд и покажет фразу.</p>
-              <div className="rounded-[var(--md-sys-shape-corner-medium)] bg-black px-4 py-3 text-center">
-                <div className="type-title-large">{renderSample(samples[1], 1, karaoke)}</div>
-              </div>
-              <div className="mt-3 flex items-center gap-3">
-                <IconButton icon={playing ? 'pause' : 'play_arrow'} label={playing ? 'Пауза' : 'Проиграть'} onClick={() => setPlaying((v) => !v)} />
-                <input type="range" min={0} max={1} step={0.01} value={karaoke} onChange={(e) => { setPlaying(false); setKaraoke(Number(e.target.value)) }} className="flex-1 accent-[var(--md-sys-color-primary)]" aria-label="Сколько фразы уже произнесено" />
-              </div>
-            </div>
-          </section>
-
-          <aside className="flex flex-col gap-1">
-            <div className="type-label-large px-3 pb-1 text-[var(--md-sys-color-on-surface-variant)]">Наведи на пункт, чтобы выделить его в примере. Клик закрепляет выделение.</div>
-            {LEGEND.map((l) => {
-              const active = spot === l.layer
+      <div className="grid min-h-0 flex-1 grid-cols-[1fr_380px] gap-6 overflow-y-auto px-6 pb-6">
+        <section className="flex min-w-0 flex-col gap-4">
+          <div className="flex flex-col gap-5 rounded-[var(--md-sys-shape-corner-large)] bg-black px-6 py-6 text-center">
+            {samples.map((b, si) => {
+              const pats = showPatterns ? b.patterns.map((p) => patternById(p.id)).filter((p) => !!p) : []
               return (
-                <button
-                  key={l.layer}
-                  type="button"
-                  onMouseEnter={() => setHoverLayer(l.layer)}
-                  onMouseLeave={() => setHoverLayer(null)}
-                  onFocus={() => setHoverLayer(l.layer)}
-                  onBlur={() => setHoverLayer(null)}
-                  onClick={() => setPinnedLayer((p) => (p === l.layer ? null : l.layer))}
-                  aria-pressed={pinnedLayer === l.layer}
-                  className={`state-layer state-on-surface relative flex flex-col gap-1 rounded-[var(--md-sys-shape-corner-medium)] px-3 py-2 text-left ${active ? 'bg-[var(--md-sys-color-surface-container-highest)]' : ''}`}
-                >
-                  <span className="flex items-baseline justify-between gap-2">
-                    <span className="type-title-small">{l.title}</span>
-                    <span className="type-title-medium" style={l.style}>{l.sample}</span>
-                  </span>
-                  <span className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">{l.read}</span>
-                </button>
+                <div key={si}>
+                  {pats.length > 0 && (
+                    <div className="mb-2 flex flex-wrap justify-center gap-2">
+                      {pats.map((p) => (
+                        <PatternChip key={p.id} onClick={() => setPinnedLayer((l) => (l === 'pattern' ? null : 'pattern'))}>{p.label} · {p.formula}</PatternChip>
+                      ))}
+                    </div>
+                  )}
+                  <div className="type-headline-medium text-[var(--md-sys-color-on-surface)]">{renderSample(b, si)}</div>
+                  <div className="type-body-large mt-1 text-[var(--md-sys-color-on-surface-variant)]">{b.ru}</div>
+                </div>
               )
             })}
+          </div>
 
-            <div className="mt-3 flex flex-col gap-2 rounded-[var(--md-sys-shape-corner-large)] bg-[var(--md-sys-color-surface-container)] p-4">
-              <div className="type-label-large text-[var(--md-sys-color-primary)]">Как читать вместе</div>
-              <ul className="type-body-small flex list-disc flex-col gap-1.5 pl-4">
-                <li>Слои накладываются. Пунктир Anki лежит под цветной линией: в bailed on это фразовый глагол, и он же есть в твоей колоде.</li>
-                <li>Цветная линия важнее двойной. В «have to make» двойная линия стоит только под have to, потому что make входит в make a decision.</li>
-                <li>Подсвечено не всё подряд: только многословные выражения и слова выше твоего уровня, не больше 4 на реплику.</li>
-                <li>При наведении на слово подсвечивается всё выражение. Клик по одному слову берёт его целиком.</li>
-              </ul>
-            </div>
+          <div className="rounded-[var(--md-sys-shape-corner-large)] bg-[var(--md-sys-color-surface-container)] p-4">
+            <div className="type-label-large mb-2 text-[var(--md-sys-color-primary)]">Разбор</div>
+            {inspector()}
+          </div>
 
-            <div className="mt-3 flex flex-col gap-2 rounded-[var(--md-sys-shape-corner-large)] bg-[var(--md-sys-color-surface-container)] p-4">
-              <div className="type-label-large text-[var(--md-sys-color-primary)]">Действия в фильме</div>
-              <ul className="type-body-small flex flex-col gap-1.5">
-                <li><Icon name="mouse" size={16} /> Клик по слову: пауза и разбор. Протянуть мышью: разбор своего куска фразы.</li>
-                <li><Icon name="menu" size={16} /> В «Диалогах» наведение сразу показывает перевод. Полоса под активной репликой показывает, сколько она ещё будет в фокусе.</li>
-                <li><Kbd>{keyLabel(hotkey.patterns)}</Kbd> конструкции, <Kbd>{keyLabel(hotkey.showEn)}</Kbd> / <Kbd>{keyLabel(hotkey.showRu)}</Kbd> английский и русский текст, <Kbd>{keyLabel(hotkey.sidebar)}</Kbd> диалоги, <Kbd>{keyLabel(hotkey.replay)}</Kbd> повтор, <Kbd>{keyLabel(hotkey.prevCue)}</Kbd> <Kbd>{keyLabel(hotkey.nextCue)}</Kbd> соседняя реплика, <Kbd>{keyLabel(hotkey.guide)}</Kbd> эта справка, <Kbd>{keyLabel(hotkey.chat)}</Kbd> чат с агентом.</li>
-              </ul>
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="type-label-large w-32">Конструкции <Kbd>{keyLabel(hotkey.patterns)}</Kbd></span>
+              <Chip active={showPatterns} onClick={() => setShowPatterns((v) => !v)}>{showPatterns ? 'Вкл' : 'Выкл'}</Chip>
             </div>
-          </aside>
-        </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="type-label-large w-32">Подписи Anki</span>
+              {ANKI_MODES.map((m) => <Chip key={m.mode} active={ankiMode === m.mode} onClick={() => setAnkiMode(m.mode)}>{m.label}</Chip>)}
+            </div>
+            <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">«Только новые» подписывает карточки new и learning, «Все невыученные» добавляет young, трудные и пиявки. В примере bailed on имеет статус «молодое», поэтому в режиме «Только новые» подпись пропадает.</p>
+          </div>
+
+          <div className="rounded-[var(--md-sys-shape-corner-large)] bg-[var(--md-sys-color-surface-container)] p-4">
+            <div className="type-label-large mb-2 text-[var(--md-sys-color-primary)]">Уже произнесённое</div>
+            <p className="type-body-medium mb-3">Слова загораются по мере того, как их произносят, остальные приглушены. Так подсвечиваются и субтитры на видео, и активная реплика в «Диалогах». В режиме «Скрывать субтитры» текст появляется только по <Kbd>{keyLabel(hotkey.reveal)}</Kbd>: фильм отмотается на 5 секунд и покажет фразу.</p>
+            <div className="rounded-[var(--md-sys-shape-corner-medium)] bg-black px-4 py-3 text-center">
+              <div className="type-title-large">{renderSample(samples[1], 1, karaoke)}</div>
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <IconButton icon={playing ? 'pause' : 'play_arrow'} label={playing ? 'Пауза' : 'Проиграть'} onClick={() => setPlaying((v) => !v)} />
+              <input type="range" min={0} max={1} step={0.01} value={karaoke} onChange={(e) => { setPlaying(false); setKaraoke(Number(e.target.value)) }} className="flex-1 accent-[var(--md-sys-color-primary)]" aria-label="Сколько фразы уже произнесено" />
+            </div>
+          </div>
+        </section>
+
+        <aside className="flex flex-col gap-1">
+          <div className="type-label-large px-3 pb-1 text-[var(--md-sys-color-on-surface-variant)]">Наведи на пункт, чтобы выделить его в примере. Клик закрепляет выделение.</div>
+          {LEGEND.map((l) => {
+            const active = spot === l.layer
+            return (
+              <button
+                key={l.layer}
+                type="button"
+                onMouseEnter={() => setHoverLayer(l.layer)}
+                onMouseLeave={() => setHoverLayer(null)}
+                onFocus={() => setHoverLayer(l.layer)}
+                onBlur={() => setHoverLayer(null)}
+                onClick={() => setPinnedLayer((p) => (p === l.layer ? null : l.layer))}
+                aria-pressed={pinnedLayer === l.layer}
+                className={`state-layer state-on-surface relative flex flex-col gap-1 rounded-[var(--md-sys-shape-corner-medium)] px-3 py-2 text-left ${active ? 'bg-[var(--md-sys-color-surface-container-highest)]' : ''}`}
+              >
+                <span className="flex items-baseline justify-between gap-2">
+                  <span className="type-title-small">{l.title}</span>
+                  <span className="type-title-medium" style={l.style}>{l.sample}</span>
+                </span>
+                <span className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">{l.read}</span>
+              </button>
+            )
+          })}
+
+          <div className="mt-3 flex flex-col gap-2 rounded-[var(--md-sys-shape-corner-large)] bg-[var(--md-sys-color-surface-container)] p-4">
+            <div className="type-label-large text-[var(--md-sys-color-primary)]">Как читать вместе</div>
+            <ul className="type-body-small flex list-disc flex-col gap-1.5 pl-4">
+              <li>Слои накладываются. Пунктир Anki лежит под цветной линией: в bailed on это фразовый глагол, и он же есть в твоей колоде.</li>
+              <li>Цветная линия важнее двойной. В «have to make» двойная линия стоит только под have to, потому что make входит в make a decision.</li>
+              <li>Подсвечено не всё подряд: только многословные выражения и слова выше твоего уровня, не больше 4 на реплику.</li>
+              <li>При наведении на слово подсвечивается всё выражение. Клик по одному слову берёт его целиком.</li>
+            </ul>
+          </div>
+
+          <div className="mt-3 flex flex-col gap-2 rounded-[var(--md-sys-shape-corner-large)] bg-[var(--md-sys-color-surface-container)] p-4">
+            <div className="type-label-large text-[var(--md-sys-color-primary)]">Действия в фильме</div>
+            <ul className="type-body-small flex flex-col gap-1.5">
+              <li><Icon name="mouse" size={16} /> Клик по слову: пауза и разбор. Протянуть мышью: разбор своего куска фразы.</li>
+              <li><Icon name="menu" size={16} /> В «Диалогах» наведение сразу показывает перевод. Полоса под активной репликой показывает, сколько она ещё будет в фокусе.</li>
+              <li><Kbd>{keyLabel(hotkey.patterns)}</Kbd> конструкции, <Kbd>{keyLabel(hotkey.showEn)}</Kbd> / <Kbd>{keyLabel(hotkey.showRu)}</Kbd> английский и русский текст, <Kbd>{keyLabel(hotkey.sidebar)}</Kbd> диалоги, <Kbd>{keyLabel(hotkey.replay)}</Kbd> повтор, <Kbd>{keyLabel(hotkey.prevCue)}</Kbd> <Kbd>{keyLabel(hotkey.nextCue)}</Kbd> соседняя реплика, <Kbd>{keyLabel(hotkey.guide)}</Kbd> эта справка, <Kbd>{keyLabel(hotkey.chat)}</Kbd> чат с агентом.</li>
+            </ul>
+          </div>
+        </aside>
       </div>
-    </div>
+    </Dialog>
   )
 }

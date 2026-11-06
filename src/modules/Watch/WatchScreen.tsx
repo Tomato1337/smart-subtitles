@@ -2,13 +2,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useShallow } from 'zustand/react/shallow'
+import { ButtonGroup, IconButton, Presence, ToggleButton, toast, usePresence } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { Cue, CueAnnotation, SessionState } from '@/common/types/ipc'
 import { formatTime } from '@/common/utilities/time'
 import { comboOf } from '@/common/utilities/keys'
-import { IconButton } from '@/common/ui/IconButton'
-import { toast } from '@/common/ui/toast'
 import { AgentPanel, cueExplainPrompt, useAgentActions, useAgentEvents, useAgentStore } from '@/modules/Agent'
 import { useAnkiEvents } from '@/modules/Anki'
 import { CardDraftModal, useCardsStore } from '@/modules/Cards'
@@ -313,6 +312,8 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
   }
   const onKey = (e: KeyboardEvent) => {
    if (e.target instanceof Element && e.target.closest('input,textarea,select,[contenteditable]')) return
+   // A modal dialog owns the keyboard (Esc included): the film behind it is inert.
+   if (document.querySelector('dialog[open]')) return
    // Escape is not rebindable: it always leaves fullscreen.
    if (e.code === 'Escape') { void getCurrentWindow().setFullscreen(false); return }
    const combo = comboOf(e)
@@ -332,13 +333,19 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
  useMediaSession(session, p, openEpisode)
 
  const showSidebar = subs.sidebarOpen && !subs.hideMode
+ // The side panels slide out before their grid column goes away.
+ const sidebarRef = useRef<HTMLElement>(null)
+ const chatRef = useRef<HTMLElement>(null)
+ const sidebar = usePresence(showSidebar, sidebarRef)
+ const chat = usePresence(chatOpen, chatRef)
  return (
   <div
    className="grid size-full bg-black"
-   style={{ gridTemplateColumns: [showSidebar && '360px', 'minmax(0,1fr)', chatOpen && '400px'].filter(Boolean).join(' ') }}
+   style={{ gridTemplateColumns: [sidebar.mounted && '360px', 'minmax(0,1fr)', chat.mounted && '400px'].filter(Boolean).join(' ') }}
   >
-   {showSidebar && (
+   {sidebar.mounted && (
     <Sidebar
+     ref={sidebarRef}
      mediaId={session.mediaId}
      onReplay={replay}
      onSlowReplay={slowReplay}
@@ -349,7 +356,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
    )}
    {/* Flush against the dialog list (no gutter, square corners on that side); rounded only on the side
        of the agent panel. Alone it fills the window edge to edge, so fullscreen has no corner cut-outs. */}
-   <div className={`relative min-w-0 overflow-hidden bg-black ${chatOpen ? 'rounded-r-[var(--md-sys-shape-corner-extra-large)]' : ''}`} style={{ cursor: visible ? 'default' : 'none' }}>
+   <div className={`relative min-w-0 overflow-hidden bg-black ${chat.mounted ? 'rounded-r-[var(--md-sys-shape-corner-extra-large)]' : ''}`} style={{ cursor: visible ? 'default' : 'none' }}>
     <PatternExposure mediaId={session.mediaId} />
     <VideoSurface />
     <SubsStatusBanner mediaId={session.mediaId} llmEnabled={session.llmEnabled} onChoose={() => setSubsOpen(true)} />
@@ -375,7 +382,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
      />
     </div>
     <div
-     className={`absolute inset-x-4 bottom-4 transition-opacity duration-200 ${visible ? 'opacity-100' : 'wavy-idle pointer-events-none opacity-0'}`}
+     className={`absolute inset-x-4 bottom-4 transition-opacity duration-200 ${visible ? 'opacity-100' : 'm3e-wavy-idle pointer-events-none opacity-0'}`}
      style={{ containerType: 'inline-size', containerName: 'dock' }}
     >
      <ControlBar
@@ -392,10 +399,10 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
       leftSlot={
        <>
         <IconButton icon="menu" label={withKey('Диалоги', hotkey.sidebar)} data-tour="dialogs" selected={subs.sidebarOpen} onClick={() => subs.set({ sidebarOpen: !subs.sidebarOpen })} />
-        <div data-tour="subs-lang" className="mx-1 flex gap-0.5">
-         <button type="button" aria-pressed={subs.showEn} onClick={() => subs.set({ showEn: !subs.showEn })} className={`morph state-layer state-on-surface type-label-large relative h-10 min-w-12 px-3 font-semibold ${subs.showEn ? 'rounded-[20px] bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)]' : 'rounded-l-[20px] rounded-r-[var(--md-sys-shape-corner-small)] bg-[var(--md-sys-color-surface-container-highest)] text-[var(--md-sys-color-on-surface-variant)]'}`}>EN</button>
-         <button type="button" aria-pressed={subs.showRu} onClick={() => subs.set({ showRu: !subs.showRu })} className={`morph state-layer state-on-surface type-label-large relative h-10 min-w-12 px-3 font-semibold ${subs.showRu ? 'rounded-[20px] bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)]' : 'rounded-r-[20px] rounded-l-[var(--md-sys-shape-corner-small)] bg-[var(--md-sys-color-surface-container-highest)] text-[var(--md-sys-color-on-surface-variant)]'}`}>РУ</button>
-        </div>
+        <ButtonGroup label="Языки субтитров" connected data-tour="subs-lang" className="mx-1">
+         <ToggleButton selected={subs.showEn} className="px-3 font-semibold" onClick={() => subs.set({ showEn: !subs.showEn })}>EN</ToggleButton>
+         <ToggleButton selected={subs.showRu} className="px-3 font-semibold" onClick={() => subs.set({ showRu: !subs.showRu })}>РУ</ToggleButton>
+        </ButtonGroup>
        </>
       }
       rightSlot={
@@ -416,6 +423,8 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
     </div>
    </div>
    <AgentPanel
+    ref={chatRef}
+    mounted={chat.mounted}
     mediaId={session.mediaId}
     locate={locate}
     here={<AgentHere />}
@@ -433,11 +442,11 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
     onExplain={askPattern}
    />
    <HighlightGuide open={guide} onClose={() => setGuide(false)} />
-   {hotkeysOpen && <HotkeysDialog onClose={() => setHotkeysOpen(false)} />}
-   {subsOpen && <SubsChooserDialog mediaId={session.mediaId} onClose={() => setSubsOpen(false)} />}
+   <Presence>{hotkeysOpen && <HotkeysDialog onClose={() => setHotkeysOpen(false)} />}</Presence>
+   <Presence>{subsOpen && <SubsChooserDialog mediaId={session.mediaId} onClose={() => setSubsOpen(false)} />}</Presence>
    <AnnotGate session={session} open={gate} resumeOnClose={resumeOnClose} onOpenChange={setGate} />
    <EmbeddedGate session={session} open={hold} onSkip={() => setSkipped(true)} />
-   {tourShown && <TourOverlay steps={tourSteps} onClose={() => { markTourSeen(); setTour(false) }} />}
+   <Presence>{tourShown && <TourOverlay steps={tourSteps} onClose={() => { markTourSeen(); setTour(false) }} />}</Presence>
   </div>
  )
 }

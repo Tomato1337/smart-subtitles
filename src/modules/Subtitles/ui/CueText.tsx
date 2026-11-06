@@ -63,9 +63,14 @@ export function CueText({ cue, chunks, karaoke, onPick, onHover, decorate, share
   }
   onPick?.({ cueIdx: cue.idx, span, anchor: el.getBoundingClientRect(), tokenStart: lo, tokenEnd: hi })
  }
- /** Spoken words lit, the rest dimmed; the fade keeps the light moving smoothly across words. */
+ /**
+  * Spoken words lit, the rest dimmed. 0.7 keeps the dimmed words readable on a bright frame (0.55
+  * fell below text contrast there). No per-word transition: every word of the overlay carries a
+  * text shadow, so each fade repainted the whole line for 220 ms, once per word, on the thread
+  * that also feeds the video.
+  */
  const spoken = (t: Token): CSSProperties | undefined =>
-  karaoke === undefined ? undefined : { opacity: t.start / total <= karaoke ? 1 : 0.55, transition: 'opacity 220ms ease-out' }
+  karaoke === undefined ? undefined : { opacity: t.start / total <= karaoke ? 1 : 0.7 }
 
  return (
   <span>

@@ -1,5 +1,5 @@
 import { errorText } from '@/common/api/tauri'
-import { codecFromInit, evictions, rangeAt, toRanges, type Range } from './mseBuffer'
+import { codecFromInit, evictions, rangeAt, takeAppend, toRanges, type Range } from './mseBuffer'
 
 /** Seconds kept behind the playhead. */
 const BACK = 90
@@ -27,6 +27,11 @@ const LANDED_BYTES = 64 << 10
 const LANDING_TIMEOUT = 30_000
 /** Give up looking for the init segment after this many bytes. */
 const INIT_LIMIT = 1 << 20
+/**
+ * Bytes per appendBuffer(). After a stall the queue holds several megabytes; appending them in one
+ * call made WebKitGTK parse them in one go on the main thread, which was the next stall.
+ */
+const APPEND_MAX = 1 << 20
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
@@ -498,10 +503,10 @@ export class MseStream {
       }
       return
     }
-    if (this.pending.length === 0) return
-    const buf = merge(this.pending)
-    this.pending = []
-    this.pendingBytes = 0
+    // One capped slice per call; `updateend` calls pump() again for the rest.
+    const buf = takeAppend(this.pending, APPEND_MAX)
+    if (!buf) return
+    this.pendingBytes -= buf.length
     try {
       sb.appendBuffer(buf)
     } catch (e) {

@@ -1,12 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
+import { Dialog, Icon, IconButton, Spinner, Switch, toast } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { AppConfig, LlmProvider, SetupStatus, SetupStep } from '@/common/types/ipc'
-import { Icon } from '@/common/ui/Icon'
-import { IconButton } from '@/common/ui/IconButton'
-import { Switch } from '@/common/ui/Switch'
-import { toast } from '@/common/ui/toast'
 import { IMAGE_BACKENDS } from './ImageFields'
 import { LlmFields } from './LlmFields'
 import { CEFR, Field, Secret, Text, inputClass } from './SettingsPanel'
@@ -44,49 +41,33 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
   const providers = useQuery({ queryKey: ['llm-providers'], queryFn: api.llmProviders })
   const setup = useQuery({ queryKey: ['setup'], queryFn: api.setupStatus })
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   const saved = config.data
   const status = setup.data
 
   return (
-    <div
-      className="fixed inset-0 z-[190] flex items-center justify-center bg-[color-mix(in_srgb,var(--md-sys-color-scrim)_55%,transparent)]"
-      onPointerDown={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div
-        role="dialog"
-        aria-label="Настройка Smart Subtitles"
-        className="md-pop flex max-h-[90vh] w-[720px] max-w-[96vw] flex-col bg-[var(--md-sys-color-surface-container-high)]"
-        style={{ borderRadius: 'var(--md-sys-shape-corner-extra-large)' }}
-      >
-        <div className="flex items-center justify-between px-6 pt-5 pb-2">
-          <h2 className="type-headline-small">{TITLES[step]}</h2>
-          <IconButton icon="close" label="Закрыть" onClick={onClose} />
-        </div>
-        <Progress step={step} />
-        {saved && status ? (
-          // Remount on every saved snapshot, including agent edits, so the draft starts from disk.
-          <Body
-            key={JSON.stringify(saved)}
-            saved={saved}
-            providers={providers.data}
-            setup={status}
-            step={step}
-            agentMode={agentMode}
-            onAgentMode={() => setAgentMode(true)}
-            onGo={setStep}
-            onClose={onClose}
-          />
-        ) : (
-          <div className="min-h-0 flex-1 px-6 pb-6"><div className="md-spinner m-6" /></div>
-        )}
+    <Dialog onClose={onClose} dismissible label="Настройка Smart Subtitles" className="max-h-[90vh] w-[720px] max-w-[96vw] p-0">
+      <div className="flex items-center justify-between px-6 pt-5 pb-2">
+        <h2 className="type-headline-small">{TITLES[step]}</h2>
+        <IconButton icon="close" label="Закрыть" onClick={onClose} />
       </div>
-    </div>
+      <Progress step={step} />
+      {saved && status ? (
+        // Remount on every saved snapshot, including agent edits, so the draft starts from disk.
+        <Body
+          key={JSON.stringify(saved)}
+          saved={saved}
+          providers={providers.data}
+          setup={status}
+          step={step}
+          agentMode={agentMode}
+          onAgentMode={() => setAgentMode(true)}
+          onGo={setStep}
+          onClose={onClose}
+        />
+      ) : (
+        <div className="min-h-0 flex-1 px-6 pb-6"><Spinner label="Загрузка" className="m-6" /></div>
+      )}
+    </Dialog>
   )
 }
 

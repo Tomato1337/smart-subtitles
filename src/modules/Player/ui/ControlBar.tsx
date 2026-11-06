@@ -1,6 +1,5 @@
 import { useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { IconButton } from '@/common/ui/IconButton'
-import { WavyProgress } from '@/common/ui/WavyProgress'
+import { IconButton, WavyProgress } from '@tomato1337/m3e-react'
 import { formatTime } from '@/common/utilities/time'
 import { usePlayer } from '../usePlayerController'
 import { usePlaybackStore } from '../store/playback'

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Icon } from './Icon'
+import { Icon } from '@tomato1337/m3e-react'
 
 /** Poster image with a movie-icon tile fallback; a missing or broken poster never shows a video frame. */
 export function Cover({ src, title, className = '' }: { src: string | null; title: string; className?: string }) {

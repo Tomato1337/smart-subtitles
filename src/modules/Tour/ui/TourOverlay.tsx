@@ -73,8 +73,8 @@ export function TourOverlay({ steps, onClose }: { steps: readonly TourStep[]; on
  useLayoutEffect(() => {
   const el = card.current
   if (!el) return
-  const size = el.getBoundingClientRect()
-  const to = placeCard(box, { width: size.width, height: size.height }, { width: window.innerWidth, height: window.innerHeight })
+  // Layout size: getBoundingClientRect() would include the entry scale while it runs.
+  const to = placeCard(box, { width: el.offsetWidth, height: el.offsetHeight }, { width: window.innerWidth, height: window.innerHeight })
   setPos((prev) => (prev !== null && prev.left === to.left && prev.top === to.top ? prev : to))
  }, [box, index, view])
 
@@ -121,11 +121,12 @@ export function TourOverlay({ steps, onClose }: { steps: readonly TourStep[]; on
  const last = resolveStep(steps, index + 1, 1, present) === null
 
  return (
-  <div className="fixed inset-0 z-[195]">
+  // Fades in and, kept mounted by the player's Presence, out; the card pops in on top.
+  <div className="m3e-motion-fade fixed inset-0 z-[195]">
    {box ? (
     <div
      aria-hidden
-     className="pointer-events-none absolute transition-all duration-200"
+     className="pointer-events-none absolute transition-[left,top,width,height] duration-200 motion-reduce:transition-none"
      style={{
       left: box.left - SPOT_PAD,
       top: box.top - SPOT_PAD,
@@ -143,7 +144,7 @@ export function TourOverlay({ steps, onClose }: { steps: readonly TourStep[]; on
     ref={card}
     role="dialog"
     aria-label="Обзор возможностей"
-    className="md-pop absolute w-[380px] max-w-[calc(100vw-16px)] bg-[var(--md-sys-color-surface-container-high)] p-5 shadow-xl"
+    className="m3e-motion-pop absolute w-[380px] max-w-[calc(100vw-16px)] bg-[var(--md-sys-color-surface-container-high)] p-5 shadow-xl"
     style={{
      borderRadius: 'var(--md-sys-shape-corner-extra-large)',
      left: pos?.left ?? 0,

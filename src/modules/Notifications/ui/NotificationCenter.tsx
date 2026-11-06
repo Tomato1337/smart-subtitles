@@ -1,16 +1,13 @@
 import { useRouterState } from '@tanstack/react-router'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { animateExit, Icon, IconButton, Presence } from '@tomato1337/m3e-react'
 import { useNotifications, type NotifyAction } from '@/common/api/notify'
 import type { AppNotification, NotifyLevel } from '@/common/types/ipc'
-import { Icon } from '@/common/ui/Icon'
-import { IconButton } from '@/common/ui/IconButton'
 
 /** Toasts on screen at once; older ones are already collapsing into the center. */
 const MAX_TOASTS = 3
 /** How often expired toasts are noticed. */
 const TICK_MS = 250
-/** Must match the `.toast-out*` animations in main.css. */
-const OUT_MS = 240
 
 /** The one visible trigger button: floating on the home screen, inside the top bar in the player. */
 let buttonEl: HTMLButtonElement | null = null
@@ -30,20 +27,15 @@ type CardProps = {
  onClose: () => void
  closeIcon: string
  closeLabel: string
- exiting?: boolean
  /** A standalone popup needs its own surface and shadow; a row inside the panel does not. */
  floating?: boolean
- /** Player layout: popups drop out of the top bar and shrink back up into it. */
- top?: boolean
 }
 
 /** One notification: identical markup for the popups and for the center rows. */
-function Card({ n, action, onClose, closeIcon, closeLabel, exiting = false, floating = false, top = false }: CardProps) {
+function Card({ n, action, onClose, closeIcon, closeLabel, floating = false }: CardProps) {
  const style = LEVEL[n.level]
- const enter = top ? 'toast-in-top' : 'toast-in'
- const leave = top ? 'toast-out-top' : 'toast-out'
  const surface = floating
-  ? `bg-[var(--md-sys-color-surface-container-high)] shadow-lg ${exiting ? leave : enter}`
+  ? 'bg-[var(--md-sys-color-surface-container-high)] shadow-lg'
   : 'bg-[var(--md-sys-color-surface-container-highest)]'
  return (
   <div
@@ -71,13 +63,21 @@ function Card({ n, action, onClose, closeIcon, closeLabel, exiting = false, floa
  )
 }
 
-/** Colored bell with a count; red when an error is present, orange otherwise. Hidden when empty. */
+/** Colored bell with a count; red when an error is present, orange otherwise. Pops in and out. */
 export function NotificationButton({ className = '' }: { className?: string }) {
+ const any = useNotifications((s) => s.items.length > 0)
+ return <Presence>{any && <Bell className={className} />}</Presence>
+}
+
+function Bell({ className }: { className: string }) {
  const items = useNotifications((s) => s.items)
  const open = useNotifications((s) => s.open)
  const setOpen = useNotifications((s) => s.setOpen)
- if (items.length === 0) return null
- const hasError = items.some((i) => i.level === 'error')
+ // While it pops out (the list has just emptied) it keeps the last count and colour.
+ const [last, setLast] = useState(items)
+ if (items.length > 0 && items !== last) setLast(items)
+ const shown = items.length > 0 ? items : last
+ const hasError = shown.some((i) => i.level === 'error')
  return (
   <button
    ref={(el) => { buttonEl = el }}
@@ -85,7 +85,8 @@ export function NotificationButton({ className = '' }: { className?: string }) {
    aria-label="Уведомления"
    data-tour="notifications"
    onClick={() => setOpen(!open)}
-   className={`md-pop state-layer flex shrink-0 items-center justify-center rounded-full shadow-lg ${className}`}
+   aria-expanded={open}
+   className={`m3e-motion-pop state-layer flex shrink-0 items-center justify-center rounded-full shadow-lg ${className}`}
    style={{ background: hasError ? 'var(--md-sys-color-error)' : 'var(--app-warning)', color: 'var(--md-sys-color-surface)' }}
   >
    <Icon name="notifications" size={20} />
@@ -93,7 +94,7 @@ export function NotificationButton({ className = '' }: { className?: string }) {
     className="type-label-small absolute -top-1 -right-1 flex min-w-5 items-center justify-center rounded-full px-1"
     style={{ background: 'var(--md-sys-color-surface-container-highest)', color: 'var(--md-sys-color-on-surface)' }}
    >
-    {items.length > 99 ? '99+' : items.length}
+    {shown.length > 99 ? '99+' : shown.length}
    </span>
   </button>
  )
@@ -111,21 +112,38 @@ function LiveToasts({ top }: { top: boolean }) {
  const open = useNotifications((s) => s.open)
  const pauseLive = useNotifications((s) => s.pauseLive)
  const resumeLive = useNotifications((s) => s.resumeLive)
- const [exiting, setExiting] = useState<number[]>([])
- const timers = useRef<number[]>([])
  const boxRef = useRef<HTMLDivElement>(null)
+ /** Popup wrappers by id, for their exit motion. */
+ const cards = useRef(new Map<number, HTMLDivElement>())
+ const hiding = useRef(new Set<number>())
 
+ // A popup leaves through its exit animation (`data-closing` → `.toast-in*[data-closing]` in
+ // main.css); the store drops it once that has finished, not after a duration copied from the CSS.
  const beginHide = useCallback((id: number, remove = false) => {
-  setExiting((x) => (x.includes(id) ? x : [...x, id]))
-  timers.current.push(window.setTimeout(() => {
+  if (hiding.current.has(id)) return
+  hiding.current.add(id)
+  const finish = () => {
+   hiding.current.delete(id)
    const st = useNotifications.getState()
    if (remove) void st.remove(id)
    else st.hideLive(id)
-   setExiting((x) => x.filter((v) => v !== id))
-  }, OUT_MS))
+  }
+  const el = cards.current.get(id)
+  if (el) void animateExit(el).then(finish)
+  else finish()
  }, [])
 
- useEffect(() => () => { timers.current.forEach((t) => window.clearTimeout(t)) }, [])
+ // A manual popover: the stack lives in the top layer, so it stays visible over a modal dialog;
+ // re-shown when a popup arrives to stay the topmost layer (behind an open modal it is inert —
+ // dismiss and actions work once the dialog closes).
+ const visible = !open && live.length > 0
+ const newest = live.at(-1)?.id
+ useLayoutEffect(() => {
+  const el = boxRef.current
+  if (!visible || !el || typeof el.showPopover !== 'function') return
+  if (el.matches(':popover-open')) el.hidePopover()
+  el.showPopover()
+ }, [visible, newest])
 
  // Publish where the stack ends so the info snackbar can stay out of its way.
  useEffect(() => {
@@ -144,19 +162,28 @@ function LiveToasts({ top }: { top: boolean }) {
   return () => window.clearInterval(t)
  }, [live, beginHide])
 
- if (open || live.length === 0) return null
+ if (!visible) return null
  const shown = live.slice(-MAX_TOASTS)
  // Home: newest at the bottom (near the button). Player: newest at the top, right under the top bar.
  const deck = top ? [...shown].reverse() : shown
  return (
-  <div ref={boxRef} className={`fixed z-[200] flex w-[min(90vw,380px)] flex-col gap-2 ${top ? 'top-18 right-3' : 'bottom-20 left-4'}`}>
+  <div
+   ref={boxRef}
+   popover="manual"
+   // The UA's popover box (centered, bordered, Canvas colours, scrolling) reset to a plain stack.
+   className={`fixed inset-auto z-[200] m-0 flex w-[min(90vw,380px)] flex-col gap-2 overflow-visible border-0 bg-transparent p-0 text-inherit ${top ? 'top-18 right-3' : 'bottom-20 left-4'}`}
+  >
    {deck.map((l) => {
     const n = items.find((x) => x.id === l.id)
     if (!n) return null
     return (
      <div
       key={l.id}
-      className="relative"
+      ref={(el) => {
+       if (el) cards.current.set(l.id, el)
+       return () => { cards.current.delete(l.id) }
+      }}
+      className={`relative ${top ? 'toast-in-top' : 'toast-in'}`}
       onPointerEnter={() => pauseLive(l.id)}
       onPointerLeave={() => resumeLive(l.id)}
      >
@@ -165,9 +192,7 @@ function LiveToasts({ top }: { top: boolean }) {
        action={actions.get(n.id)}
        closeIcon="close"
        closeLabel="Удалить"
-       exiting={exiting.includes(l.id)}
        floating
-       top={top}
        onClose={() => beginHide(n.id, true)}
       />
      </div>
@@ -218,36 +243,38 @@ export function NotificationCenter() {
   }
  }, [open, setOpen])
 
- if (items.length === 0) return null
+ // No early return when the list empties: the button and the panel play their exit first.
  return (
   <>
    <LiveToasts top={player} />
    {!player && <NotificationButton className="fixed bottom-4 left-4 z-[200] size-12" />}
-   {open && (
-    <div
-     ref={panelRef}
-     aria-label="Центр уведомлений"
-     role="dialog"
-     className={`md-pop fixed z-[200] flex max-h-[60vh] w-[min(90vw,420px)] flex-col bg-[var(--md-sys-color-surface-container-high)] shadow-xl ${player ? 'top-18 right-3 origin-top-right' : 'bottom-20 left-4 origin-bottom-left'}`}
-     style={{ borderRadius: 'var(--md-sys-shape-corner-large)' }}
-    >
-     <div className="flex items-center gap-2 py-2 pr-2 pl-4">
-      <div className="type-title-medium grow">Уведомления</div>
-      <button
-       type="button"
-       onClick={() => void clear()}
-       className="state-layer type-label-large relative shrink-0 rounded-full px-3 py-1.5 text-[var(--md-sys-color-primary)]"
-      >
-       Очистить все
-      </button>
-      <IconButton icon="close" label="Закрыть" onClick={() => setOpen(false)} />
+   <Presence>
+    {open && (
+     <div
+      ref={panelRef}
+      aria-label="Центр уведомлений"
+      role="dialog"
+      className={`m3e-motion-pop fixed z-[200] flex max-h-[60vh] w-[min(90vw,420px)] flex-col bg-[var(--md-sys-color-surface-container-high)] shadow-xl ${player ? 'top-18 right-3 origin-top-right' : 'bottom-20 left-4 origin-bottom-left'}`}
+      style={{ borderRadius: 'var(--md-sys-shape-corner-large)' }}
+     >
+      <div className="flex items-center gap-2 py-2 pr-2 pl-4">
+       <div className="type-title-medium grow">Уведомления</div>
+       <button
+        type="button"
+        onClick={() => void clear()}
+        className="state-layer type-label-large relative shrink-0 rounded-full px-3 py-1.5 text-[var(--md-sys-color-primary)]"
+       >
+        Очистить все
+       </button>
+       <IconButton icon="close" label="Закрыть" onClick={() => setOpen(false)} />
+      </div>
+      {/* overflow-x-hidden: a tooltip's abs-positioned box must not create a horizontal scrollbar. */}
+      <div className="flex flex-col gap-1.5 overflow-x-hidden overflow-y-auto px-2 pb-2">
+       {[...items].reverse().map((n) => <Row key={n.id} n={n} />)}
+      </div>
      </div>
-     {/* overflow-x-hidden: a tooltip's abs-positioned box must not create a horizontal scrollbar. */}
-     <div className="flex flex-col gap-1.5 overflow-x-hidden overflow-y-auto px-2 pb-2">
-      {[...items].reverse().map((n) => <Row key={n.id} n={n} />)}
-     </div>
-    </div>
-   )}
+    )}
+   </Presence>
   </>
  )
 }

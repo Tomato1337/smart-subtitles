@@ -1,12 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
+import { IconButton, Menu, MenuDivider, MenuItem, toast } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { SessionState } from '@/common/types/ipc'
-import { IconButton } from '@/common/ui/IconButton'
-import { Menu, MenuDivider, MenuItem } from '@/common/ui/Menu'
-import { toast } from '@/common/ui/toast'
 import { keyLabel, useHotkeysStore, withKey } from '@/modules/Hotkeys'
 import { usePlayer } from '@/modules/Player'
 import { useAnkiStore } from '@/modules/Anki'
@@ -31,8 +29,8 @@ export function SettingsMenu({ session, onChanged, onTour, onGuide, onHotkeys, o
 
   return (
     <div className="relative">
-      <IconButton icon="settings" label="Настройки" data-tour="settings" data-menu-trigger onClick={() => setOpen((v) => !v)} />
-      <Menu open={open} onClose={() => setOpen(false)} align="right" placement="above" className="w-80">
+      <IconButton icon="settings" label="Настройки" data-tour="settings" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)} />
+      <Menu open={open} onClose={() => setOpen(false)} align="end" placement="above" className="w-80 max-w-[calc(100vw-16px)]">
         <MenuDivider title="Аудиодорожка" />
         {session.audioTracks.map((t) => (
           <MenuItem key={t.index} label={trackLabel(t)} selected={t.index === audio} onClick={() => { setAudio(t.index); p.changeAudio(t.index); onChanged() }} />

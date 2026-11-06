@@ -1,9 +1,7 @@
 import { useState, type CSSProperties, type ReactNode } from 'react'
+import { IconButton, Menu, MenuItem, useTipAnchor } from '@tomato1337/m3e-react'
 import type { SessionState } from '@/common/types/ipc'
 import { Cover } from '@/common/ui/Cover'
-import { IconButton } from '@/common/ui/IconButton'
-import { useTipAnchor } from '@/common/ui/tipAnchor'
-import { Menu, MenuItem } from '@/common/ui/Menu'
 import { usePlayer } from '../usePlayerController'
 import { usePlaybackStore } from '../store/playback'
 import { TorrentSignalLine } from './TorrentSignalLine'
@@ -17,7 +15,7 @@ type Props = {
 }
 
 /** Dark overlay colours for buttons floating on the video. */
-const OVER_VIDEO = { '--tonal-bg': 'color-mix(in srgb, var(--md-sys-color-surface-container-highest) 80%, transparent)' } as CSSProperties
+const OVER_VIDEO = { '--m3e-icon-button-tonal-container': 'color-mix(in srgb, var(--md-sys-color-surface-container-highest) 80%, transparent)' } as CSSProperties
 
 export function TopBar({ session, onBack, onOpenEpisode, rightSlot }: Props) {
   const p = usePlayer()
@@ -53,8 +51,8 @@ export function TopBar({ session, onBack, onOpenEpisode, rightSlot }: Props) {
       <div className="flex flex-1 items-center justify-end gap-2">
         {hasList && (
           <div className="relative">
-            <IconButton icon="format_list_bulleted" label="Эпизоды" data-tour="episodes" data-menu-trigger variant="tonal" size="lg" tipPos="bottom" onClick={() => setEpisodes((v) => !v)} />
-            <Menu open={episodes} onClose={() => setEpisodes(false)} align="right">
+            <IconButton icon="format_list_bulleted" label="Эпизоды" data-tour="episodes" aria-haspopup="menu" aria-expanded={episodes} variant="tonal" size="lg" tipPos="bottom" onClick={() => setEpisodes((v) => !v)} />
+            <Menu open={episodes} onClose={() => setEpisodes(false)} align="end">
               {session.playlist.map((it, i) => (
                 <MenuItem key={i} label={it.title || `Файл ${i + 1}`} selected={i === idx} onClick={() => { setEpisodes(false); onOpenEpisode(i) }} />
               ))}
@@ -64,25 +62,25 @@ export function TopBar({ session, onBack, onOpenEpisode, rightSlot }: Props) {
         {hasNext && <IconButton icon="skip_next" label="Следующая серия" data-tour="next-episode" variant="tonal" size="lg" tipPos="bottom" onClick={() => onOpenEpisode(idx + 1)} />}
         <div data-tour="rate" role="group" aria-label="Скорость" className="flex items-center gap-0.5">
           <IconButton icon="fast_rewind" label="Медленнее" variant="tonal" size="lg" tipPos="bottom" radius="24px var(--md-sys-shape-corner-extra-small) var(--md-sys-shape-corner-extra-small) 24px" pressRadius="24px" onClick={() => p.setRate(rate - 0.05)} />
-          {/* IconButton's parts (.btn host for the tooltip, surface and state layer as children) with text instead of a glyph. */}
+          {/* The kit's icon-button parts (host for the tooltip, surface and state layer) with text instead of a glyph. */}
           <button
             type="button"
-            aria-label="Обычная скорость"
+            aria-label={`Скорость ${rate.toFixed(2)}×, сбросить до 1×`}
             data-tip="Сбросить до 1×"
             data-tip-pos="bottom"
+            data-variant="secondary"
+            data-size="lg"
             onClick={() => p.setRate(1)}
-            className="btn type-label-large relative inline-flex h-12 min-w-16 cursor-pointer items-center justify-center font-semibold tabular-nums text-[var(--btn-fg)]"
+            className="m3e-icon-button type-label-large font-semibold tabular-nums"
             style={{
-              '--btn-bg': 'var(--md-sys-color-secondary-container)',
-              '--btn-fg': 'var(--md-sys-color-on-secondary-container)',
-              '--btn-radius': 'var(--md-sys-shape-corner-extra-small)',
-              '--state-color': 'var(--md-sys-color-on-surface)',
+              '--m3e-icon-button-width': '64px',
+              '--m3e-icon-button-radius': 'var(--md-sys-shape-corner-extra-small)',
               ...rateTip,
             } as CSSProperties}
           >
-            <span aria-hidden="true" className="btn-surface" />
-            <span aria-hidden="true" className="btn-state" />
-            <span className="btn-glyph relative">{rate.toFixed(2)}×</span>
+            <span aria-hidden="true" data-part="surface" />
+            <span aria-hidden="true" data-part="state" />
+            <span data-part="icon">{rate.toFixed(2)}×</span>
           </button>
           <IconButton icon="fast_forward" label="Быстрее" variant="tonal" size="lg" tipPos="bottom" radius="var(--md-sys-shape-corner-extra-small) 24px 24px var(--md-sys-shape-corner-extra-small)" pressRadius="24px" onClick={() => p.setRate(rate + 0.05)} />
         </div>

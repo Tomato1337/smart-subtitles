@@ -1,3 +1,4 @@
+import { Presence } from '@tomato1337/m3e-react'
 import { HomeScreen } from '@/modules/Session'
 import { SettingsPanel, SetupWizard, useSetupWizard } from '@/modules/Settings'
 
@@ -9,7 +10,7 @@ export function HomePage() {
         <HomeScreen />
       </div>
       <SettingsPanel onOpenWizard={wizard.show} />
-      {wizard.open && <SetupWizard onClose={wizard.close} />}
+      <Presence>{wizard.open && <SetupWizard onClose={wizard.close} />}</Presence>
     </div>
   )
 }

@@ -62,6 +62,22 @@ packaging/arch/PKGBUILD    Arch package, repacked from the release .deb
 - External tools (ffmpeg, ffprobe, uv, omp) start only through `proc::command` (foreground) or `proc::background` (`nice -n 10` on Unix, below-normal priority on Windows; both hide the console window on Windows), and are looked up with `proc::find`/`find_in`, which add `.exe`/`.cmd` on Windows. Never `Command::new("nice")` or a hard-coded `/` path separator. Pass a session source to ffmpeg/ffprobe through `media::input`: ffmpeg does not percent-decode `file://` URLs.
 - Platform code is `#[cfg(unix)]`/`#[cfg(windows)]`/`#[cfg(target_os = …)]`. With no Windows machine at hand, check it with `cargo check --target x86_64-pc-windows-gnu` (needs a mingw C compiler, e.g. a `zig cc` wrapper) or a manual run of the release workflow.
 
+## UI kit (m3e)
+
+Components, tokens and motion come from the `m3e` kit (Material 3 Expressive), shared with the English course (УМК): the npm packages `@tomato1337/m3e-tokens` and `@tomato1337/m3e-react`, built from <https://github.com/Tomato1337/m3e>. A plain `npm install` gets them; nothing else needs to be cloned.
+
+- Change or add components in the kit repository (its `AGENTS.md`; `npm run check` there), never as local copies. The app keeps only app-specific styles in `src/app/styles/main.css` (`@layer components`).
+- To try a kit change here before it is published: check the kit out at `../m3e`, `npm install && npm run build:packages` there, then `npm link ../m3e/packages/tokens ../m3e/packages/react` here; rebuild the packages after each kit edit, `npm install` returns to the registry versions. `resolve.dedupe` and `server.fs.allow` in `vite.config.ts` and the React `paths` in `tsconfig.app.json` exist for this linked setup.
+- Releasing a kit change: publish it from the kit repository (a `v*` tag), then bump both `@tomato1337/m3e-*` versions in `package.json` together with the app change that needs it.
+- Layer order is declared once in `main.css`: `@layer theme, base, m3e, components, utilities;`. Tailwind utilities override the kit; no `!important`.
+- Dialogs are the kit's `<Dialog>` on a native modal `<dialog>`: no hand-made scrim, `role="dialog"`, `aria-modal`, focus trap or Esc listener. `onClose` is the close request (Esc, back gesture, backdrop with `dismissible`); point it at the safe action. Render dialogs conditionally inside `<Presence>` so closing animates. App hotkeys ignore keys while a `dialog[open]` exists.
+- Motion: whatever enters also exits. Conditional UI goes inside `<Presence>` with an `m3e-motion-*` class, or uses `usePresence(open, ref)` when the closed state changes the layout (the player's side panels). Exits are transitions or animations on `[data-closing]` (`animateExit`); never remove an element on a timer copied from CSS. Movement (translate, scale, size, position) needs `prefers-reduced-motion: no-preference` (`motion-reduce:transition-none` on utilities); fades may stay; no global duration kill switch.
+- Menus: kit `<Menu>` (popover) anchored to the wrapper of its trigger; the trigger gets `aria-haspopup="menu"` and `aria-expanded`. Icons: kit `<Icon>` (Material Symbols Rounded). Toasts: `toast()` from the kit; warnings and errors: the notification center.
+
+## Browser support
+
+The UI runs in the system web view: WebKitGTK on Linux, WKWebView on macOS, WebView2 (Chromium) on Windows. The floor is WebKitGTK 2.46 / Safari 17.5 and Chromium 123 (`build.target` and `cssTarget` in `vite.config.ts`; an older CSS target makes Lightning CSS rewrite `light-dark()` and breaks the theme). Anything newer is progressive enhancement behind `@supports` or a feature check, with a fallback in the same change. WebKit lacks `overlay`, `closedby`, `requestClose()`, CSS anchor positioning, `interpolate-size` and `@starting-style` on `::backdrop`; the kit already covers those. Check motion and focus in WebKitGTK, which every Linux package uses, not only in Chromium.
+
 ## Changing the config
 
 A config field touches several places; all of them must change together:

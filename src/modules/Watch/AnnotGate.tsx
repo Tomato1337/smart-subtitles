@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
+import { Dialog, Spinner } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { SessionState } from '@/common/types/ipc'
@@ -59,17 +60,15 @@ export function AnnotGate({ session, open, resumeOnClose, onOpenChange }: Props)
   wasOpen.current = open
  }, [open, resumeOnClose, p])
 
- // Same overlay shell as the other dialogs of the app; focus starts on the safe action and comes back.
- const overlay = useRef<HTMLDivElement>(null)
- const invoker = useRef<HTMLElement | null>(null)
+ // The last screen stays up while the dialog plays its exit.
+ const [mode, setMode] = useState<'ask' | 'wait'>(open ?? 'ask')
+ if (open !== null && open !== mode) setMode(open)
+
+ // The dialog focuses its safe action on open and gives focus back on close; switching from the
+ // question to the wait screen removes the focused button, so focus moves to "Пропустить".
+ const dialog = useRef<HTMLDialogElement>(null)
  useEffect(() => {
-  if (open === null) {
-   invoker.current?.focus()
-   invoker.current = null
-   return
-  }
-  invoker.current ??= document.activeElement instanceof HTMLElement ? document.activeElement : null
-  overlay.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus()
+  if (open !== null) dialog.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus()
  }, [open])
 
  const estimate = useQuery({
@@ -105,95 +104,95 @@ export function AnnotGate({ session, open, resumeOnClose, onOpenChange }: Props)
  const e = estimate.data
  const c = cost.data
 
- if (open === null) return null
-
  return (
-  <div className="fixed inset-0 z-[180] flex items-center justify-center bg-[color-mix(in_srgb,var(--md-sys-color-scrim)_50%,transparent)]">
-   <div
-    ref={overlay}
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="annot-gate-title"
-    className="md-pop flex max-h-[85vh] w-[520px] max-w-[95vw] flex-col gap-4 overflow-y-auto bg-[var(--md-sys-color-surface-container-high)] p-6"
-    style={{ borderRadius: 'var(--md-sys-shape-corner-extra-large)', userSelect: 'text' }}
-   >
-    {open === 'ask' ? (
-     <>
-      <h2 id="annot-gate-title" className="type-headline-small">Разбор диалогов</h2>
-      {estimate.isPending && (
-       <div className="flex items-center gap-4">
-        <span className="md-spinner" aria-hidden="true" style={{ width: 28, height: 28, borderWidth: 3 }} />
-        <span className="type-body-medium">Считаю объём…</span>
-       </div>
-      )}
-      {estimate.isError && <p className="type-body-medium text-[var(--md-sys-color-error)]">{errorText(estimate.error)}</p>}
-      {e && (
-       <div className="flex flex-col gap-1">
-        <p className="type-body-medium">Осталось разобрать {e.cues.toLocaleString('ru-RU')} реплик ({e.batches.toLocaleString('ru-RU')} запросов).</p>
-        <p className="type-body-medium">Входные токены ≈ {e.inputTokens.toLocaleString('ru-RU')}, из них ≈ {e.cachedTokens.toLocaleString('ru-RU')} могут читаться из кэша провайдера.</p>
-        <p className="type-body-medium">Выходные токены ≈ {e.outputTokens.toLocaleString('ru-RU')}.</p>
-        {e.partial && <p className="type-body-medium">Субтитры ещё загружаются — оценка пересчитана на весь фильм.</p>}
-        <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">Оценка без запроса к модели, точность ±15%.</p>
-        {model.data && <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">Модель разбора: {model.data.key}</p>}
-       </div>
-      )}
-      <div className="flex flex-col gap-2">
-       <button
-        type="button"
-        disabled={!e || cost.isPending}
-        onClick={() => cost.mutate()}
-        className="state-layer state-on-surface type-label-large relative flex w-fit items-center gap-2 rounded-full px-3 py-1.5 text-[var(--md-sys-color-primary)] disabled:opacity-50"
-       >
-        {cost.isPending && <span className="md-spinner" aria-hidden="true" style={{ width: 16, height: 16, borderWidth: 2 }} />}
-        Рассчитать стоимость
-       </button>
-       {cost.isError && <p className="type-body-medium text-[var(--md-sys-color-error)]">{errorText(cost.error)}</p>}
-       {c && (
-        <div className="flex flex-col gap-1">
-         {c.usd !== null && <p className="type-title-medium">≈ ${c.usd.toFixed(2)}</p>}
-         {c.inputPrice !== null && c.cachedPrice !== null && c.outputPrice !== null && (
-          <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
-           вход ${c.inputPrice} · кэш ${c.cachedPrice} · выход ${c.outputPrice} за 1M
-          </p>
-         )}
-         {c.note && <p className="type-body-small">{c.note}</p>}
-         {c.source === 'llm' && (
-          <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
-           Оценка модели {c.model}, может быть неточной
-          </p>
-         )}
-        </div>
-       )}
-      </div>
-      <div className="flex justify-end gap-2">
-       <button type="button" data-autofocus disabled={busy} className={outlined} onClick={() => void decide(false)}>
-        Смотреть без разбора
-       </button>
-       <button type="button" disabled={busy || !model.data} className={outlined} onClick={() => void decide(true, true)}>
-        Запомнить для этой модели
-       </button>
-       <button type="button" disabled={busy} className={filled} onClick={() => void decide(true)}>
-        Разобрать
-       </button>
-      </div>
-     </>
-    ) : (
-     <>
-      <h2 id="annot-gate-title" className="type-headline-small">Готовлю начало просмотра</h2>
+  <Dialog
+   ref={dialog}
+   open={open !== null}
+   // Esc means the safe action: watch without analysis, or skip the wait.
+   onClose={() => {
+    if (mode === 'wait') onOpenChange(null)
+    else if (!busy) void decide(false)
+   }}
+   aria-labelledby="annot-gate-title"
+   className="max-h-[85vh] w-[520px] max-w-[95vw] gap-4"
+   style={{ userSelect: 'text' }}
+  >
+   {mode === 'ask' ? (
+    <>
+     <h2 id="annot-gate-title" className="type-headline-small">Разбор диалогов</h2>
+     {estimate.isPending && (
       <div className="flex items-center gap-4">
-       <span className="md-spinner" aria-hidden="true" />
-       <span className="type-body-medium">
-        Разобрано {annot?.done ?? 0} из {annot?.total ?? 0} частей. Остальное доразберётся в фоне.
-       </span>
+       <Spinner size={28} width={3} />
+       <span className="type-body-medium">Считаю объём…</span>
       </div>
-      <div className="flex justify-end">
-       <button type="button" data-autofocus className={outlined} onClick={() => onOpenChange(null)}>
-        Пропустить
-       </button>
+     )}
+     {estimate.isError && <p className="type-body-medium text-[var(--md-sys-color-error)]">{errorText(estimate.error)}</p>}
+     {e && (
+      <div className="flex flex-col gap-1">
+       <p className="type-body-medium">Осталось разобрать {e.cues.toLocaleString('ru-RU')} реплик ({e.batches.toLocaleString('ru-RU')} запросов).</p>
+       <p className="type-body-medium">Входные токены ≈ {e.inputTokens.toLocaleString('ru-RU')}, из них ≈ {e.cachedTokens.toLocaleString('ru-RU')} могут читаться из кэша провайдера.</p>
+       <p className="type-body-medium">Выходные токены ≈ {e.outputTokens.toLocaleString('ru-RU')}.</p>
+       {e.partial && <p className="type-body-medium">Субтитры ещё загружаются — оценка пересчитана на весь фильм.</p>}
+       <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">Оценка без запроса к модели, точность ±15%.</p>
+       {model.data && <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">Модель разбора: {model.data.key}</p>}
       </div>
-     </>
-    )}
-   </div>
-  </div>
+     )}
+     <div className="flex flex-col gap-2">
+      <button
+       type="button"
+       disabled={!e || cost.isPending}
+       onClick={() => cost.mutate()}
+       className="state-layer state-on-surface type-label-large relative flex w-fit items-center gap-2 rounded-full px-3 py-1.5 text-[var(--md-sys-color-primary)] disabled:opacity-50"
+      >
+       {cost.isPending && <Spinner size={16} width={2} />}
+       Рассчитать стоимость
+      </button>
+      {cost.isError && <p className="type-body-medium text-[var(--md-sys-color-error)]">{errorText(cost.error)}</p>}
+      {c && (
+       <div className="flex flex-col gap-1">
+        {c.usd !== null && <p className="type-title-medium">≈ ${c.usd.toFixed(2)}</p>}
+        {c.inputPrice !== null && c.cachedPrice !== null && c.outputPrice !== null && (
+         <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
+          вход ${c.inputPrice} · кэш ${c.cachedPrice} · выход ${c.outputPrice} за 1M
+         </p>
+        )}
+        {c.note && <p className="type-body-small">{c.note}</p>}
+        {c.source === 'llm' && (
+         <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
+          Оценка модели {c.model}, может быть неточной
+         </p>
+        )}
+       </div>
+      )}
+     </div>
+     <div className="flex justify-end gap-2">
+      <button type="button" data-autofocus disabled={busy} className={outlined} onClick={() => void decide(false)}>
+       Смотреть без разбора
+      </button>
+      <button type="button" disabled={busy || !model.data} className={outlined} onClick={() => void decide(true, true)}>
+       Запомнить для этой модели
+      </button>
+      <button type="button" disabled={busy} className={filled} onClick={() => void decide(true)}>
+       Разобрать
+      </button>
+     </div>
+    </>
+   ) : (
+    <>
+     <h2 id="annot-gate-title" className="type-headline-small">Готовлю начало просмотра</h2>
+     <div className="flex items-center gap-4">
+      <Spinner />
+      <span className="type-body-medium">
+       Разобрано {annot?.done ?? 0} из {annot?.total ?? 0} частей. Остальное доразберётся в фоне.
+      </span>
+     </div>
+     <div className="flex justify-end">
+      <button type="button" data-autofocus className={outlined} onClick={() => onOpenChange(null)}>
+       Пропустить
+      </button>
+     </div>
+    </>
+   )}
+  </Dialog>
  )
 }

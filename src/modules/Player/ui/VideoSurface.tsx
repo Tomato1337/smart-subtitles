@@ -1,6 +1,6 @@
+import { Icon, Spinner } from '@tomato1337/m3e-react'
 import { usePlayer } from '../usePlayerController'
 import { usePlaybackStore } from '../store/playback'
-import { Icon } from '@/common/ui/Icon'
 
 export function VideoSurface() {
   const p = usePlayer()
@@ -11,7 +11,7 @@ export function VideoSurface() {
       <video ref={p.videoRef} className="size-full object-contain" playsInline />
       {buffering && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="md-spinner" role="progressbar" aria-label="Загрузка" />
+          <Spinner label="Загрузка" />
         </div>
       )}
       {!playing && !buffering && (

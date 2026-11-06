@@ -1,8 +1,8 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
+import { IconButton } from '@tomato1337/m3e-react'
 import { api, errorText } from '@/common/api/tauri'
 import type { AppConfig, LlmProvider } from '@/common/types/ipc'
-import { IconButton } from '@/common/ui/IconButton'
 import { useDebounced } from '@/common/utilities/useDebounced'
 import { Field, Secret, Text, inputClass } from './SettingsPanel'
 

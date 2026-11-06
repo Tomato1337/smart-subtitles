@@ -1,11 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
+import { Icon, IconButton, shapeClip } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { ChatMessage } from '@/common/types/ipc'
-import { Icon } from '@/common/ui/Icon'
-import { IconButton } from '@/common/ui/IconButton'
-import { shapeClip } from '@/common/ui/shapes'
 import { formatTime } from '@/common/utilities/time'
 import { CARD_PHASE_RU, useCardsStore } from '@/modules/Cards'
 import { useHotkeysStore, withKey } from '@/modules/Hotkeys'
@@ -73,12 +71,19 @@ type PanelProps = {
   cueText: (cueIdx: number) => string
   onSeekCue: (cueIdx: number) => void
   onSeekTime: (t: number) => void
+  /**
+   * Rendered while open and through its exit slide (the player screen's `usePresence`); the
+   * component itself stays mounted, so an unsent draft survives closing the panel.
+   */
+  mounted: boolean
+  /** The panel root, for that presence. */
+  ref?: Ref<HTMLElement>
 }
 
 const BUBBLE = 'type-body-medium break-words'
 
 /** Film chat with the agent (480 px, extra-large corners, level-3 surface): one thread per film, every message carries the learner's position. */
-export function AgentPanel({ mediaId, locate, here, cueTime, cueText, onSeekCue, onSeekTime }: PanelProps) {
+export function AgentPanel({ mounted, mediaId, locate, here, cueTime, cueText, onSeekCue, onSeekTime, ref }: PanelProps) {
   const { open, setOpen, live: l } = useAgentStore()
   const hotkey = useHotkeysStore((s) => s.bindings)
   const { ask } = useAgentActions(mediaId, locate)
@@ -88,7 +93,7 @@ export function AgentPanel({ mediaId, locate, here, cueTime, cueText, onSeekCue,
   // Scroll the message list itself. `scrollIntoView` would also scroll every ancestor, including the
   // overflow-hidden video area: while the panel slides in from off-screen that shifted the film sideways for good.
   useEffect(() => { const el = list.current; if (el) el.scrollTop = el.scrollHeight }, [open, history.data, l.text])
-  if (!open) return null
+  if (!mounted) return null
 
   const submit = () => {
     const t = text.trim()
@@ -104,7 +109,7 @@ export function AgentPanel({ mediaId, locate, here, cueTime, cueText, onSeekCue,
   }
 
   return (
-    <aside className="md-slide ml-2 flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--md-sys-shape-corner-extra-large)] bg-[var(--md-sys-color-surface-container-low)]" style={{ userSelect: 'text' }} aria-label="Агент">
+    <aside ref={ref} className="m3e-motion-from-right ml-2 flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--md-sys-shape-corner-extra-large)] bg-[var(--md-sys-color-surface-container-low)]" style={{ userSelect: 'text' }} aria-label="Агент">
       <div className="flex items-center gap-3 pl-4 pr-2 pt-4 pb-3">
         <span aria-hidden="true" className="grid size-11 shrink-0 place-items-center bg-[var(--md-sys-color-tertiary-container)] text-[var(--md-sys-color-on-tertiary-container)]" style={{ clipPath: shapeClip.burst12, WebkitClipPath: shapeClip.burst12 }}>
           <Icon name="auto_awesome" fill />
@@ -150,7 +155,7 @@ export function AgentPanel({ mediaId, locate, here, cueTime, cueText, onSeekCue,
           placeholder="Спросить про фильм или эту сцену…"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }}
-          className="type-body-medium max-h-32 min-h-[52px] min-w-0 flex-1 resize-none rounded-[26px] bg-[var(--md-sys-color-surface-container-highest)] px-6 py-3.5 outline-none"
+          className="type-body-medium max-h-32 min-h-[52px] min-w-0 flex-1 resize-none rounded-[26px] bg-[var(--md-sys-color-surface-container-highest)] px-6 py-3.5"
         />
         <IconButton icon="arrow_upward" fill variant="filled" shape="cookie9" className="!size-[52px]" label="Отправить" disabled={!text.trim() || l.busy} onClick={submit} />
       </div>

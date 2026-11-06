@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
+import { toast } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText, onEvent } from '@/common/api/tauri'
-import { toast } from '@/common/ui/toast'
 import { useCardsStore } from './store/cardsStore'
 
 /**

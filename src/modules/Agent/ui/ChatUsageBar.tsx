@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
+import { Icon } from '@tomato1337/m3e-react'
 import { api } from '@/common/api/tauri'
-import { Icon } from '@/common/ui/Icon'
 import { formatTokens, formatUsd } from '@/common/utilities/tokens'
 import { agentUsageKey } from '../useAgent'
 

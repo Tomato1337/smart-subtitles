@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import { Dialog, Presence, Spinner, toast } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { WordDraft } from '@/common/types/ipc'
-import { toast } from '@/common/ui/toast'
 import { useDebounced } from '@/common/utilities/useDebounced'
 import { lookupSpan, useAnkiStore } from '@/modules/Anki'
 import { useCardsStore } from '../store/cardsStore'
@@ -91,7 +91,7 @@ function Form({ mediaId, cueIdx, initial, onDone }: { mediaId: string; cueIdx: n
                 rows={k === 'cloze_sentence' || k === 'full_sentence' || k === 'image_prompt' ? 2 : 1}
                 value={d[k]}
                 onChange={(e) => setD({ ...d, [k]: e.target.value })}
-                className="type-body-medium resize-none rounded-[var(--md-sys-shape-corner-small)] border border-[var(--md-sys-color-outline)] bg-transparent px-3 py-2 outline-none focus:border-[var(--md-sys-color-primary)]"
+                className="type-body-medium resize-none rounded-[var(--md-sys-shape-corner-small)] border border-[var(--md-sys-color-outline)] bg-transparent px-3 py-2 outline-hidden focus:border-[var(--md-sys-color-primary)] focus:ring-1 focus:ring-[var(--md-sys-color-primary)]"
                 style={{ userSelect: 'text' }}
               />
               {k === 'image_prompt' && canGenerate && (
@@ -101,7 +101,7 @@ function Form({ mediaId, cueIdx, initial, onDone }: { mediaId: string; cueIdx: n
                   onClick={() => void generate()}
                   className="state-layer type-label-large relative mt-1 flex items-center gap-2 self-start rounded-full bg-[var(--md-sys-color-secondary-container)] px-4 py-1.5 text-[var(--md-sys-color-on-secondary-container)] disabled:opacity-50"
                 >
-                  {generating && <span className="md-spinner !size-4" />}
+                  {generating && <Spinner size={16} width={2} />}
                   {generating ? 'Генерирую картинку…' : 'Сгенерировать картинку'}
                 </button>
               )}
@@ -112,7 +112,7 @@ function Form({ mediaId, cueIdx, initial, onDone }: { mediaId: string; cueIdx: n
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={onDone} className="state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-primary)]">Отмена</button>
           <button type="button" disabled={busy} onClick={() => void add()} className="state-layer state-on-primary type-label-large relative flex items-center gap-2 rounded-full bg-[var(--md-sys-color-primary)] px-6 py-2 text-[var(--md-sys-color-on-primary)] disabled:opacity-50">
-            {busy && <span className="md-spinner !size-4" />}
+            {busy && <Spinner size={16} width={2} />}
             {busy ? 'Добавляю…' : 'Добавить'}
           </button>
         </div>
@@ -123,7 +123,7 @@ function Form({ mediaId, cueIdx, initial, onDone }: { mediaId: string; cueIdx: n
         ) : preview.data ? (
           <CardPreview preview={preview.data} />
         ) : (
-          <div className="md-spinner m-6" />
+          <Spinner label="Загружаю предпросмотр" className="m-6" />
         )}
       </div>
     </div>
@@ -132,28 +132,30 @@ function Form({ mediaId, cueIdx, initial, onDone }: { mediaId: string; cueIdx: n
 
 /** MD3 dialog: LLM-made flashcard draft the learner can edit before it goes to Anki. */
 export function CardDraftModal({ mediaId }: { mediaId: string }) {
-  const { draft, closeDraft } = useCardsStore()
+  const draft = useCardsStore((s) => s.draft)
+  return <Presence>{draft && <DraftDialog mediaId={mediaId} draft={draft} />}</Presence>
+}
+
+/** Takes the draft as a prop: while Presence plays the exit, it keeps showing the closed draft. */
+function DraftDialog({ mediaId, draft }: { mediaId: string; draft: { cueIdx: number; span: string | null } }) {
+  const closeDraft = useCardsStore((s) => s.closeDraft)
   const q = useQuery({
-    queryKey: ['draft', mediaId, draft?.cueIdx, draft?.span],
-    queryFn: () => api.cardsDraft(mediaId, draft!.cueIdx, draft!.span),
-    enabled: !!draft,
+    queryKey: ['draft', mediaId, draft.cueIdx, draft.span],
+    queryFn: () => api.cardsDraft(mediaId, draft.cueIdx, draft.span),
     gcTime: 0,
     staleTime: 0,
   })
-  if (!draft) return null
   return (
-    <div className="fixed inset-0 z-[180] flex items-center justify-center bg-[color-mix(in_srgb,var(--md-sys-color-scrim)_50%,transparent)]" onPointerDown={(e) => { if (e.target === e.currentTarget) closeDraft() }}>
-      <div role="dialog" aria-label="Карточка Anki" className="md-pop flex max-h-[90vh] w-[1040px] max-w-[95vw] flex-col bg-[var(--md-sys-color-surface-container-high)] p-6" style={{ borderRadius: 'var(--md-sys-shape-corner-extra-large)', userSelect: 'text' }}>
-        <h2 className="type-headline-small mb-4">Карточка в Anki</h2>
-        {q.isLoading && <div className="flex items-center gap-3 py-8"><div className="md-spinner !size-8" /><span className="type-body-medium">Составляю карточку…</span></div>}
-        {q.isError && (
-          <>
-            <p className="type-body-medium text-[var(--md-sys-color-error)]">{errorText(q.error)}</p>
-            <div className="mt-4 flex justify-end"><button type="button" onClick={closeDraft} className="type-label-large rounded-full px-4 py-2 text-[var(--md-sys-color-primary)]">Закрыть</button></div>
-          </>
-        )}
-        {q.data && <Form key={`${draft.cueIdx}|${draft.span}`} mediaId={mediaId} cueIdx={draft.cueIdx} initial={q.data} onDone={closeDraft} />}
-      </div>
-    </div>
+    <Dialog onClose={closeDraft} dismissible aria-labelledby="card-draft-title" className="max-h-[90vh] w-[1040px] max-w-[95vw]" style={{ userSelect: 'text' }}>
+      <h2 id="card-draft-title" className="type-headline-small mb-4">Карточка в Anki</h2>
+      {q.isLoading && <div className="flex items-center gap-3 py-8"><Spinner size={32} width={3} /><span className="type-body-medium">Составляю карточку…</span></div>}
+      {q.isError && (
+        <>
+          <p className="type-body-medium text-[var(--md-sys-color-error)]">{errorText(q.error)}</p>
+          <div className="mt-4 flex justify-end"><button type="button" data-autofocus onClick={closeDraft} className="type-label-large rounded-full px-4 py-2 text-[var(--md-sys-color-primary)]">Закрыть</button></div>
+        </>
+      )}
+      {q.data && <Form key={`${draft.cueIdx}|${draft.span}`} mediaId={mediaId} cueIdx={draft.cueIdx} initial={q.data} onDone={closeDraft} />}
+    </Dialog>
   )
 }

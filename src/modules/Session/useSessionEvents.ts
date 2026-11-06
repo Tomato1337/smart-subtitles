@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
+import { toast } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, onEvent } from '@/common/api/tauri'
-import { toast } from '@/common/ui/toast'
 import { useSessionStore } from './store/sessionStore'
 
 /** Bridges backend session events into the store; `onOpened` is called when a session is ready (navigate to the player). */

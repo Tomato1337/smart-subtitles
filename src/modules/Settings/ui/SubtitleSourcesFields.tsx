@@ -1,6 +1,5 @@
+import { IconButton, Switch } from '@tomato1337/m3e-react'
 import type { SubtitleSource } from '@/common/types/ipc'
-import { IconButton } from '@/common/ui/IconButton'
-import { Switch } from '@/common/ui/Switch'
 
 const SOURCES: [SubtitleSource, string, string][] = [
  ['torrserver', 'TorrServer', 'Файлы субтитров внутри раздачи'],

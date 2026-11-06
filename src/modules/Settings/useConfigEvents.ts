@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
+import { toast } from '@tomato1337/m3e-react'
 import { onEvent } from '@/common/api/tauri'
-import { toast } from '@/common/ui/toast'
 
 /** A config saved by the UI or by an agent: refetch what depends on it, announce agent-made edits. */
 export function useConfigEvents() {

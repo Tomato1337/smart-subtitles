@@ -1,8 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { useEffect } from 'react'
+import { Dialog, IconButton } from '@tomato1337/m3e-react'
 import { api } from '@/common/api/tauri'
 import type { AppConfig, LlmProvider, TaskLlm } from '@/common/types/ipc'
-import { IconButton } from '@/common/ui/IconButton'
 import { formatTokens, formatUsd, estimateUsd } from '@/common/utilities/tokens'
 import { EFFORT_LABEL, TASKS, WEIGHT_LABEL, type TaskProfile, type Weight } from '../taskProfiles'
 import { groupProviders, ModelPicker } from './LlmFields'
@@ -38,44 +37,28 @@ export type TaskModelsDialogProps = {
 export function TaskModelsDialog({ cfg, set, onSave, dirty, saving, onClose }: TaskModelsDialogProps) {
  const providers = useQuery({ queryKey: ['llm-providers'], queryFn: api.llmProviders })
 
- useEffect(() => {
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-  window.addEventListener('keydown', onKey)
-  return () => window.removeEventListener('keydown', onKey)
- }, [onClose])
-
  return (
-  <div
-   className="fixed inset-0 z-[185] flex items-center justify-center bg-[color-mix(in_srgb,var(--md-sys-color-scrim)_55%,transparent)]"
-   onPointerDown={(e) => { if (e.target === e.currentTarget) onClose() }}
-  >
-   <div
-    role="dialog"
-    aria-label="Модели по задачам"
-    className="md-pop flex max-h-[92vh] w-[760px] max-w-[96vw] flex-col bg-[var(--md-sys-color-surface-container-high)]"
-    style={{ borderRadius: 'var(--md-sys-shape-corner-extra-large)' }}
-   >
-    <div className="flex items-center justify-between px-6 pt-5 pb-2">
-     <h2 className="type-headline-small">Модели по задачам</h2>
-     <IconButton icon="close" label="Закрыть" onClick={onClose} />
-    </div>
-
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto px-6 pb-4">
-     <p className={HINT}>Каждой задаче можно дать свою модель. По умолчанию все задачи используют основные настройки.</p>
-     {TASKS.map((task) => (
-      <TaskCard key={task.key} task={task} cfg={cfg} set={set} providers={providers.data} />
-     ))}
-     <p className={HINT}>Оценки по журналу реальных запросов. Цены: ~/.omp/agent/models.yml, иначе models.dev.</p>
-    </div>
-
-    <div className="flex items-center justify-end gap-2 border-t border-[var(--md-sys-color-outline-variant)] px-6 py-4">
-     <button type="button" className={TEXT_BUTTON} onClick={onClose}>Закрыть</button>
-     <button type="button" className={PRIMARY} disabled={!dirty || saving} onClick={onSave}>
-      Сохранить
-     </button>
-    </div>
+  <Dialog onClose={onClose} dismissible aria-labelledby="task-models-title" className="max-h-[92vh] w-[760px] max-w-[96vw] p-0">
+   <div className="flex items-center justify-between px-6 pt-5 pb-2">
+    <h2 id="task-models-title" className="type-headline-small">Модели по задачам</h2>
+    <IconButton icon="close" label="Закрыть" onClick={onClose} />
    </div>
-  </div>
+
+   <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto px-6 pb-4">
+    <p className={HINT}>Каждой задаче можно дать свою модель. По умолчанию все задачи используют основные настройки.</p>
+    {TASKS.map((task) => (
+     <TaskCard key={task.key} task={task} cfg={cfg} set={set} providers={providers.data} />
+    ))}
+    <p className={HINT}>Оценки по журналу реальных запросов. Цены: ~/.omp/agent/models.yml, иначе models.dev.</p>
+   </div>
+
+   <div className="flex items-center justify-end gap-2 border-t border-[var(--md-sys-color-outline-variant)] px-6 py-4">
+    <button type="button" className={TEXT_BUTTON} onClick={onClose}>Закрыть</button>
+    <button type="button" className={PRIMARY} disabled={!dirty || saving} onClick={onSave}>
+     Сохранить
+    </button>
+   </div>
+  </Dialog>
  )
 }
 

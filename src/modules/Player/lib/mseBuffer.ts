@@ -41,3 +41,29 @@ export function evictions(rs: Range[], t: number, back: number, ahead: number): 
   }
   return out
 }
+
+/**
+ * The next SourceBuffer append taken off the front of `queue` (mutated): whole chunks merged up to
+ * `max` bytes, or the first `max` bytes of a larger chunk. Splitting anywhere is safe, MSE parses a
+ * byte stream and a segment may span appends. Null when the queue is empty.
+ */
+export function takeAppend(queue: Uint8Array<ArrayBuffer>[], max: number): Uint8Array<ArrayBuffer> | null {
+  const first = queue[0]
+  if (first === undefined) return null
+  if (first.length > max) {
+    queue[0] = first.subarray(max)
+    return first.subarray(0, max)
+  }
+  let bytes = 0
+  let count = 0
+  while (count < queue.length && bytes + queue[count].length <= max) bytes += queue[count++].length
+  const parts = queue.splice(0, count)
+  if (parts.length === 1) return parts[0]
+  const out = new Uint8Array(bytes)
+  let at = 0
+  for (const c of parts) {
+    out.set(c, at)
+    at += c.length
+  }
+  return out
+}

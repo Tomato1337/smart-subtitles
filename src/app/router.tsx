@@ -1,7 +1,8 @@
 import { createRootRoute, createRoute, createRouter, Outlet, useNavigate } from '@tanstack/react-router'
 import { useCallback } from 'react'
+import { Snackbar } from '@tomato1337/m3e-react'
 import { logEvent } from '@/common/api/eventLog'
-import { Snackbar } from '@/common/ui/Snackbar'
+import { useNotifications } from '@/common/api/notify'
 import { useCardEvents } from '@/modules/Cards'
 import { NotificationCenter, useNotificationEvents } from '@/modules/Notifications'
 import { useSessionEvents } from '@/modules/Session'
@@ -19,10 +20,12 @@ function Root() {
   useDepsCheck()
   useInirTheme()
   useNotificationEvents()
+  // Info messages must not cover the warning/error popups stacked above the bell.
+  const stackBottom = useNotifications((s) => s.stackBottomPx)
   return (
     <>
       <Outlet />
-      <Snackbar />
+      <Snackbar bottomOffset={Math.max(96, stackBottom + 8)} />
       <NotificationCenter />
     </>
   )

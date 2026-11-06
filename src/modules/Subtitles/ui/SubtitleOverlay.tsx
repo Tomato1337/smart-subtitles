@@ -1,10 +1,10 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { useShallow } from 'zustand/react/shallow'
+import { IconButton } from '@tomato1337/m3e-react'
 import { usePlaybackStore } from '@/modules/Player'
 import { subtitleVisibility } from '../lib/reveal'
 import { useSubsStore } from '../store/subsStore'
 import { useFocusedCue, useSpokenFraction } from '../useActiveCue'
-import { IconButton } from '@/common/ui/IconButton'
 import type { Cue, CueAnnotation } from '@/common/types/ipc'
 
 type Props = {
@@ -143,7 +143,7 @@ export const SubtitleOverlay = memo(function SubtitleOverlay({ onReplay, onCard,
   return (
     <div
       ref={box}
-      className={`group pointer-events-none absolute inset-x-0 flex justify-center px-16 ${dragPos ? '' : 'transition-[bottom] duration-200'}`}
+      className={`group pointer-events-none absolute inset-x-0 flex justify-center px-16 ${dragPos ? '' : 'transition-[bottom] duration-200 motion-reduce:transition-none'}`}
       // A moved line still steps up over the control bar when it was left below it.
       style={{ bottom: pos ? `max(${pos.y * 100}%, ${base}px)` : base }}
     >
@@ -153,14 +153,13 @@ export const SubtitleOverlay = memo(function SubtitleOverlay({ onReplay, onCard,
       >
         {cue && (
           <div data-tour="cue-actions" className={`mb-1 flex justify-center gap-1 transition-opacity duration-150 pointer-events-auto ${playing && !dragPos ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}>
-            <IconButton icon="replay" label="Повторить" variant="scrim" onClick={() => onReplay(cue)} />
-            <IconButton icon="add_card" label="Фразу в Anki" variant="scrim" onClick={() => onCard(cue)} />
-            <IconButton icon="auto_awesome" label="Объяснить фразу агентом" variant="scrim" fill onClick={() => onExplain(cue)} />
+            <IconButton icon="replay" label="Повторить" className="icon-button-on-video" onClick={() => onReplay(cue)} />
+            <IconButton icon="add_card" label="Фразу в Anki" className="icon-button-on-video" onClick={() => onCard(cue)} />
+            <IconButton icon="auto_awesome" label="Объяснить фразу агентом" className="icon-button-on-video" fill onClick={() => onExplain(cue)} />
             <IconButton
               icon="open_with"
               label="Перетащить субтитры (двойной клик — на место)"
-              variant="scrim"
-              className="cursor-move touch-none"
+              className="icon-button-on-video cursor-move touch-none"
               onPointerDown={startDrag}
               onPointerMove={moveDrag}
               onPointerUp={endDrag}

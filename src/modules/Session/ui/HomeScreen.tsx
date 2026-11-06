@@ -1,14 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { open } from '@tauri-apps/plugin-dialog'
+import { Icon, IconButton, shapeClip, toast, WavyProgress, WavySpinner } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText, type RecentMedia } from '@/common/api/tauri'
 import { Cover } from '@/common/ui/Cover'
-import { Icon } from '@/common/ui/Icon'
-import { IconButton } from '@/common/ui/IconButton'
-import { shapeClip } from '@/common/ui/shapes'
-import { toast } from '@/common/ui/toast'
-import { WavyProgress } from '@/common/ui/WavyProgress'
-import { WavySpinner } from '@/common/ui/WavySpinner'
 import { formatTime } from '@/common/utilities/time'
 import { useSessionStore } from '../store/sessionStore'
 
@@ -20,7 +15,7 @@ function AnnotBadge({ m }: { m: RecentMedia }) {
       role="img"
       aria-label={label}
       title={label}
-      className={`absolute -bottom-1.5 -right-2.5 grid size-[30px] cursor-default place-items-center ${extra}`}
+      className={`absolute -bottom-1.5 -right-2.5 z-[1] grid size-[30px] cursor-default place-items-center ${extra}`}
       style={{ clipPath: clip, background, color }}
     >
       <Icon name={icon} size={18} fill={fill} />
@@ -44,7 +39,7 @@ function AnnotBadge({ m }: { m: RecentMedia }) {
           variant="tonal"
           size="sm"
           radius="15px"
-          className="!absolute -bottom-1.5 -right-2.5 !size-[30px] shadow-[0_0_0_3px_var(--md-sys-color-surface-container)]"
+          className="!absolute -bottom-1.5 -right-2.5 z-[1] !size-[30px] shadow-[0_0_0_3px_var(--md-sys-color-surface-container)]"
           onClick={() => {
             api.mediaResetAnnot(m.mediaId)
               .then(() => api.sessionReopen(m.mediaId))
@@ -115,7 +110,7 @@ export function HomeScreen() {
           <button
             type="button"
             onClick={pickFile}
-            className="morph state-layer state-on-surface type-title-large type-emph relative flex h-20 items-center gap-3 rounded-[var(--md-sys-shape-corner-large-increased)] bg-[var(--md-sys-color-primary-container)] pl-6 pr-10 text-[var(--md-sys-color-on-primary-container)] active:rounded-[var(--md-sys-shape-corner-extra-large-increased)]"
+            className="m3e-morph state-layer state-on-surface type-title-large type-emph relative flex h-20 items-center gap-3 rounded-[var(--md-sys-shape-corner-large-increased)] bg-[var(--md-sys-color-primary-container)] pl-6 pr-10 text-[var(--md-sys-color-on-primary-container)] active:rounded-[var(--md-sys-shape-corner-extra-large-increased)]"
           >
             <Icon name="folder_open" size={32} fill /> Открыть файл
           </button>
@@ -128,7 +123,9 @@ export function HomeScreen() {
       ) : (
         <ul className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
           {recent.data?.map((m) => (
-            <li key={m.mediaId} className="grid grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-4 rounded-[var(--md-sys-shape-corner-extra-small)] bg-[var(--md-sys-color-surface-container)] py-2 pl-2 pr-3 transition-colors first:rounded-t-[var(--md-sys-shape-corner-extra-large)] last:rounded-b-[var(--md-sys-shape-corner-extra-large)] hover:bg-[var(--md-sys-color-surface-container-high)]">
+            // The title button's ::after covers the whole row, so the poster opens the film too;
+            // the badges and the remove button sit above it (z-index) and keep their own clicks.
+            <li key={m.mediaId} className="relative grid grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-4 rounded-[var(--md-sys-shape-corner-extra-small)] bg-[var(--md-sys-color-surface-container)] py-2 pl-2 pr-3 transition-colors first:rounded-t-[var(--md-sys-shape-corner-extra-large)] last:rounded-b-[var(--md-sys-shape-corner-extra-large)] hover:bg-[var(--md-sys-color-surface-container-high)]">
               <span className="relative block h-[84px] w-14">
                 <Cover src={m.posterUrl} title={m.title} className="size-full" />
                 <AnnotBadge m={m} />
@@ -140,7 +137,7 @@ export function HomeScreen() {
                 disabled={!!loading}
                 onClick={() => api.sessionReopen(m.mediaId).catch((e) => notify('error', errorText(e)))}
                 onKeyDown={(e) => { if (e.key === 'Delete') forget(m, e.currentTarget) }}
-                className="flex min-h-16 min-w-0 items-center justify-between gap-4 rounded-[var(--md-sys-shape-corner-large)] py-2 text-left disabled:opacity-60"
+                className="flex min-h-16 min-w-0 items-center justify-between gap-4 rounded-[var(--md-sys-shape-corner-large)] py-2 text-left after:absolute after:inset-0 after:rounded-[inherit] disabled:opacity-60"
               >
                 <span className="min-w-0">
                   <span className="type-title-medium block truncate font-semibold">
@@ -153,7 +150,7 @@ export function HomeScreen() {
                   {m.duration ? <WavyProgress className="h-3 w-32" value={m.lastPosition / m.duration} amp={2} len={14} stroke={3} animated={false} /> : null}
                 </span>
               </button>
-              <IconButton icon="close" label="Удалить из недавних" tipPos="left" data-forget onClick={(e) => forget(m, e.currentTarget)} />
+              <IconButton icon="close" label="Удалить из недавних" tipPos="left" data-forget className="z-[1]" onClick={(e) => forget(m, e.currentTarget)} />
             </li>
           ))}
         </ul>

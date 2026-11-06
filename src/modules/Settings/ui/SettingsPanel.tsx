@@ -1,12 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type ReactNode } from 'react'
+import { Icon, IconButton, Presence, Spinner, Switch, toast } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { AppConfig, LlmProvider } from '@/common/types/ipc'
-import { Icon } from '@/common/ui/Icon'
-import { IconButton } from '@/common/ui/IconButton'
-import { Switch } from '@/common/ui/Switch'
-import { toast } from '@/common/ui/toast'
 import { HotkeysDialog } from '@/modules/Hotkeys'
 import { AnkiSettingsDialog } from './AnkiSettingsDialog'
 import { IMAGE_BACKENDS } from './ImageFields'
@@ -35,7 +32,7 @@ export function SettingsPanel({ onOpenWizard }: { onOpenWizard: () => void }) {
 
   return (
     <aside
-      className={`relative h-full shrink-0 overflow-hidden border-l border-[var(--md-sys-color-outline-variant)] transition-[width] duration-300 ease-[var(--md-sys-motion-emphasized-decelerate)] motion-reduce:transition-none ${open ? 'w-[440px]' : 'w-16'}`}
+      className={`relative h-full shrink-0 overflow-hidden border-l border-[var(--md-sys-color-outline-variant)] transition-[width] duration-300 ease-[var(--md-sys-motion-easing-emphasized-decelerate)] motion-reduce:transition-none ${open ? 'w-[440px]' : 'w-16'}`}
     >
       <div
         inert={open}
@@ -59,7 +56,7 @@ export function SettingsPanel({ onOpenWizard }: { onOpenWizard: () => void }) {
           <p className="type-body-medium p-6 text-[var(--md-sys-color-error)]">{errorText(query.error)}</p>
         ) : !c || providers.isPending ? (
           // Wait for the provider list too: `Section` reads `ok` once, so a late list would leave it expanded.
-          <div className="md-spinner m-6" />
+          <Spinner label="Загрузка" className="m-6" />
         ) : (
           // Remount on every saved snapshot so the draft starts from what is on disk.
           <Form key={JSON.stringify(c)} saved={c} providers={providers.data} onCollapse={toggle} onOpenWizard={onOpenWizard} />
@@ -209,29 +206,33 @@ function Form({ saved, providers, onCollapse, onOpenWizard }: { saved: AppConfig
           </div>
         </Section>
 
-        {hotkeysOpen && <HotkeysDialog onClose={() => setHotkeysOpen(false)} />}
+        <Presence>{hotkeysOpen && <HotkeysDialog onClose={() => setHotkeysOpen(false)} />}</Presence>
 
-        {ankiOpen && (
-          <AnkiSettingsDialog
-            cfg={draft}
-            set={set}
-            onSave={() => save.mutate()}
-            dirty={dirty}
-            saving={save.isPending}
-            onClose={() => setAnkiOpen(false)}
-          />
-        )}
+        <Presence>
+          {ankiOpen && (
+            <AnkiSettingsDialog
+              cfg={draft}
+              set={set}
+              onSave={() => save.mutate()}
+              dirty={dirty}
+              saving={save.isPending}
+              onClose={() => setAnkiOpen(false)}
+            />
+          )}
+        </Presence>
 
-        {tasksOpen && (
-          <TaskModelsDialog
-            cfg={draft}
-            set={set}
-            onSave={() => save.mutate()}
-            dirty={dirty}
-            saving={save.isPending}
-            onClose={() => setTasksOpen(false)}
-          />
-        )}
+        <Presence>
+          {tasksOpen && (
+            <TaskModelsDialog
+              cfg={draft}
+              set={set}
+              onSave={() => save.mutate()}
+              dirty={dirty}
+              saving={save.isPending}
+              onClose={() => setTasksOpen(false)}
+            />
+          )}
+        </Presence>
 
         {/* Actions under the blocks: the panel is too narrow for them in the header. */}
         <div className="mt-1 flex items-center justify-end gap-2">
@@ -256,7 +257,7 @@ function Form({ saved, providers, onCollapse, onOpenWizard }: { saved: AppConfig
   )
 }
 
-export const inputClass = 'type-body-medium w-full rounded-[var(--md-sys-shape-corner-small)] bg-[var(--md-sys-color-surface-container-highest)] px-3 py-2 outline-none focus:ring-2 focus:ring-[var(--md-sys-color-primary)]'
+export const inputClass = 'type-body-medium w-full rounded-[var(--md-sys-shape-corner-small)] bg-[var(--md-sys-color-surface-container-highest)] px-3 py-2 outline-hidden focus:ring-2 focus:ring-[var(--md-sys-color-primary)]'
 
 /** Collapsible group; starts expanded only when something in it still needs filling in. */
 function Section({ icon, title, ok = true, missing, children }: { icon: string; title: string; ok?: boolean; missing?: string; children: ReactNode }) {
@@ -281,7 +282,7 @@ function Section({ icon, title, ok = true, missing, children }: { icon: string; 
       {/* 0fr→1fr rows animate the height to the content's natural size. */}
       <div
         inert={!expanded}
-        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-[var(--md-sys-motion-emphasized-decelerate)] motion-reduce:transition-none ${expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
+        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-[var(--md-sys-motion-easing-emphasized-decelerate)] motion-reduce:transition-none ${expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
       >
         <div className="min-h-0 overflow-hidden">
           <div className="flex flex-col gap-3 px-4 pt-0.5 pb-4">

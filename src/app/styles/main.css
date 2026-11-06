@@ -1,7 +1,13 @@
+/*
+ * Cascade layers, lowest first: Tailwind's theme and preflight, then the UI kit (@tomato1337/m3e-react, the
+ * `m3e.*` layers), then this app's components and Tailwind utilities, which therefore restyle any
+ * kit part. Unlayered rules (the generated inir palette in tokens.css) beat all of them.
+ */
+@layer theme, base, m3e, components, utilities;
 @import 'tailwindcss';
+@import '@tomato1337/m3e-react/styles.css';
 @import './tokens.css';
 @import './typography.css';
-@import './shape.css';
 
 html, body, #root { height: 100%; margin: 0; }
 body {
@@ -12,7 +18,6 @@ body {
   overflow: hidden;
   user-select: none;
 }
-*:focus-visible { outline: 3px solid var(--md-sys-color-secondary); outline-offset: 2px; }
 /* Every control that does something shows the hand; Tailwind's preflight leaves buttons on the arrow.
    In the base layer so a `cursor-*` utility on a specific element still wins. */
 @layer base {
@@ -22,176 +27,67 @@ body {
   :is(button, select, input):disabled, [aria-disabled='true'] { cursor: default; }
 }
 
-.material-symbols-rounded { font-family: 'Material Symbols Rounded'; font-size: 24px; line-height: 1; font-variation-settings: 'FILL' 0, 'wght' 400, 'opsz' 24; user-select: none; }
-.material-symbols-rounded.icon-fill { font-variation-settings: 'FILL' 1, 'wght' 400, 'opsz' 24; }
-
 /* Over-video colours are fixed: video is always dark, in either theme mode. */
 :root { --app-on-video: #f3f2f7; --app-video-scrim: rgb(0 0 0 / 0.55); }
 
-/* plain tooltip, 500 ms delay */
-[data-tip] { position: relative; }
-[data-tip]::after {
-  content: attr(data-tip);
-  display: none;
-  position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
-  padding: 4px 8px; white-space: nowrap; pointer-events: none;
-  background: var(--md-sys-color-inverse-surface); color: var(--md-sys-color-inverse-on-surface);
-  border-radius: var(--md-sys-shape-corner-extra-small);
-  font-size: var(--md-sys-typescale-label-small-size);
-  opacity: 0; transition: opacity 100ms 0ms;
-  z-index: 1000;
+@layer components {
+  /* Icon buttons floating on the video: dark scrim container, light glyph and state layer. */
+  .icon-button-on-video {
+    --m3e-icon-button-container: var(--app-video-scrim);
+    --m3e-icon-button-content: var(--app-on-video);
+    --m3e-icon-button-state: var(--app-on-video);
+  }
+  /* "Add to Anki" in the focused dialog row: the Anki label colours, medium corners at rest and pressed. */
+  .icon-button-anki {
+    --m3e-icon-button-tonal-container: var(--app-anki-label-container);
+    --m3e-icon-button-tonal-content: var(--app-anki-on-label-container);
+    --m3e-icon-button-radius: var(--md-sys-shape-corner-medium);
+    --m3e-icon-button-press-radius: var(--md-sys-shape-corner-medium);
+  }
 }
-[data-tip]:hover::after { display: block; opacity: 1; transition-delay: 500ms; }
-/* Buttons at the top of the window: the tip goes below, or it is clipped by the window edge. */
-[data-tip][data-tip-pos='bottom']::after { bottom: auto; top: calc(100% + 6px); }
-[data-tip][data-tip-pos='left']::after { bottom: auto; left: auto; right: calc(100% + 6px); top: 50%; transform: translateY(-50%); }
-/* Edge buttons: keep the tip inside a clipping panel. */
-[data-tip][data-tip-pos='bottom-start']::after { bottom: auto; top: calc(100% + 6px); left: 0; transform: none; }
-[data-tip][data-tip-pos='bottom-end']::after { bottom: auto; top: calc(100% + 6px); left: auto; right: 0; transform: none; }
 
 /*
- * CSS Anchor Positioning: the hint is fixed to the viewport and anchored to its own button, so
- * `overflow: hidden` on a scrolling cue row or a dialog cannot cut it off. The unique anchor name
- * comes from `useTipAnchor` — one shared name would bind every hint to the last button on the page.
- * `position-area` places the hint on a tile of the anchor grid; `position-try-fallbacks` flips it
- * to the opposite side / another tile when the window edge would clip it, including both axes at once.
+ * App-specific motion. The kit owns the generic enter/exit utilities (m3e-motion-*); everything here
+ * keeps its fades under reduced motion and drops only the movement.
  */
-@supports (anchor-name: --tip) and (position-anchor: --tip) and (position-area: top) {
-  [data-tip] { anchor-name: var(--tip-anchor); }
-  /* Reset the absolute fallback's insets/transforms: position-area defines the box now. */
-  [data-tip]::after,
-  [data-tip][data-tip-pos]::after {
-    inset: auto; translate: none; transform: none;
-  }
-  [data-tip]::after {
-    position: fixed;
-    position-anchor: var(--tip-anchor);
-    position-area: top;
-    /* Old engines may know only simple flips; the full list also handles both axes at once. */
-    position-try-fallbacks: flip-block;
-    position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
-    margin: 0 0 6px;
-  }
-  [data-tip][data-tip-pos='bottom']::after {
-    position-area: bottom;
-    margin: 6px 0 0;
-  }
-  [data-tip][data-tip-pos='left']::after {
-    position-area: left;
-    margin: 0 6px 0 0;
-  }
-  [data-tip][data-tip-pos='bottom-start']::after {
-    position-area: bottom span-right;
-    justify-self: start;
-    margin: 6px 0 0;
-  }
-  [data-tip][data-tip-pos='bottom-end']::after {
-    position-area: bottom span-left;
-    justify-self: end;
-    margin: 6px 0 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation: none !important; transition: none !important; }
-}
-
-/* MD3 state layers */
-.state-layer { cursor: pointer; background-clip: padding-box; }
-.state-layer::before {
-  content: ''; position: absolute; inset: 0; border-radius: inherit; background: var(--state-color, currentColor);
-  opacity: 0; transition: opacity 150ms; pointer-events: none;
-}
-.state-layer:hover::before { opacity: 0.08; }
-.state-layer:active::before { opacity: 0.1; }
-.state-on-primary { --state-color: var(--md-sys-color-on-primary); }
-.state-on-surface { --state-color: var(--md-sys-color-on-surface); }
-
-/* MD3 popover/menu motion: enter 250ms decelerate, scale .95 -> 1 */
-@keyframes md-pop-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-.md-pop { animation: md-pop-in 250ms var(--md-sys-motion-decelerate); }
-@keyframes md-slide-in { from { transform: translateX(var(--slide-from, 100%)); } to { transform: translateX(0); } }
-.md-slide { animation: md-slide-in 400ms var(--md-sys-motion-emphasized-decelerate); }
-/* Subtitle phrase change: the new line rises in, the old one fades up and out underneath */
+/* Subtitle phrase change: the new line rises in, the old one fades up and out underneath. */
 @keyframes sub-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes sub-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-14px); } }
-.sub-in { animation: sub-in 280ms var(--md-sys-motion-emphasized-decelerate); }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
+.sub-in { animation: sub-in 280ms var(--md-sys-motion-easing-emphasized-decelerate); }
 /* Base style is the end state: if the fill is dropped (WebKitGTK) or unmount lags, the old line must not flash back. */
-.sub-out { opacity: 0; transform: translateY(-14px); animation: sub-out 220ms var(--md-sys-motion-emphasized-accelerate) forwards; }
-@media (prefers-reduced-motion: reduce) { .sub-out { display: none; } }
+.sub-out { opacity: 0; transform: translateY(-14px); animation: sub-out 220ms var(--md-sys-motion-easing-emphasized-accelerate) forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .sub-in { animation-name: fade-in; }
+  .sub-out { transform: none; animation-name: fade-out; }
+}
 /* Actions of the focused dialog row. Only opacity/transform: the old height expand re-laid out the
    whole list every frame at each phrase change, and on WebKitGTK the film stalled with it. */
 @keyframes row-actions-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
-.row-actions-in { animation: row-actions-in 260ms var(--md-sys-motion-emphasized-decelerate); }
-/* Wave travel is a CSS transform on an SVG path, which WebKit repaints on the main thread every frame:
-   stop it while its dock is hidden. */
-.wavy-idle .wavy-run { animation-play-state: paused; }
-/* Notification popup: flies in from the left edge… */
-@keyframes toast-in { from { opacity: 0; transform: translateX(-120%); } to { opacity: 1; transform: none; } }
-.toast-in { animation: toast-in 260ms var(--md-sys-motion-emphasized-decelerate); }
-/* …and, when its time is up, shrinks down into the center button. */
-@keyframes toast-out { to { opacity: 0; transform: translate(0, 44px) scale(0.12); } }
-.toast-out { animation: toast-out 240ms var(--md-sys-motion-emphasized-accelerate) forwards; transform-origin: bottom left; }
-@keyframes md-spin { to { transform: rotate(360deg); } }
-.md-spinner {
-  width: 48px; height: 48px; border-radius: 9999px;
-  border: 4px solid var(--md-sys-color-surface-container-highest); border-top-color: var(--md-sys-color-primary);
-  animation: md-spin 900ms linear infinite;
-}
-/* The global reduced-motion rule above stops every animation; a static ring reads as a stalled task,
-   so spinners keep turning — just slowly enough not to be disorienting. */
-@media (prefers-reduced-motion: reduce) { .md-spinner { animation: md-spin 6s linear infinite !important; } }
-/* Player mode: the same popups, but they drop out of the top bar and shrink back up into its button. */
-@keyframes toast-in-top { from { opacity: 0; transform: translateY(-120%); } to { opacity: 1; transform: none; } }
-.toast-in-top { animation: toast-in-top 260ms var(--md-sys-motion-emphasized-decelerate); }
-@keyframes toast-out-top { to { opacity: 0; transform: translateY(-44px) scale(0.12); } }
-.toast-out-top { animation: toast-out-top 240ms var(--md-sys-motion-emphasized-accelerate) forwards; transform-origin: top right; }
+.row-actions-in { animation: row-actions-in 260ms var(--md-sys-motion-easing-emphasized-decelerate); }
+@media (prefers-reduced-motion: reduce) { .row-actions-in { animation-name: fade-in; } }
 
 /*
- * Expressive press + radius morph. The global reduced-motion rule above turns these off.
- * - Morph on :active, never :hover: a hover radius change moves the hit-tested corner under a
- *   resting pointer, which drops :hover, which restores the corner, and the button flickers.
- * - Radii are finite (half the height for a pill): rounded-full is calc(infinity * 1px), which
- *   cannot be interpolated, so the shape would jump instead of morphing.
- * - NEVER put .morph (or any background/radius/transform transition) on a [data-tip] element.
- *   WebKitGTK restarts an element's running transitions from its ::after's values when that pseudo
- *   is shown, so on hover the button jumped to the tooltip's colour and 4px corners and animated
- *   back, again on every re-render. Tooltip hosts put the animated parts on child spans instead.
+ * Notification popups: they fly in from the left edge (home) or drop out of the top bar (player) and,
+ * when their time is up, shrink into the notification button. The exit runs on `data-closing`, set by
+ * the kit's animateExit(), which removes the popup once the animation has finished.
  */
-.morph { transition: border-radius 420ms var(--md-sys-motion-spring-default-spatial), background-color 220ms var(--md-sys-motion-emphasized-decelerate), transform 220ms var(--md-sys-motion-spring-fast-spatial); }
-.morph:active { transform: scale(0.94); }
-
-/* IconButton parts (see IconButton.tsx). The host has a static radius for the focus ring only. */
-.btn { border-radius: var(--btn-radius); }
-.btn-surface, .btn-state {
-  position: absolute; inset: 0; pointer-events: none; border-radius: var(--btn-radius);
-  transition: border-radius 420ms var(--md-sys-motion-spring-default-spatial), transform 220ms var(--md-sys-motion-spring-fast-spatial), opacity 150ms linear, background-color 220ms var(--md-sys-motion-emphasized-decelerate);
+@keyframes toast-in { from { opacity: 0; transform: translateX(-120%); } to { opacity: 1; transform: none; } }
+@keyframes toast-out { to { opacity: 0; transform: translate(0, 44px) scale(0.12); } }
+@keyframes toast-in-top { from { opacity: 0; transform: translateY(-120%); } to { opacity: 1; transform: none; } }
+@keyframes toast-out-top { to { opacity: 0; transform: translateY(-44px) scale(0.12); } }
+.toast-in { transform-origin: bottom left; animation: toast-in 260ms var(--md-sys-motion-easing-emphasized-decelerate); }
+.toast-in-top { transform-origin: top right; animation: toast-in-top 260ms var(--md-sys-motion-easing-emphasized-decelerate); }
+.toast-in[data-closing] { pointer-events: none; animation: toast-out 240ms var(--md-sys-motion-easing-emphasized-accelerate) forwards; }
+.toast-in-top[data-closing] { pointer-events: none; animation: toast-out-top 240ms var(--md-sys-motion-easing-emphasized-accelerate) forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .toast-in, .toast-in-top { animation-name: fade-in; }
+  .toast-in[data-closing], .toast-in-top[data-closing] { animation-name: fade-out; }
 }
-.btn-surface { background: var(--btn-bg); }
-.btn-state { background: var(--state-color); opacity: 0; }
-.btn-glyph { transition: transform 220ms var(--md-sys-motion-spring-fast-spatial); }
-.btn:hover > .btn-state { opacity: 0.08; }
-.btn:active > .btn-state { opacity: 0.1; }
-.btn:active > .btn-surface, .btn:active > .btn-state { border-radius: var(--btn-press-radius, var(--btn-radius)); transform: scale(0.94); }
-.btn:active > .btn-glyph { transform: scale(0.94); }
-
-/* Wavy progress line. Every colour is a hook so a container can override it. */
-.wavy { display: block; }
-.wavy svg { width: 100%; height: 100%; overflow: visible; display: block; }
-.wavy .w-wave { fill: none; stroke: var(--wave-active, var(--md-sys-color-primary)); stroke-linecap: round; stroke-linejoin: round; }
-.wavy .w-track { stroke: var(--wave-track, var(--md-sys-color-secondary-container)); stroke-linecap: round; }
-.wavy .w-buffer { stroke: var(--wave-buffer, var(--md-sys-color-outline-variant)); stroke-linecap: round; }
-.wavy .w-stop, .wavy .w-thumb { fill: var(--wave-active, var(--md-sys-color-primary)); }
-/* The travel is a compositor-friendly transform: one wavelength per period, seamless loop. */
-@keyframes wavy-travel { from { transform: translateX(0); } to { transform: translateX(var(--wave-len, 0px)); } }
-.wavy-run { animation: wavy-travel var(--wave-period, 1.111s) linear infinite; }
-.wavy-paused { animation-play-state: paused; }
 
 /* Volume slider: a 4px tonal track with a 4x20 bar thumb. */
 .m3-range { appearance: none; -webkit-appearance: none; width: 88px; height: 24px; background: transparent; accent-color: var(--md-sys-color-primary); }
 .m3-range::-webkit-slider-runnable-track { height: 4px; border-radius: 9999px; background: linear-gradient(to right, var(--md-sys-color-primary) var(--fill), var(--md-sys-color-secondary-container) var(--fill)); }
 .m3-range::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 4px; height: 20px; margin-top: -8px; border-radius: 9999px; background: var(--md-sys-color-primary); }
 @container dock (max-width: 760px) { .m3-range { display: none; } }
-
-.wavy-spinner { animation: md-spin 1.6s linear infinite; }
-@media (prefers-reduced-motion: reduce) { .wavy-spinner { animation: md-spin 6s linear infinite !important; } }

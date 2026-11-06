@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Segmented } from '@/common/ui/Segmented'
-import { Switch } from '@/common/ui/Switch'
+import { Segmented, Switch } from '@tomato1337/m3e-react'
 import type { CardPreview as CardPreviewData } from '@/common/types/ipc'
 import { renderCard } from '../lib/ankiTemplate'
 
