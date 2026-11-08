@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useShallow } from 'zustand/react/shallow'
@@ -10,7 +10,7 @@ import { formatTime } from '@/common/utilities/time'
 import { comboOf } from '@/common/utilities/keys'
 import { AgentPanel, cueExplainPrompt, useAgentActions, useAgentEvents, useAgentStore } from '@/modules/Agent'
 import { useAnkiEvents } from '@/modules/Anki'
-import { CardDraftModal, useCardsStore } from '@/modules/Cards'
+import { CardsActivityButton, useCardIslandDock, useCardsStore } from '@/modules/Cards'
 import { NotificationButton } from '@/modules/Notifications'
 import { ExplainPopover, useExplainStore } from '@/modules/Explain'
 import { actionFor, HotkeysDialog, useHotkeysStore, withKey, type HotkeyAction } from '@/modules/Hotkeys'
@@ -61,6 +61,8 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
  const p = usePlayer()
  const playing = usePlaybackStore((s) => s.playing)
  const visible = useIdleVisible(!playing)
+ const topBarRef = useRef<HTMLDivElement>(null)
+ useCardIslandDock(topBarRef, visible)
  // Selected fields only: a whole-store subscription re-rendered the entire player screen (video, overlay,
  // dialog list, dock) on every analysis batch, status or progress update of the subtitles.
  const subs = useSubsStore(useShallow((s) => ({
@@ -92,7 +94,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
  const hotkey = useHotkeysStore((s) => s.bindings)
  // The actions only: the popover target changes on every hover, which must not re-render this screen.
  const explain = useExplainStore(useShallow((s) => ({ pinOpen: s.pinOpen, hoverOpen: s.hoverOpen, hoverLeave: s.hoverLeave })))
- const openDraft = useCardsStore((s) => s.openDraft)
+ const config = useQuery({ queryKey: ['config'], queryFn: api.configGet, staleTime: 60_000 })
  const [guide, setGuide] = useState(false)
  const [hotkeysOpen, setHotkeysOpen] = useState(false)
  const [subsOpen, setSubsOpen] = useState(false)
@@ -175,7 +177,21 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
  const { askOnce } = agent
  const pickSpan = useCallback((pk: SpanPick) => { p.pause(); pinOpen(pk) }, [p, pinOpen])
  const hoverSpan = useCallback((pk: SpanPick | null) => (pk ? hoverOpen(pk) : hoverLeave()), [hoverOpen, hoverLeave])
- const cardFor = useCallback((cueIdx: number, span: string | null) => { p.pause(); openDraft(cueIdx, span) }, [p, openDraft])
+ // The one entry point of every card click: quick mode never pauses or opens a dialog; review mode
+ // pauses explicitly and opens the durable job's editor.
+ const cardFor = useCallback((cueIdx: number, span: string | null) => {
+  const quick = config.data?.anki.quickAdd === true
+  if (!quick) p.pause()
+  const offset = useSubsStore.getState().offset
+  void api.cardsJobCreate(session.mediaId, cueIdx, span, p.audioIndex(), offset, quick ? 'quick' : 'review')
+   .then(async (job) => {
+    const store = useCardsStore.getState()
+    store.upsert(job)
+    if (quick) { store.trackTask(job); return }
+    store.openEditor(await api.cardsJobEdit(job.id, true))
+   })
+   .catch((e) => notify('error', errorText(e)))
+ }, [config.data?.anki.quickAdd, p, session.mediaId])
  const cardForCue = useCallback((cue: Cue) => cardFor(cue.idx, null), [cardFor])
  const explainCue = useCallback((cue: Cue) => { p.pause(); void askOnce(cueExplainPrompt(cue.text), cue.idx) }, [p, askOnce])
  const sidebarEn = useCallback(
@@ -368,13 +384,14 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
      above={overlayAbove}
      renderEn={overlayEn}
     />
-    <div className={`absolute inset-x-0 top-0 transition-opacity duration-200 ${visible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
+    <div ref={topBarRef} className={`absolute inset-x-0 top-0 transition-opacity duration-200 ${visible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
      <TopBar
       session={session}
       onBack={onBack}
       onOpenEpisode={openEpisode}
       rightSlot={(
        <>
+        <CardsActivityButton />
         <NotificationButton className="relative size-12" />
         <IconButton icon="forum" label={withKey('Чат с агентом', hotkey.chat)} data-tour="chat" variant="tonal" size="lg" selected={chatOpen} onClick={() => useAgentStore.getState().toggle()} />
        </>
@@ -382,6 +399,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
      />
     </div>
     <div
+     data-app-player-controls
      className={`absolute inset-x-4 bottom-4 transition-opacity duration-200 ${visible ? 'opacity-100' : 'm3e-wavy-idle pointer-events-none opacity-0'}`}
      style={{ containerType: 'inline-size', containerName: 'dock' }}
     >
@@ -434,7 +452,6 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
     onSeekTime={(t) => p.seek(t)}
    />
    <ExplainPopover mediaId={session.mediaId} onCard={cardFor} onAsk={askSpan} />
-   <CardDraftModal mediaId={session.mediaId} />
    <PatternCard
     mediaId={session.mediaId}
     cueStart={(i) => cueByIdx(i)?.start ?? 0}

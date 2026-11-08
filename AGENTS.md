@@ -44,7 +44,7 @@ src-tauri/src/
   anki/             AnkiConnect client, note type, field mapping, known-words index, card queue, images, tts
   tutor/            optional tutor add-on API
 src/                FEOD layers: common → modules → pages → app
-  common/api/tauri.ts      typed wrappers over invoke()
+  common/api/tauri.ts      every IPC command (`call`) and event (`AppEvents`); the IPC map
   common/types/ipc.ts      TS mirror of the Rust IPC/config types
   modules/<Name>/index.ts  the only public API of a module
 lampa-plugin/smartsubs.js  Lampa plugin; also served by the app at /lampa/smartsubs.js
@@ -56,7 +56,8 @@ packaging/arch/PKGBUILD    Arch package, repacked from the release .deb
 
 - Frontend follows FEOD (<https://github.com/Sdju/feod>): import other modules only through their `index.ts`; lower layers never import higher ones. `oxlint.config.ts` enforces it.
 - TanStack Router (code-based, `src/app/router.tsx`) and TanStack Query; Tailwind 4. Custom typography classes live in `@layer components`, otherwise they override utilities like `font-semibold`.
-- Backend → UI communication is Tauri events (`subs:status`, `annot:progress`, `cards:result`, `config:changed`, `notification:added`, …). Errors and warnings the user must see go through `notify::push` (stored, shown in the notification center); transient messages through `notify::info`.
+- IPC is matched by name strings, so grep the name to trace a feature end to end. UI → Rust: `call('<cmd>')` in `src/common/api/tauri.ts` (the only `invoke` besides `log_events` in `eventLog.ts`) reaches `commands::<cmd>`, a `#[tauri::command]` registered in `generate_handler!` in `lib.rs`. Rust → UI: Tauri events (`subs:status`, `annot:progress`, `cards:job`, `config:changed`, …), emitted with `.emit("<name>", …)` and listed with their payload types in `AppEvents` in `tauri.ts`; listen through `onEvent`. Adding or removing either side means changing the other; `ipc_contract` tests in `lib.rs` fail otherwise.
+- Errors and warnings the user must see go through `notify::push` (stored, shown in the notification center); transient messages through `notify::info`.
 - Logging: `logs::log("<name>", …)` writes `logs/<name>.log` next to `config.json` (`app`, `llm`, `ffmpeg`, `asr`, `events`). Never log secrets; `logs::redact` masks URL userinfo and key-shaped strings, keep it in the path of anything third-party.
 - Comments explain why, not what; keep them current when behaviour changes.
 - External tools (ffmpeg, ffprobe, uv, omp) start only through `proc::command` (foreground) or `proc::background` (`nice -n 10` on Unix, below-normal priority on Windows; both hide the console window on Windows), and are looked up with `proc::find`/`find_in`, which add `.exe`/`.cmd` on Windows. Never `Command::new("nice")` or a hard-coded `/` path separator. Pass a session source to ffmpeg/ffprobe through `media::input`: ffmpeg does not percent-decode `file://` URLs.
@@ -72,7 +73,7 @@ Components, tokens and motion come from the `m3e` kit (Material 3 Expressive), s
 - Layer order is declared once in `main.css`: `@layer theme, base, m3e, components, utilities;`. Tailwind utilities override the kit; no `!important`.
 - Dialogs are the kit's `<Dialog>` on a native modal `<dialog>`: no hand-made scrim, `role="dialog"`, `aria-modal`, focus trap or Esc listener. `onClose` is the close request (Esc, back gesture, backdrop with `dismissible`); point it at the safe action. Render dialogs conditionally inside `<Presence>` so closing animates. App hotkeys ignore keys while a `dialog[open]` exists.
 - Motion: whatever enters also exits. Conditional UI goes inside `<Presence>` with an `m3e-motion-*` class, or uses `usePresence(open, ref)` when the closed state changes the layout (the player's side panels). Exits are transitions or animations on `[data-closing]` (`animateExit`); never remove an element on a timer copied from CSS. Movement (translate, scale, size, position) needs `prefers-reduced-motion: no-preference` (`motion-reduce:transition-none` on utilities); fades may stay; no global duration kill switch.
-- Menus: kit `<Menu>` (popover) anchored to the wrapper of its trigger; the trigger gets `aria-haspopup="menu"` and `aria-expanded`. Icons: kit `<Icon>` (Material Symbols Rounded). Toasts: `toast()` from the kit; warnings and errors: the notification center.
+- Menus: kit `<Menu>` (popover) anchored to the wrapper of its trigger; the trigger gets `aria-haspopup="menu"` and `aria-expanded`. Icons: kit `<Icon>` (Material Symbols Rounded). Toasts: `toast()` from the kit; warnings and errors: the notification center. The quick-card task is not a toast: `Cards/ui/CardIsland.tsx` (driven by `Presenter` through `islandSurface`) collapses into a pill on the player's top bar, docked by `useCardIslandDock` in `WatchScreen`.
 
 ## Browser support
 

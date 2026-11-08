@@ -4,10 +4,7 @@
 //! Templates and CSS are copied verbatim from tutor's `anki/flashcards.py`, so cards made by the app
 //! look like the ones tutor made.
 
-use crate::{
-    anki::connect,
-    state::AppState,
-};
+use crate::anki::connect;
 use anyhow::anyhow;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -48,15 +45,14 @@ pub struct NoteTypeView {
 
 /// Builds the built-in note type when Anki does not have it; when it does, adds missing fields and
 /// brings its template and CSS up to the bundled version. Other note types are the user's business.
-pub async fn ensure(st: &AppState, name: &str) -> anyhow::Result<()> {
+pub async fn ensure(client: &connect::Client<'_>, name: &str) -> anyhow::Result<()> {
     if name != BUILTIN_NAME {
         return Ok(());
     }
-    let names = connect::call(st, "modelNames", json!({}), Duration::from_secs(10)).await?;
+    let names = client.call("modelNames", json!({}), Duration::from_secs(10)).await?;
     let present = names.as_array().is_some_and(|a| a.iter().any(|x| x.as_str() == Some(name)));
     if !present {
-        connect::call(
-            st,
+        client.call(
             "createModel",
             json!({
                 "modelName": BUILTIN_NAME,
@@ -70,14 +66,13 @@ pub async fn ensure(st: &AppState, name: &str) -> anyhow::Result<()> {
         .await?;
         return Ok(());
     }
-    let have = connect::call(st, "modelFieldNames", json!({ "modelName": name }), Duration::from_secs(10)).await?;
+    let have = client.call("modelFieldNames", json!({ "modelName": name }), Duration::from_secs(10)).await?;
     let mut have: Vec<String> = have.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
     for field in BUILTIN_FIELDS {
         if have.iter().any(|h| h == field) {
             continue;
         }
-        connect::call(
-            st,
+        client.call(
             "modelFieldAdd",
             json!({ "modelName": name, "fieldName": field, "index": have.len() }),
             Duration::from_secs(10),
@@ -85,42 +80,41 @@ pub async fn ensure(st: &AppState, name: &str) -> anyhow::Result<()> {
         .await?;
         have.push(field.to_string());
     }
-    let templates = connect::call(st, "modelTemplates", json!({ "modelName": name }), Duration::from_secs(10)).await?;
+    let templates = client.call("modelTemplates", json!({ "modelName": name }), Duration::from_secs(10)).await?;
     let current = templates.as_object().and_then(|o| o.iter().next());
     let stale = current.is_none_or(|(_, t)| t["Front"].as_str() != Some(FRONT_TEMPLATE) || t["Back"].as_str() != Some(BACK_TEMPLATE));
     if stale {
         let template = current.map_or(TEMPLATE_NAME, |(n, _)| n.as_str());
-        connect::call(
-            st,
+        client.call(
             "updateModelTemplates",
             json!({ "model": { "name": name, "templates": { template: { "Front": FRONT_TEMPLATE, "Back": BACK_TEMPLATE } } } }),
             Duration::from_secs(10),
         )
         .await?;
     }
-    let styling = connect::call(st, "modelStyling", json!({ "modelName": name }), Duration::from_secs(10)).await?;
+    let styling = client.call("modelStyling", json!({ "modelName": name }), Duration::from_secs(10)).await?;
     if styling["css"].as_str() != Some(CARD_CSS) {
-        connect::call(st, "updateModelStyling", json!({ "model": { "name": name, "css": CARD_CSS } }), Duration::from_secs(10)).await?;
+        client.call("updateModelStyling", json!({ "model": { "name": name, "css": CARD_CSS } }), Duration::from_secs(10)).await?;
     }
     Ok(())
 }
 
 /// The note type as Anki has it. Anki down or the built-in type not created yet: the built-in constants.
-pub async fn view(st: &AppState, name: &str) -> anyhow::Result<NoteTypeView> {
+pub async fn view(client: &connect::Client<'_>, name: &str) -> anyhow::Result<NoteTypeView> {
     let builtin = name == BUILTIN_NAME;
-    let names = connect::call(st, "modelNames", json!({}), Duration::from_secs(5)).await;
+    let names = client.call("modelNames", json!({}), Duration::from_secs(5)).await;
     let exists = match &names {
         Ok(v) => v.as_array().is_some_and(|a| a.iter().any(|x| x.as_str() == Some(name))),
         Err(_) => false,
     };
     if exists {
-        let fields = connect::call(st, "modelFieldNames", json!({ "modelName": name }), Duration::from_secs(10)).await?;
+        let fields = client.call("modelFieldNames", json!({ "modelName": name }), Duration::from_secs(10)).await?;
         // The built-in type gets the bundled template and CSS on the next add, so preview those.
         let (front, back, css) = if builtin {
             (FRONT_TEMPLATE.to_string(), BACK_TEMPLATE.to_string(), CARD_CSS.to_string())
         } else {
-            let templates = connect::call(st, "modelTemplates", json!({ "modelName": name }), Duration::from_secs(10)).await?;
-            let styling = connect::call(st, "modelStyling", json!({ "modelName": name }), Duration::from_secs(10)).await?;
+            let templates = client.call("modelTemplates", json!({ "modelName": name }), Duration::from_secs(10)).await?;
+            let styling = client.call("modelStyling", json!({ "modelName": name }), Duration::from_secs(10)).await?;
             let (front, back) = first_template(&templates).unwrap_or_default();
             (front, back, styling["css"].as_str().unwrap_or("").to_string())
         };

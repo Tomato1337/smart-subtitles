@@ -1,14 +1,18 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
- AnkiCard, AnnotCost, AnnotEstimate, AnnotModel, AnnotStatus, AppConfig, AppNotification, CardPreview, CardsProgress, CardsResult, Catalog, ChatMessage, ChatUsage, DepsStatus, EmbeddedState, Explanation, IndexModel, InirTheme, LlmPing, LlmProvider, ModelInfo, NoteTypeView, NotifyLevel, OpenStream, PatternOccurrence, PatternStat, SessionState, SetupStatus, SubCandidate, SubsCandidates, SubsList, TorrentHealth, WordDraft,
+ AnkiCard, AnnotCost, AnnotEstimate, AnnotModel, AnnotStatus, AppConfig, AppNotification, CardJob, CardJobEditor, CardJobPage, CardPreview, CardsResult, Catalog, ChatMessage, ChatUsage, DepsStatus, EmbeddedState, Explanation, GeneratedImage, ImageRouteView, IndexModel, InirTheme, JobCursor, JobGrace, LlmPing, LlmProvider, ModelInfo, NoteTypeView, NotifyLevel, OpenStream, PatternOccurrence, PatternStat, SessionState, SetupStatus, SubCandidate, SubsCandidates, SubsList, TorrentHealth, WordDraft,
 } from '@/common/types/ipc'
 import { logEvent } from './eventLog'
 
 /** Commands whose calls are too frequent to be worth a log line. */
 const QUIET: Record<string, true> = { media_save_position: true, media_torrent_health: true, patterns_exposure: true, annot_prioritize: true }
 /** Commands whose arguments carry credentials: the shape is logged, never the values. */
-const SECRET_ARGS: Record<string, true> = { config_save: true, llm_models: true, llm_ping: true }
+const SECRET_ARGS: Record<string, true> = {
+ config_save: true, llm_models: true, llm_ping: true,
+ // Unsaved image overrides carry provider keys.
+ cards_preview: true, images_generate: true, images_route: true,
+}
 
 /**
  * Every IPC command goes through here so `events.log` gets the command, its duration and its outcome.
@@ -94,13 +98,24 @@ export const api = {
  /** Model, effort and the film chat's running totals for the footer under the input. */
  agentUsage: (mediaId: string) => call<ChatUsage>('agent_usage', { mediaId }),
 
- cardsDraft: (mediaId: string, cueIdx: number, span: string | null) =>
-  call<WordDraft>('cards_draft', { mediaId, cueIdx, span }),
- cardsCreateProposal: (mediaId: string, cueIdx: number, words: WordDraft[]) =>
-  call<number>('cards_create_proposal', { mediaId, cueIdx, words }),
- /** Queues the words; the outcome arrives later as `cards:result`. */
+ /** Queues the words; the outcome arrives later as `cards:result` and `cards:job`. */
  cardsAdd: (proposalId: number, indices: number[]) => call<void>('cards_add', { proposalId, indices }),
  cardsDismiss: (proposalId: number) => call<void>('cards_dismiss', { proposalId }),
+ /** Quick: a five-second grace job; review: a held editing job. Returns the durable job. */
+ cardsJobCreate: (mediaId: string, cueIdx: number, span: string | null, audioIndex: number, subOffset: number, mode: 'quick' | 'review') =>
+  call<CardJob>('cards_job_create', { mediaId, cueIdx, span, audioIndex, subOffset, mode }),
+ cardsJobs: (cursor: JobCursor | null) => call<CardJobPage>('cards_jobs', { cursor }),
+ cardsJobGet: (jobId: string) => call<CardJob>('cards_job_get', { jobId }),
+ cardsJobHold: (jobId: string, clientId: string, held: boolean) => call<CardJob>('cards_job_hold', { jobId, clientId, held }),
+ cardsJobCancel: (jobId: string, revision: number) => call<CardJob>('cards_job_cancel', { jobId, revision }),
+ cardsJobEdit: (jobId: string, refresh: boolean) => call<CardJobEditor>('cards_job_edit', { jobId, refresh }),
+ cardsJobPreview: (jobId: string, revision: number, draft: WordDraft, fieldValues: Record<string, string> | null) =>
+  call<CardPreview>('cards_job_preview', { jobId, revision, draft, fieldValues }),
+ cardsJobImage: (jobId: string, revision: number, prompt: string) => call<CardJobEditor>('cards_job_image', { jobId, revision, prompt }),
+ cardsJobSave: (jobId: string, revision: number, draft: WordDraft, fieldValues: Record<string, string> | null, baselineFields: Record<string, string> | null) =>
+  call<CardJob>('cards_job_save', { jobId, revision, draft, fieldValues, baselineFields }),
+ cardsJobDelete: (jobId: string) => call<CardJob>('cards_job_delete', { jobId }),
+ cardsJobRetry: (jobId: string) => call<CardJob>('cards_job_retry', { jobId }),
  ankiRefresh: () => call<void>('anki_refresh'),
  /** Decks with card counts and note types with their fields; fails when Anki is not running. */
  ankiCatalog: () => call<Catalog>('anki_catalog'),
@@ -108,11 +123,13 @@ export const api = {
  ankiIndexModels: () => call<IndexModel[]>('anki_index_models'),
  ankiNoteType: (name: string) => call<NoteTypeView>('anki_note_type', { name }),
  /** One card as Anki would show it; `anki`/`draft` null mean the saved config and a sample word. */
- cardsPreview: (anki: AppConfig['anki'] | null, draft: WordDraft | null, mediaId: string | null, cueIdx: number | null) =>
-  call<CardPreview>('cards_preview', { anki, draft, mediaId, cueIdx }),
+ cardsPreview: (anki: AppConfig['anki'] | null, draft: WordDraft | null, mediaId: string | null, cueIdx: number | null, images: AppConfig['images'] | null = null, tutor: AppConfig['tutor'] | null = null) =>
+  call<CardPreview>('cards_preview', { anki, draft, mediaId, cueIdx, images, tutor }),
  /** Generates one picture and returns it as a data URL; it lands in the cache the add reuses. */
- imagesGenerate: (prompt: string, images: AppConfig['images'] | null) =>
-  call<string>('images_generate', { prompt, images }),
+ imagesGenerate: (prompt: string, images: AppConfig['images'] | null = null, tutor: AppConfig['tutor'] | null = null) =>
+  call<GeneratedImage>('images_generate', { prompt, images, tutor }),
+ imagesRoute: (images: AppConfig['images'] | null = null, tutor: AppConfig['tutor'] | null = null) =>
+  call<ImageRouteView>('images_route', { images, tutor }),
 
  patternsExposure: (mediaId: string, cueIdx: number) => call<void>('patterns_exposure', { mediaId, cueIdx }),
  patternsStats: () => call<PatternStat[]>('patterns_stats'),
@@ -168,8 +185,9 @@ export type AppEvents = {
  'config:changed': { by: 'agent' | 'app' }
  'theme:changed': InirTheme
  'anki:index': AnkiCard[]
- 'cards:progress': CardsProgress
  'cards:result': CardsResult
+ 'cards:job': CardJob
+ 'cards:grace': JobGrace
  toast: { message: string }
  'notification:added': AppNotification
 }

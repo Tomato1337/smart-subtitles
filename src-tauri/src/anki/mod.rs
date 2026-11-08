@@ -5,6 +5,8 @@ pub mod cards;
 pub mod connect;
 pub mod fields;
 pub mod images;
+pub mod jobs;
 pub mod index;
 pub mod note_type;
+pub mod preview;
 pub mod tts;

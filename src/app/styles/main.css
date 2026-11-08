@@ -86,6 +86,140 @@ body {
   .toast-in[data-closing], .toast-in-top[data-closing] { animation-name: fade-out; }
 }
 
+/*
+ * Card task island (Cards/ui/CardIsland.tsx): one surface that morphs between the full card and the
+ * collapsed pill. Both forms are laid out absolutely; the surface gets the measured size of the shown
+ * one, so width and height animate without interpolate-size (missing in WebKit). Like the kit's
+ * snackbar it is a manual popover and the closed rule is the exit.
+ */
+@layer components {
+  .card-island {
+    position: fixed;
+    inset: var(--card-island-top) auto auto var(--card-island-x);
+    translate: -50% 0;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition-property: opacity, scale;
+    transition-duration: var(--md-sys-motion-duration-short3);
+    transition-timing-function: var(--md-sys-motion-easing-standard-accelerate);
+
+    &[data-mini] { border-radius: var(--md-sys-shape-corner-large); }
+    &:not(:popover-open), &[data-closing], &[data-concealed] { pointer-events: none; }
+
+    & > [data-part] {
+      position: absolute;
+      inset: 0 auto auto 0;
+      box-sizing: border-box;
+      transition: opacity var(--md-sys-motion-spring-default-effects-duration) var(--md-sys-motion-spring-default-effects);
+    }
+    & > [data-off] { opacity: 0; pointer-events: none; }
+
+    & > [data-part='full'] {
+      inline-size: min(460px, 100vw - 32px);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+
+      & > [data-part='icon'] {
+        display: grid;
+        flex: none;
+        place-items: center;
+        inline-size: 40px;
+        block-size: 40px;
+        border-radius: var(--md-sys-shape-corner-medium);
+        background: var(--md-sys-color-secondary-container);
+        color: var(--md-sys-color-on-secondary-container);
+      }
+      & > [data-part='body'] { display: grid; flex: 1 1 0; gap: 6px; min-inline-size: 0; padding: 8px 4px; }
+      & [data-part='message'] { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+      & [data-part='progress'] { min-inline-size: 0; }
+      & [data-part='progress'] > .m3e-wavy { block-size: 10px; }
+      & [data-part='steps'] { display: flex; gap: 4px; }
+      & [data-part='steps'] > i {
+        flex: 1;
+        block-size: 4px;
+        border-radius: var(--md-sys-shape-corner-full);
+        background: var(--md-sys-color-surface-container-highest);
+        transition: background-color var(--md-sys-motion-spring-default-effects-duration) var(--md-sys-motion-spring-default-effects);
+      }
+      & [data-part='steps'] > i[data-done] { background: var(--md-sys-color-primary); }
+      & > [data-part='actions'] { display: flex; flex-basis: 100%; justify-content: flex-end; gap: 8px; }
+      /* Locked while an action runs; still focusable, so focus is not lost. */
+      & > [data-part='actions'] > .m3e-button[aria-disabled='true'] { opacity: 0.5; cursor: progress; }
+    }
+    &[data-tone='ok'] > [data-part='full'] > [data-part='icon'] { background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); }
+    &[data-tone='error'] > [data-part='full'] > [data-part='icon'] { background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
+
+    & > [data-part='mini'] {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      block-size: 40px;
+      padding: 0 16px 0 10px;
+      white-space: nowrap;
+      font: var(--md-sys-typescale-label-large-weight) var(--md-sys-typescale-label-large-size) / var(--md-sys-typescale-label-large-line-height) var(--md-sys-typescale-label-large-font);
+
+      & > span { color: var(--md-sys-color-on-surface-variant); }
+    }
+  }
+
+  .card-island:popover-open:where(:not([data-closing])) {
+    opacity: 1;
+    transition-duration: var(--md-sys-motion-spring-default-effects-duration);
+    transition-timing-function: var(--md-sys-motion-spring-default-effects);
+
+    @starting-style { opacity: 0; }
+  }
+  /* The pill leaves with the player's controls; it is not hidden, so it comes back with them. */
+  .card-island[data-concealed] { opacity: 0; }
+
+  /* Movement only without reduced motion: the morph of size, corners and place, the entry scale. */
+  @media (prefers-reduced-motion: no-preference) {
+    .card-island {
+      scale: 0.92;
+      transition-property: opacity, scale, width, height, top, left, border-radius;
+      transition-duration:
+        var(--md-sys-motion-duration-short3), var(--md-sys-motion-duration-short3),
+        var(--md-sys-motion-spring-default-spatial-duration), var(--md-sys-motion-spring-default-spatial-duration),
+        var(--md-sys-motion-spring-default-spatial-duration), var(--md-sys-motion-spring-default-spatial-duration),
+        var(--md-sys-motion-spring-default-spatial-duration);
+      transition-timing-function:
+        var(--md-sys-motion-easing-standard-accelerate), var(--md-sys-motion-easing-standard-accelerate),
+        var(--md-sys-motion-spring-default-spatial), var(--md-sys-motion-spring-default-spatial),
+        var(--md-sys-motion-spring-default-spatial), var(--md-sys-motion-spring-default-spatial),
+        var(--md-sys-motion-spring-default-spatial);
+    }
+    .card-island:popover-open:where(:not([data-closing])) {
+      scale: 1;
+      transition-duration:
+        var(--md-sys-motion-spring-default-effects-duration), var(--md-sys-motion-spring-default-spatial-duration),
+        var(--md-sys-motion-spring-default-spatial-duration), var(--md-sys-motion-spring-default-spatial-duration),
+        var(--md-sys-motion-spring-default-spatial-duration), var(--md-sys-motion-spring-default-spatial-duration),
+        var(--md-sys-motion-spring-default-spatial-duration);
+      transition-timing-function:
+        var(--md-sys-motion-spring-default-effects), var(--md-sys-motion-spring-default-spatial),
+        var(--md-sys-motion-spring-default-spatial), var(--md-sys-motion-spring-default-spatial),
+        var(--md-sys-motion-spring-default-spatial), var(--md-sys-motion-spring-default-spatial),
+        var(--md-sys-motion-spring-default-spatial);
+
+      @starting-style { scale: 0.92; }
+    }
+    .card-island[data-concealed] { scale: 0.92; }
+  }
+
+  /* Chromium keeps the popover in the top layer for the exit; the durations list repeats, so both get short3. */
+  @supports (overlay: auto) {
+    .card-island { transition-property: opacity, scale, display, overlay; transition-behavior: allow-discrete; }
+    @media (prefers-reduced-motion: no-preference) {
+      .card-island { transition-property: opacity, scale, width, height, top, left, border-radius, display, overlay; }
+    }
+  }
+}
+
 /* Volume slider: a 4px tonal track with a 4x20 bar thumb. */
 .m3-range { appearance: none; -webkit-appearance: none; width: 88px; height: 24px; background: transparent; accent-color: var(--md-sys-color-primary); }
 .m3-range::-webkit-slider-runnable-track { height: 4px; border-radius: 9999px; background: linear-gradient(to right, var(--md-sys-color-primary) var(--fill), var(--md-sys-color-secondary-container) var(--fill)); }

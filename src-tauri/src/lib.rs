@@ -79,10 +79,18 @@ pub fn run() {
                 anki: Default::default(),
                 agent_busy: Default::default(),
                 cards_queue: Default::default(),
+                card_jobs: Default::default(),
                 asr: Default::default(),
                 models_dev: Default::default(),
             });
             app.manage(st.clone());
+
+            // Local job recovery completes before any card operation is accepted; network
+            // reconciliation of sent operations is scheduled separately.
+            let jobs = st.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::anki::jobs::start(jobs).await;
+            });
 
             let s2 = st.clone();
             tauri::async_runtime::spawn(async move {
@@ -164,16 +172,26 @@ pub fn run() {
             commands::agent_send,
             commands::agent_history,
             commands::agent_usage,
-            commands::cards_draft,
-            commands::cards_create_proposal,
             commands::cards_add,
             commands::cards_dismiss,
+            commands::cards_job_create,
+            commands::cards_jobs,
+            commands::cards_job_get,
+            commands::cards_job_hold,
+            commands::cards_job_cancel,
+            commands::cards_job_edit,
+            commands::cards_job_preview,
+            commands::cards_job_image,
+            commands::cards_job_save,
+            commands::cards_job_delete,
+            commands::cards_job_retry,
             commands::anki_refresh,
             commands::anki_catalog,
             commands::anki_index_models,
             commands::anki_note_type,
             commands::cards_preview,
             commands::images_generate,
+            commands::images_route,
             commands::tutor_import_script,
             commands::config_get,
             commands::config_save,
@@ -200,8 +218,71 @@ pub fn run() {
     app.run(|handle, ev| {
         if let RunEvent::Exit = ev {
             if let Some(st) = handle.try_state::<Arc<AppState>>() {
+                st.card_jobs.shutdown();
                 tauri::async_runtime::block_on(st.sessions.close());
             }
         }
     });
+}
+
+/// The UI and the backend share command and event names only as strings; these tests keep the two sides in step.
+#[cfg(test)]
+mod ipc_contract {
+    use regex::Regex;
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+
+    fn sources(dir: &Path, exts: &[&str], out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                sources(&path, exts, out);
+            } else if path.extension().and_then(|e| e.to_str()).is_some_and(|e| exts.contains(&e)) {
+                out.push(path);
+            }
+        }
+    }
+
+    fn captures(re: &str, text: &str) -> BTreeSet<String> {
+        Regex::new(re).unwrap().captures_iter(text).map(|c| c[1].to_string()).collect()
+    }
+
+    fn read_all(dir: &Path, exts: &[&str]) -> String {
+        let mut files = Vec::new();
+        sources(dir, exts, &mut files);
+        files.iter().map(|f| std::fs::read_to_string(f).unwrap()).collect::<Vec<_>>().join("\n")
+    }
+
+    fn frontend() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("../src") }
+
+    fn diff(a: &BTreeSet<String>, b: &BTreeSet<String>) -> Vec<String> { a.difference(b).cloned().collect() }
+
+    #[test]
+    fn every_command_is_defined_registered_and_called() {
+        let lib = include_str!("lib.rs");
+        let handler = lib.split("generate_handler![").nth(1).unwrap().split(']').next().unwrap();
+        let registered = captures(r"commands::(\w+)", handler);
+        let defined = captures(r"#\[tauri::command\]\s*pub\s+(?:async\s+)?fn\s+(\w+)", include_str!("commands.rs"));
+        // `call` in common/api/tauri.ts, plus the raw `invoke` of the event log, which must not log itself.
+        let called = captures(r"\b(?:call|invoke)(?:<[^()]*>)?\(\s*'(\w+)'", &read_all(&frontend(), &["ts", "tsx"]));
+
+        assert!(!called.is_empty(), "no command calls found in src/");
+        assert_eq!(diff(&defined, &registered), Vec::<String>::new(), "defined in commands.rs but missing from generate_handler!");
+        assert_eq!(diff(&called, &registered), Vec::<String>::new(), "called by the UI but not registered");
+        assert_eq!(diff(&registered, &called), Vec::<String>::new(), "registered but never called by the UI");
+    }
+
+    #[test]
+    fn every_event_is_emitted_and_typed() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // `.emit(<literal name>, …)` on the app handle and module helpers of the form `emit(st, <literal name>, …)`.
+        let emitted = captures(r#"emit\(\s*(?:&?\w+\s*,\s*)?"([^"]+)""#, &read_all(&src, &["rs"]));
+        let api = std::fs::read_to_string(frontend().join("common/api/tauri.ts")).unwrap();
+        let block = api.split("export type AppEvents = {").nth(1).unwrap().split("\n}").next().unwrap();
+        let typed = captures(r"(?m)^\s*'?([\w:]+)'?\s*:", block);
+
+        assert!(!emitted.is_empty() && !typed.is_empty(), "event extraction found nothing");
+        assert_eq!(diff(&emitted, &typed), Vec::<String>::new(), "emitted by Rust but missing from AppEvents in tauri.ts");
+        assert_eq!(diff(&typed, &emitted), Vec::<String>::new(), "in AppEvents but never emitted by Rust");
+    }
 }

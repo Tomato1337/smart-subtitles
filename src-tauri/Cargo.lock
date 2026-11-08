@@ -3769,7 +3769,7 @@ checksum = "d0d5d4b1981b8bbbb7aed204cae5726d683d5d6ac7e74ec54122ea28f315e7c8"
 
 [[package]]
 name = "smart-subtitle"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3778,6 +3778,7 @@ dependencies = [
  "encoding_rs",
  "futures-util",
  "hex",
+ "httpdate",
  "json5",
  "log",
  "regex",

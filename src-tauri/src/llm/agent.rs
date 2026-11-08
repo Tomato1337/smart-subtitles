@@ -18,6 +18,16 @@ const RULES: &str = "Ты в чате с учеником, который смо
 первого уровня. Используй tools как в tutor: предлагай карточки только через propose_cards, никогда не утверждай, что \
 добавил в Anki сам.";
 
+/// One durable job behind a proposal card, so the panel can offer exactly the failed words again.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalJob {
+    pub job_id: String,
+    pub word_index: Option<i64>,
+    pub state: String,
+    pub note_id: Option<i64>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
@@ -30,6 +40,8 @@ pub struct ChatMessage {
     pub proposal_id: Option<i64>,
     pub words: Option<Vec<WordDraft>>,
     pub status: Option<String>,
+    /// Durable jobs of this proposal once it was sent; null before that.
+    pub jobs: Option<Vec<ProposalJob>>,
     pub created_at: i64,
 }
 
@@ -98,6 +110,14 @@ pub async fn history(st: &AppState, media_id: &str) -> Result<Vec<ChatMessage>, 
     st.db(move |c| load_history(c, &m)).await
 }
 
+/// States that mean work is still in flight, mirroring `anki::jobs::CardJobState::active`.
+fn job_active(state: &str) -> bool {
+    matches!(
+        state,
+        "grace" | "queued" | "drafting" | "generating" | "committing" | "resolving" | "cancel_requested" | "deleting"
+    )
+}
+
 fn load_history(c: &rusqlite::Connection, media_id: &str) -> rusqlite::Result<Vec<ChatMessage>> {
     let rows = c
         .prepare("SELECT id,role,json,created_at,cue_idx FROM chat_message WHERE media_id=?1 ORDER BY id")?
@@ -110,11 +130,35 @@ fn load_history(c: &rusqlite::Connection, media_id: &str) -> rusqlite::Result<Ve
             let pid = v["proposalId"].as_i64().unwrap_or(0);
             let p: Option<(String, String)> = c.query_row("SELECT words_json,status FROM proposal WHERE id=?1", [pid], |r| Ok((r.get(0)?, r.get(1)?))).ok();
             let Some((w, status)) = p else { continue };
-            out.push(ChatMessage { id, role, text: String::new(), cue_idx: None, at: None, proposal_id: Some(pid), words: serde_json::from_str(&w).ok(), status: Some(status), created_at });
+            let jobs: Vec<ProposalJob> = c
+                .prepare("SELECT id,word_index,state,note_id FROM card_job WHERE proposal_id=?1 ORDER BY word_index")?
+                .query_map([pid], |r| Ok(ProposalJob { job_id: r.get(0)?, word_index: r.get(1)?, state: r.get(2)?, note_id: r.get(3)? }))?
+                .collect::<Result<_, _>>()?;
+            // Added cards next to retryable failures: the panel shows it as partial, not as success.
+            // The jobs are the authority: a stale aggregate status after a restart cannot claim an
+            // outcome the durable rows contradict.
+            let succeeded = jobs.iter().filter(|j| j.state == "added").count();
+            let retryable = jobs.iter().any(|j| matches!(j.state.as_str(), "failed" | "interrupted" | "resolving"));
+            let active = jobs.iter().any(|j| job_active(&j.state));
+            let all_cancelled = !jobs.is_empty() && jobs.iter().all(|j| matches!(j.state.as_str(), "cancelled" | "deleted"));
+            let derived = if jobs.is_empty() {
+                status
+            } else if active {
+                "adding".to_string()
+            } else if succeeded > 0 && retryable {
+                "partial".to_string()
+            } else if succeeded > 0 {
+                "added".to_string()
+            } else if all_cancelled {
+                "dismissed".to_string()
+            } else {
+                "failed".to_string()
+            };
+            out.push(ChatMessage { id, role, text: String::new(), cue_idx: None, at: None, proposal_id: Some(pid), words: serde_json::from_str(&w).ok(), status: Some(derived), jobs: if jobs.is_empty() { None } else { Some(jobs) }, created_at });
         } else {
             // Messages from before the per-film thread have no `at` in json: the column holds their cue.
             let cue_idx = if v.get("at").is_some() { v["cue"].as_u64().map(|x| x as u32) } else { Some(col_cue) };
-            out.push(ChatMessage { id, role, text: v["text"].as_str().unwrap_or("").to_string(), cue_idx, at: v["at"].as_f64(), proposal_id: None, words: None, status: None, created_at });
+            out.push(ChatMessage { id, role, text: v["text"].as_str().unwrap_or("").to_string(), cue_idx, at: v["at"].as_f64(), proposal_id: None, words: None, status: None, jobs: None, created_at });
         }
     }
     Ok(out)
@@ -258,5 +302,42 @@ mod tests {
             ("new", Some(40), Some(125.5)),
             ("before cues", None, Some(2.0)),
         ]);
+    }
+
+    #[test]
+    fn proposal_history_derives_partial_and_jobs_from_durable_rows() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init(&c).unwrap();
+        c.execute(
+            "INSERT INTO proposal(id,media_id,cue_idx,words_json,status,created_at) VALUES(1,'film',7,'[{\"word\":\"a\"},{\"word\":\"b\"}]','adding',0)",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO chat_message(media_id,cue_idx,role,json,created_at) VALUES('film',0,'proposal','{\"proposalId\":1}',0)",
+            [],
+        )
+        .unwrap();
+        let job = |id: &str, index: i64, state: &str, note: Option<i64>| {
+            c.execute(
+                "INSERT INTO card_job(id,origin,proposal_id,word_index,media_id,cue_idx,state,revision,version,remaining_ms,\
+                 cancel_requested,context_json,warnings_json,note_confirmed,note_id,created_at,updated_at) \
+                 VALUES(?1,'proposal',1,?2,'film',7,?3,0,1,0,0,'{}','[]',?4,?5,0,0)",
+                params![id, index, state, note.is_some() as i64, note],
+            )
+            .unwrap();
+        };
+        job("j1", 0, "added", Some(42));
+        job("j2", 1, "failed", None);
+        let h = load_history(&c, "film").unwrap();
+        assert_eq!(h[0].status.as_deref(), Some("partial"));
+        let jobs = h[0].jobs.as_ref().unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].note_id, Some(42));
+
+        c.execute("UPDATE card_job SET state='added', note_confirmed=1, note_id=43 WHERE id='j2'", []).unwrap();
+        c.execute("UPDATE proposal SET status='failed' WHERE id=1", []).unwrap();
+        let h = load_history(&c, "film").unwrap();
+        assert_eq!(h[0].status.as_deref(), Some("added"), "durable jobs win over a stale aggregate status");
     }
 }

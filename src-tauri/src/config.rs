@@ -156,6 +156,8 @@ pub struct Anki {
     /// Cut the movie clip at all: off means no clip, no ClipText/ClipSource and no clip audio.
     pub clip: bool,
     pub sync_after_add: bool,
+    /// Add a card for the clicked word without a preview dialog: a five-second window to cancel.
+    pub quick_add: bool,
 }
 impl Default for Anki {
     fn default() -> Self {
@@ -172,6 +174,7 @@ impl Default for Anki {
             sentence_audio: "none".into(),
             clip: true,
             sync_after_add: true,
+            quick_add: false,
         }
     }
 }
@@ -212,6 +215,8 @@ impl Default for ImagesOmp {
 pub struct Images {
     /// "none" | "openai" | "runware" | "gemini" | "omp"
     pub backend: String,
+    /// Backends tried in this order after the primary one; empty = primary only.
+    pub fallbacks: Vec<String>,
     /// Appended to every prompt as ". Style: {style}".
     pub style: String,
     pub openai: ImagesOpenai,
@@ -221,7 +226,7 @@ pub struct Images {
 }
 impl Default for Images {
     fn default() -> Self {
-        Self { backend: "none".into(), style: String::new(), openai: Default::default(), runware: Default::default(), gemini: Default::default(), omp: Default::default() }
+        Self { backend: "none".into(), fallbacks: Vec::new(), style: String::new(), openai: Default::default(), runware: Default::default(), gemini: Default::default(), omp: Default::default() }
     }
 }
 
@@ -413,6 +418,18 @@ mod tests {
         assert_eq!(v["llmTasks"]["chat"]["source"], "omp");
         assert_eq!(v["llmTasks"]["chat"]["effort"], "medium");
         assert!(v["llmTasks"]["chat"].get("endpoint").is_none());
+    }
+
+    #[test]
+    fn quick_add_and_image_fallbacks_default_off() {
+        // A config.json written before these fields existed keeps loading.
+        let c: Config = serde_json::from_str(r#"{"images":{"backend":"runware","runware":{"apiKey":"r"}}}"#).unwrap();
+        assert!(!c.anki.quick_add);
+        assert!(c.images.fallbacks.is_empty());
+        assert_eq!(c.images.backend, "runware");
+        let v = serde_json::to_value(&c).unwrap();
+        assert_eq!(v["anki"]["quickAdd"], false);
+        assert_eq!(v["images"]["fallbacks"], serde_json::json!([]));
     }
 
     #[test]

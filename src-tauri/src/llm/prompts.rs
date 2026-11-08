@@ -1,6 +1,20 @@
 use crate::{patterns::PATTERNS, session::Session, state::AppState};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
+
+/// The film a request is about, captured when a job is created so a later film swap cannot change it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaContext {
+    pub media_id: String,
+    pub title: String,
+    pub original_title: Option<String>,
+    pub year: Option<i32>,
+    pub season: Option<u32>,
+    pub episode: Option<u32>,
+    pub episode_title: Option<String>,
+}
 
 pub fn mmss(sec: f64) -> String {
     let s = sec.max(0.0) as u64;
@@ -9,10 +23,15 @@ pub fn mmss(sec: f64) -> String {
 
 /// Tutor owns the level when the add-on is on; otherwise the one saved in the app.
 async fn learner_cefr(st: &AppState) -> String {
-    crate::tutor::api::settings(st)
-        .await
-        .and_then(|v| v["learner.cefr"].as_str().map(str::to_string))
-        .unwrap_or_else(|| st.cfg().learner.cefr.clone())
+    let cfg = st.cfg();
+    if cfg.tutor.enabled {
+        if let Some(v) = crate::tutor::api::settings(&st.http, &cfg.tutor).await {
+            if let Some(level) = v["learner.cefr"].as_str() {
+                return level.to_string();
+            }
+        }
+    }
+    cfg.learner.cefr.clone()
 }
 
 fn system_text(cefr: &str) -> String {
@@ -32,7 +51,15 @@ fn system_text(cefr: &str) -> String {
 /// which lets DeepSeek's automatic prefix cache hit. Built once per subtitle set.
 pub async fn prefix(st: &AppState, s: &Session) -> anyhow::Result<Arc<Vec<Value>>> {
     if let Some(p) = s.prefix.lock().unwrap().clone() { return Ok(p); }
-    let mid = s.media_id.clone();
+    let media = media_context(st, s).await?;
+    let p = prefix_for_media(st, &media).await?;
+    *s.prefix.lock().unwrap() = Some(p.clone());
+    Ok(p)
+}
+
+/// The same prefix from a captured media context, for a job whose film may no longer be open.
+pub async fn prefix_for_media(st: &AppState, media: &MediaContext) -> anyhow::Result<Arc<Vec<Value>>> {
+    let mid = media.media_id.clone();
     let cues: Vec<(u32, f64, String)> = st
         .db(move |c| {
             c.prepare("SELECT idx,start,text FROM cue WHERE media_id=?1 ORDER BY idx")?
@@ -41,34 +68,47 @@ pub async fn prefix(st: &AppState, s: &Session) -> anyhow::Result<Arc<Vec<Value>
         })
         .await
         .map_err(anyhow::Error::msg)?;
-    let (season, episode) = crate::session::season_episode_of(&s.req);
-    let card = s.req.card.as_ref();
-    let mut film = format!("FILM: {}", card.map(|c| c.title.as_str()).filter(|t| !t.is_empty()).unwrap_or(&s.req.title));
-    let orig = card.and_then(|c| c.original_title.clone());
-    let year = card.and_then(|c| c.year);
-    match (orig, year) {
+    let card = &media;
+    let mut film = format!("FILM: {}", if card.title.is_empty() { "" } else { card.title.as_str() });
+    match (card.original_title.clone(), card.year) {
         (Some(o), Some(y)) => film.push_str(&format!(" ({o}, {y})")),
         (Some(o), None) => film.push_str(&format!(" ({o})")),
         (None, Some(y)) => film.push_str(&format!(" ({y})")),
         _ => {}
     }
-    if let (Some(se), Some(ep)) = (season, episode) {
+    if let (Some(se), Some(ep)) = (card.season, card.episode) {
         film.push_str(&format!(" S{se}E{ep}"));
-        let t = s.req.episodes.iter().find(|e| e.episode == ep).and_then(|e| e.name_en.clone().or_else(|| e.name_ru.clone()));
-        if let Some(t) = t { film.push_str(&format!(" «{t}»")); }
+        if let Some(t) = &card.episode_title { film.push_str(&format!(" «{t}»")); }
     }
     let mut script = String::from("SCRIPT:\n");
     for (i, start, text) in &cues {
         script.push_str(&format!("[{i}] {} {}\n", mmss(*start), text.replace('\n', " / ")));
     }
     let cefr = learner_cefr(st).await;
-    let p = Arc::new(vec![
+    Ok(Arc::new(vec![
         json!({ "role": "system", "content": system_text(&cefr) }),
         json!({ "role": "user", "content": format!("{film}\n{script}") }),
         json!({ "role": "assistant", "content": "OK" }),
-    ]);
-    *s.prefix.lock().unwrap() = Some(p.clone());
-    Ok(p)
+    ]))
+}
+
+/// The film context of the open session, as a job stores it.
+pub async fn media_context(st: &AppState, s: &Session) -> anyhow::Result<MediaContext> {
+    let (season, episode) = crate::session::season_episode_of(&s.req);
+    let card = s.req.card.as_ref();
+    let episode_title = episode.and_then(|e| {
+        s.req.episodes.iter().find(|x| x.episode == e).and_then(|x| x.name_en.clone().or_else(|| x.name_ru.clone()))
+    });
+    let _ = st;
+    Ok(MediaContext {
+        media_id: s.media_id.clone(),
+        title: card.map(|c| c.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| s.req.title.clone()),
+        original_title: card.and_then(|c| c.original_title.clone()),
+        year: card.and_then(|c| c.year),
+        season,
+        episode,
+        episode_title,
+    })
 }
 
 #[cfg(test)]

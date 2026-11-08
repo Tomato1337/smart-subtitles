@@ -142,14 +142,15 @@ type Picked = (Option<String>, Option<String>, Vec<String>);
 
 async fn fetch(st: &AppState) -> anyhow::Result<(Vec<AnkiCard>, Vec<IndexModel>)> {
     let cfg = st.cfg();
+    let client = connect::Client::new(&st.http, &cfg.anki.url);
     let q = query(&cfg.anki.index_decks, &cfg.anki.deck);
-    let ids = connect::call(st, "findCards", json!({ "query": q }), Duration::from_secs(10)).await?;
+    let ids = client.call("findCards", json!({ "query": q }), Duration::from_secs(10)).await?;
     let ids: Vec<i64> = ids.as_array().ok_or_else(|| anyhow!("findCards"))?.iter().filter_map(Value::as_i64).collect();
     let mut by_note: HashMap<i64, AnkiCard> = HashMap::new();
     let mut picked: HashMap<String, Picked> = HashMap::new();
     let mut counts: HashMap<String, usize> = HashMap::new();
     for chunk in ids.chunks(400) {
-        let infos = connect::call(st, "cardsInfo", json!({ "cards": chunk }), Duration::from_secs(20)).await?;
+        let infos = client.call("cardsInfo", json!({ "cards": chunk }), Duration::from_secs(20)).await?;
         for c in infos.as_array().cloned().unwrap_or_default() {
             let model = c["modelName"].as_str().unwrap_or("").to_string();
             let entry = picked.entry(model.clone()).or_insert_with(|| {

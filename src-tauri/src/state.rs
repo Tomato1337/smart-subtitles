@@ -18,8 +18,10 @@ pub struct AppState {
     pub anki: Mutex<crate::anki::index::AnkiState>,
     /// Media ids with an agent run in flight (one chat thread per film).
     pub agent_busy: Mutex<std::collections::HashSet<String>>,
-    /// Serializes background Anki jobs: one clip + image run at a time, in click order.
+    /// Serializes card preparation: one clip + image run at a time, in click order.
     pub cards_queue: tokio::sync::Mutex<()>,
+    /// Durable card jobs: grace timers, holds and per-job cancellation.
+    pub card_jobs: crate::anki::jobs::Runtime,
     /// Serializes speech recognition (venv setup and runs).
     pub asr: tokio::sync::Mutex<()>,
     /// models.dev index and when it was loaded; one download a day, shared by every call.
@@ -38,12 +40,27 @@ impl AppState {
         T: Send + 'static,
         F: FnOnce(&Connection) -> rusqlite::Result<T> + Send + 'static,
     {
-        let db = self.db.clone();
-        tokio::task::spawn_blocking(move || {
-            let c = db.lock().map_err(|_| "db poisoned".to_string())?;
-            f(&c).map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| e.to_string())?
+        db_task(&self.db, f).await
     }
+}
+
+/// The synchronous body of [`db_task`]: lock the connection and run one closure. Job transactions
+/// use it directly so their CAS and commit behaviour is testable with an in-memory database.
+pub fn with_db<T, F>(db: &Arc<Mutex<Connection>>, f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&Connection) -> rusqlite::Result<T> + Send + 'static,
+{
+    let c = db.lock().map_err(|_| "db poisoned".to_string())?;
+    f(&c).map_err(|e| e.to_string())
+}
+
+/// Same as [`with_db`] but off the async runtime's threads.
+pub async fn db_task<T, F>(db: &Arc<Mutex<Connection>>, f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&Connection) -> rusqlite::Result<T> + Send + 'static,
+{
+    let db = db.clone();
+    tokio::task::spawn_blocking(move || with_db(&db, f)).await.map_err(|e| e.to_string())?
 }

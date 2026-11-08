@@ -4,7 +4,7 @@ import { Dialog, Icon, IconButton, Spinner, Switch, toast } from '@tomato1337/m3
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { AppConfig, LlmProvider, SetupStatus, SetupStep } from '@/common/types/ipc'
-import { IMAGE_BACKENDS } from './ImageFields'
+import { IMAGE_BACKENDS, imageRouteLabel, tutorOwnsImages } from './ImageFields'
 import { LlmFields } from './LlmFields'
 import { CEFR, Field, Secret, Text, inputClass } from './SettingsPanel'
 
@@ -284,6 +284,7 @@ function StepLampa({ origins, setOrigins, port }: {
 }
 
 function StepAnki({ cfg, hint, set }: { cfg: AppConfig; hint: string; set: Apply }) {
+  const ownsImages = tutorOwnsImages(cfg.tutor)
   return (
     <>
       <p className="type-body-medium">
@@ -292,10 +293,16 @@ function StepAnki({ cfg, hint, set }: { cfg: AppConfig; hint: string; set: Apply
       <Field label="Колода">
         <Text value={cfg.anki.deck} onChange={(deck) => set('anki', { deck })} />
       </Field>
-      <Field label="Картинки">
+      <Field
+        label="Основной провайдер картинок"
+        hint={ownsImages
+          ? 'Основной провайдер берётся из tutor; запасные задаются в панели настроек → Anki и карточки.'
+          : 'Запасные провайдеры и стиль задаются в панели настроек → Anki и карточки.'}
+      >
         <select
           className={inputClass}
           value={cfg.images.backend}
+          disabled={ownsImages}
           onChange={(e) => set('images', { backend: e.target.value as AppConfig['images']['backend'] })}
         >
           {IMAGE_BACKENDS.map(([id, label]) => (
@@ -303,10 +310,24 @@ function StepAnki({ cfg, hint, set }: { cfg: AppConfig; hint: string; set: Apply
           ))}
         </select>
       </Field>
+      <p className={HINT}>Порядок попыток: {imageRouteLabel(cfg.images, cfg.tutor)}</p>
+      <Switch
+        label="Быстрое добавление без предпросмотра"
+        checked={cfg.anki.quickAdd}
+        onChange={(quickAdd) => set('anki', { quickAdd })}
+      />
+      <p className={HINT}>
+        Клик по слову сразу собирает карточку: пять секунд на «Отменить» или «Редактировать», затем карточка
+        добавляется в Anki в фоне. Воспроизведение не останавливается.
+      </p>
       <Switch
         label="Tutor — необязательный аддон (уровень CEFR, отправка сценария)"
         checked={cfg.tutor.enabled}
-        onChange={(enabled) => set('tutor', { enabled })}
+        onChange={(enabled) => {
+          // Turning ownership off makes the app backend primary again; it must not stay a fallback.
+          if (!enabled) set('images', { fallbacks: cfg.images.fallbacks.filter((b) => b !== cfg.images.backend) })
+          set('tutor', { enabled })
+        }}
       />
       <p className={HINT}>{hint}</p>
       <p className={HINT}>Подробные настройки — в панели настроек → Anki и карточки.</p>

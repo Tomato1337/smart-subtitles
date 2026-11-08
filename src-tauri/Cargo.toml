@@ -1,6 +1,6 @@
 [package]
 name = "smart-subtitle"
-version = "0.2.1"
+version = "0.3.0"
 description = "Desktop video player with smart English subtitles, LLM translations and Anki cards"
 authors = ["Ilya Tyunin"]
 license = "MIT"
@@ -41,6 +41,7 @@ sha2 = "0.10"
 base64 = "0.22"
 hex = "0.4"
 url = "2"
+httpdate = "1"
 dirs = "6"
 regex = "1"
 futures-util = "0.3"
@@ -48,3 +49,7 @@ encoding_rs = "0.8"
 json5 = "0.4"
 serde_yaml = "0.9"
 toml = "0.8"
+
+[dev-dependencies]
+# `start_paused` for deterministic retry/deadline tests.
+tokio = { version = "1", features = ["test-util"] }

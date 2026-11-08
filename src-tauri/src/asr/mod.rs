@@ -43,10 +43,14 @@ pub(crate) fn find_uv() -> Option<PathBuf> {
     crate::proc::find("uv")
 }
 
-async fn output(cmd: Command, secs: u64) -> anyhow::Result<Output> {
-    let mut cmd = cmd;
-    let o = tokio::time::timeout(Duration::from_secs(secs), cmd.kill_on_drop(true).output()).await.map_err(|_| anyhow!("таймаут {secs} с"))?;
-    o.map_err(Into::into)
+async fn output(cmd: Command, secs: u64, cancel: &tokio_util::sync::CancellationToken) -> anyhow::Result<Output> {
+    crate::proc::output_cancellable(cmd, Duration::from_secs(secs), cancel)
+        .await
+        .map_err(|e| match e {
+            crate::proc::ProcessError::Cancelled => anyhow!("отменено"),
+            crate::proc::ProcessError::TimedOut => anyhow!("таймаут {secs} с"),
+            other => anyhow!("{other}"),
+        })
 }
 
 /// `uv` stderr tail, logged in full so a failed install can be diagnosed from the app log.
@@ -57,7 +61,7 @@ fn failure(o: &Output) -> String {
 }
 
 /// Interpreter of the venv, installing faster-whisper once (marker file records the requirement).
-async fn ensure_env(st: &AppState) -> anyhow::Result<PathBuf> {
+async fn ensure_env(st: &AppState, cancel: &tokio_util::sync::CancellationToken) -> anyhow::Result<PathBuf> {
     let venv = asr_dir().join("venv");
     // uv lays a venv out the way Python does on this OS.
     let python = if cfg!(windows) { venv.join("Scripts").join("python.exe") } else { venv.join("bin").join("python") };
@@ -74,7 +78,7 @@ async fn ensure_env(st: &AppState) -> anyhow::Result<PathBuf> {
 
     let mut c = crate::proc::command(&uv);
     c.args(["venv", "--allow-existing"]).arg(&venv);
-    match output(c, 300).await {
+    match output(c, 300, cancel).await {
         Ok(o) if o.status.success() => {}
         Ok(o) => bail!("uv: {}", failure(&o)),
         Err(e) => bail!("uv: {e}"),
@@ -82,7 +86,7 @@ async fn ensure_env(st: &AppState) -> anyhow::Result<PathBuf> {
 
     let mut c = crate::proc::command(&uv);
     c.args(["pip", "install", "--python"]).arg(&python).arg(REQUIREMENT);
-    match output(c, 900).await {
+    match output(c, 900, cancel).await {
         Ok(o) if o.status.success() => {}
         Ok(o) => bail!("uv: {}", failure(&o)),
         Err(e) => bail!("uv: {e}"),
@@ -94,17 +98,24 @@ async fn ensure_env(st: &AppState) -> anyhow::Result<PathBuf> {
 }
 
 /// One fragment of the media's audio as mono 16 kHz float32 PCM, so ASR never touches the network
-/// stream itself.
-pub async fn extract_pcm(src: &str, audio_index: u32, start: f64, dur: f64, out: &Path) -> anyhow::Result<()> {
+/// stream itself. The cancellation token kills the whole ffmpeg process group.
+pub async fn extract_pcm_cancellable(
+    src: &str,
+    audio_index: u32,
+    start: f64,
+    dur: f64,
+    out: &Path,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> anyhow::Result<()> {
     let mut a: Vec<String> = ["-hide_banner", "-v", "error", "-y", "-ss"].iter().map(|s| s.to_string()).collect();
     a.push(format!("{start:.3}"));
     a.extend(["-t".into(), format!("{dur:.3}"), "-i".into(), crate::media::input(src)]);
     a.extend(["-map".into(), format!("0:{audio_index}"), "-vn".into()]);
     a.extend(["-ac", "1", "-ar", "16000", "-f", "f32le"].map(String::from));
     a.push(out.to_string_lossy().into_owned());
-    let o = tokio::time::timeout(Duration::from_secs(180), crate::proc::background("ffmpeg").args(&a).kill_on_drop(true).output())
-        .await
-        .map_err(|_| anyhow!("ffmpeg: таймаут"))??;
+    let mut cmd = crate::proc::background("ffmpeg");
+    cmd.args(&a);
+    let o = output(cmd, 180, cancel).await?;
     if !o.status.success() {
         let e = String::from_utf8_lossy(&o.stderr).into_owned();
         logs::log("ffmpeg", &format!("pcm failed: {e}"));
@@ -113,10 +124,22 @@ pub async fn extract_pcm(src: &str, audio_index: u32, start: f64, dur: f64, out:
     Ok(())
 }
 
+/// Compatibility wrapper for callers without a cancellation token.
+pub async fn extract_pcm(src: &str, audio_index: u32, start: f64, dur: f64, out: &Path) -> anyhow::Result<()> {
+    extract_pcm_cancellable(src, audio_index, start, dur, out, &tokio_util::sync::CancellationToken::new()).await
+}
+
 /// Words for every file, in file order. Times are relative to their file.
-pub async fn transcribe(st: &AppState, files: &[PathBuf]) -> anyhow::Result<Vec<Vec<Word>>> {
-    let _turn = st.asr.lock().await;
-    let python = ensure_env(st).await?;
+pub async fn transcribe_cancellable(
+    st: &AppState,
+    files: &[PathBuf],
+    cancel: &tokio_util::sync::CancellationToken,
+) -> anyhow::Result<Vec<Vec<Word>>> {
+    let _turn = tokio::select! {
+        _ = cancel.cancelled() => bail!("отменено"),
+        turn = st.asr.lock() => turn,
+    };
+    let python = ensure_env(st, cancel).await?;
     let dir = asr_dir();
     tokio::fs::create_dir_all(&dir).await?;
     let script = dir.join("asr.py");
@@ -126,13 +149,18 @@ pub async fn transcribe(st: &AppState, files: &[PathBuf]) -> anyhow::Result<Vec<
     let mut c = crate::proc::background(&python);
     c.arg(&script).args([MODEL, &threads]).args(files);
     c.env("HF_HUB_DISABLE_TELEMETRY", "1");
-    let o = output(c, 600).await.map_err(|e| anyhow!("распознавание речи: {e}"))?;
+    let o = output(c, 600, cancel).await.map_err(|e| anyhow!("распознавание речи: {e}"))?;
     if !o.status.success() {
         bail!("распознавание речи: {}", failure(&o));
     }
     let stdout = String::from_utf8_lossy(&o.stdout);
     let last = stdout.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
     serde_json::from_str(last).map_err(|e| anyhow!("распознавание речи: {e}"))
+}
+
+/// Compatibility wrapper for callers without a cancellation token.
+pub async fn transcribe(st: &AppState, files: &[PathBuf]) -> anyhow::Result<Vec<Vec<Word>>> {
+    transcribe_cancellable(st, files, &tokio_util::sync::CancellationToken::new()).await
 }
 
 /// The house spelling of a subtitle/ASR word: lowercase, quotes and punctuation trimmed off the ends.

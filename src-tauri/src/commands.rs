@@ -398,27 +398,92 @@ pub async fn agent_usage(st: St<'_>, media_id: String) -> Res<crate::llm::agent:
     crate::llm::agent::usage(&st, &media_id).await
 }
 
-#[tauri::command]
-pub async fn cards_draft(st: St<'_>, media_id: String, cue_idx: u32, span: Option<String>) -> Res<crate::anki::cards::WordDraft> {
-    let s = current_for(&st, &media_id)?;
-    crate::llm::explain::draft(&st, &s, cue_idx, span).await
-}
-
-#[tauri::command]
-pub async fn cards_create_proposal(st: St<'_>, media_id: String, cue_idx: u32, words: Vec<crate::anki::cards::WordDraft>) -> Res<i64> {
-    crate::anki::cards::create_proposal(&st, &media_id, cue_idx, &words).await
-}
-
-/// Queues the words for Anki and returns at once; the outcome arrives as `cards:result`.
+/// Queues the chosen words of a proposal for Anki; jobs own their cards from here on.
 #[tauri::command]
 pub async fn cards_add(st: St<'_>, proposal_id: i64, indices: Vec<usize>) -> Res<()> {
-    crate::anki::cards::enqueue(&st, proposal_id, indices).await
+    crate::anki::jobs::enqueue_proposal(&st, proposal_id, indices).await
+}
+
+/// Cancels the jobs a dismissed proposal still owns.
+#[tauri::command]
+pub async fn cards_dismiss(st: St<'_>, proposal_id: i64) -> Res<()> {
+    crate::anki::jobs::dismiss_proposal(&st, proposal_id).await
 }
 
 #[tauri::command]
-pub async fn cards_dismiss(st: St<'_>, proposal_id: i64) -> Res<()> {
-    crate::anki::cards::set_status(&st, proposal_id, "dismissed", None).await;
-    Ok(())
+pub async fn cards_job_create(
+    st: St<'_>,
+    media_id: String,
+    cue_idx: u32,
+    span: Option<String>,
+    audio_index: u32,
+    sub_offset: f64,
+    mode: String,
+) -> Res<crate::anki::jobs::CardJob> {
+    crate::anki::jobs::cards_job_create(&st, media_id, cue_idx, span, audio_index, sub_offset, mode).await
+}
+
+#[tauri::command]
+pub async fn cards_jobs(st: St<'_>, cursor: Option<crate::anki::jobs::JobCursor>) -> Res<crate::anki::jobs::CardJobPage> {
+    crate::anki::jobs::cards_jobs(&st, cursor).await
+}
+
+#[tauri::command]
+pub async fn cards_job_get(st: St<'_>, job_id: String) -> Res<crate::anki::jobs::CardJob> {
+    crate::anki::jobs::cards_job_get(&st, job_id).await
+}
+
+#[tauri::command]
+pub async fn cards_job_hold(st: St<'_>, job_id: String, client_id: String, held: bool) -> Res<crate::anki::jobs::CardJob> {
+    crate::anki::jobs::cards_job_hold(&st, job_id, client_id, held).await
+}
+
+#[tauri::command]
+pub async fn cards_job_cancel(st: St<'_>, job_id: String, revision: u64) -> Res<crate::anki::jobs::CardJob> {
+    crate::anki::jobs::cards_job_cancel(&st, job_id, revision).await
+}
+
+#[tauri::command]
+pub async fn cards_job_edit(st: St<'_>, job_id: String, refresh: bool) -> Res<crate::anki::jobs::CardJobEditor> {
+    crate::anki::jobs::cards_job_edit(&st, job_id, refresh).await
+}
+
+#[tauri::command]
+pub async fn cards_job_preview(
+    st: St<'_>,
+    job_id: String,
+    revision: u64,
+    draft: crate::anki::cards::WordDraft,
+    field_values: Option<std::collections::BTreeMap<String, String>>,
+) -> Res<crate::anki::preview::CardPreview> {
+    crate::anki::jobs::cards_job_preview(&st, job_id, revision, draft, field_values).await
+}
+
+#[tauri::command]
+pub async fn cards_job_image(st: St<'_>, job_id: String, revision: u64, prompt: String) -> Res<crate::anki::jobs::CardJobEditor> {
+    crate::anki::jobs::cards_job_image(&st, job_id, revision, prompt).await
+}
+
+#[tauri::command]
+pub async fn cards_job_save(
+    st: St<'_>,
+    job_id: String,
+    revision: u64,
+    draft: crate::anki::cards::WordDraft,
+    field_values: Option<std::collections::BTreeMap<String, String>>,
+    baseline_fields: Option<std::collections::BTreeMap<String, String>>,
+) -> Res<crate::anki::jobs::CardJob> {
+    crate::anki::jobs::cards_job_save(&st, job_id, revision, draft, field_values, baseline_fields).await
+}
+
+#[tauri::command]
+pub async fn cards_job_delete(st: St<'_>, job_id: String) -> Res<crate::anki::jobs::CardJob> {
+    crate::anki::jobs::cards_job_delete(&st, job_id).await
+}
+
+#[tauri::command]
+pub async fn cards_job_retry(st: St<'_>, job_id: String) -> Res<crate::anki::jobs::CardJob> {
+    crate::anki::jobs::cards_job_retry(&st, job_id).await
 }
 
 #[tauri::command]
@@ -431,9 +496,10 @@ pub async fn anki_refresh(st: St<'_>) -> Res<()> {
 #[tauri::command]
 pub async fn anki_catalog(st: St<'_>) -> Res<crate::anki::connect::Catalog> {
     let url = st.cfg().anki.url.clone();
-    crate::anki::connect::catalog(&st).await.map_err(|e| {
-        crate::logs::log("app", &format!("anki catalog: {e:#}"));
-        format!("Anki не запущен ({url})")
+    let client = crate::anki::connect::Client::new(&st.http, &url);
+    client.catalog().await.map_err(|e| {
+        crate::logs::log("app", &crate::logs::redact(&format!("anki catalog: {e}")));
+        "Anki не запущен или не отвечает".into()
     })
 }
 
@@ -446,94 +512,9 @@ pub fn anki_index_models(st: St<'_>) -> Vec<crate::anki::index::IndexModel> {
 /// Fields, template and CSS of one note type; the built-in constants when Anki does not have it yet.
 #[tauri::command]
 pub async fn anki_note_type(st: St<'_>, name: String) -> Res<crate::anki::note_type::NoteTypeView> {
-    crate::anki::note_type::view(&st, &name).await.map_err(|e| format!("{e:#}"))
-}
-
-/// One card as the settings and the add-card dialog preview it.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CardPreview {
-    pub note_type: crate::anki::note_type::NoteTypeView,
-    /// Anki field name -> source id (`""` = the field stays empty).
-    pub mapping: Vec<(String, String)>,
-    pub values: std::collections::BTreeMap<String, String>,
-}
-
-const PREVIEW_IMAGE: &str = r#"<div class="ss-ph">🖼 Картинка появится при добавлении</div>"#;
-const PREVIEW_CLIP: &str = r#"<div class="ss-ph">🎬 Клип из фильма</div>"#;
-
-impl CardPreview {
-    /// Preview of the card these settings would make: draft values, placeholders for the media that
-    /// only the add produces, and the cached picture when one is already generated.
-    async fn build(
-        st: &AppState,
-        anki: &crate::config::Anki,
-        draft: crate::anki::cards::WordDraft,
-        media: Option<(String, u32)>,
-    ) -> Res<Self> {
-        use crate::anki::{cards, fields, images, note_type};
-        let view = note_type::view(st, &anki.note_type).await.map_err(|e| format!("{e:#}"))?;
-        let map = fields::resolve(&view.fields, &anki.fields);
-        let cfg = st.cfg();
-
-        let mut values = fields::Values {
-            word: draft.word.clone(),
-            translation: draft.translation.clone(),
-            word_type: draft.word_type.clone(),
-            cloze_sentence: draft.cloze_sentence.clone(),
-            sentence: draft.full_sentence.clone(),
-            sentence_translation: draft.sentence_translation.clone(),
-            ..Default::default()
-        };
-        // A clip appears in the preview when the video setting is on and something would use it:
-        // a real cue, or the Clip field in the settings preview.
-        let clip_field = map.iter().any(|(_, s)| *s == Some(fields::Source::Clip));
-        let has_clip = anki.clip && (media.is_some() || clip_field);
-        let span = cards::cloze_inner(&draft.cloze_sentence).unwrap_or_else(|| draft.word.clone());
-        match &media {
-            Some((media_id, cue_idx)) => {
-                let cue = cards::cue_meta(st, media_id, *cue_idx).await?;
-                let name = cue.original_title.clone().unwrap_or_else(|| cue.title.clone());
-                let start = cue.start + cue.offset;
-                let text_one_line = cue.text.replace('\n', " ");
-                if anki.clip {
-                    values.clip_text = fields::clip_text(&text_one_line, cards::word_index(&text_one_line, &span));
-                    values.clip_source = fields::clip_source(&cards::source_label(&name, cue.season, cue.episode, start), &name, cue.year);
-                }
-            }
-            // No film open: the draft sentence and a fixed sample source stand in for the movie line.
-            None if has_clip => {
-                values.clip_text = fields::clip_text(&draft.full_sentence, cards::word_index(&draft.full_sentence, &span));
-                values.clip_source = "Marty Supreme · 00:12:34 · Smart Subtitles".into();
-            }
-            None => {}
-        }
-
-        let spec = images::effective(st, &cfg.images).await;
-        let image_prompt = cards::image_prompt(&draft);
-        let cached_image = images::cached(&spec, &images::prompt(&image_prompt, &cfg.images.style, &spec.backend));
-        let mut out = std::collections::BTreeMap::new();
-        let mut mapping = vec![];
-        for (field, source) in &map {
-            let Some(source) = *source else {
-                mapping.push((field.clone(), String::new()));
-                continue;
-            };
-            mapping.push((field.clone(), source.id().to_string()));
-            let value = match source {
-                crate::anki::fields::Source::Image => match &cached_image {
-                    Some(p) if spec.backend != "none" => format!("<img src=\"{}\">", images::data_url(p)),
-                    _ => PREVIEW_IMAGE.to_string(),
-                },
-                crate::anki::fields::Source::Clip if has_clip => PREVIEW_CLIP.to_string(),
-                crate::anki::fields::Source::WordAudio if anki.tts => "[sound:word.mp3]".to_string(),
-                crate::anki::fields::Source::SentenceAudio if anki.sentence_audio != "none" => "[sound:sentence.mp3]".to_string(),
-                other => values.value(other),
-            };
-            out.insert(field.clone(), value);
-        }
-        Ok(CardPreview { note_type: view, mapping, values: out })
-    }
+    let url = st.cfg().anki.url.clone();
+    let client = crate::anki::connect::Client::new(&st.http, &url);
+    crate::anki::note_type::view(&client, &name).await.map_err(|e| format!("{e:#}"))
 }
 
 /// The sample draft the settings dialog previews when no card is being made.
@@ -549,7 +530,8 @@ fn sample_draft() -> crate::anki::cards::WordDraft {
     }
 }
 
-/// Preview of one card: unsaved `anki`/`draft` are allowed, so the dialog can show the draft itself.
+/// Preview of one card: unsaved `anki`/`draft`/`images`/`tutor` are allowed, so the settings dialog
+/// and the add-card modal see exactly the route that saving would use.
 #[tauri::command]
 pub async fn cards_preview(
     st: St<'_>,
@@ -557,22 +539,67 @@ pub async fn cards_preview(
     draft: Option<crate::anki::cards::WordDraft>,
     media_id: Option<String>,
     cue_idx: Option<u32>,
-) -> Res<CardPreview> {
-    let anki = anki.unwrap_or_else(|| st.cfg().anki.clone());
+    images: Option<crate::config::Images>,
+    tutor: Option<crate::config::Tutor>,
+) -> Res<crate::anki::preview::CardPreview> {
+    let cfg = st.cfg();
+    let anki = anki.unwrap_or_else(|| cfg.anki.clone());
     let draft = draft.unwrap_or_else(sample_draft);
-    let media = media_id.zip(cue_idx);
-    CardPreview::build(&st, &anki, draft, media).await
+    let images_cfg = images.unwrap_or_else(|| cfg.images.clone());
+    let tutor_cfg = tutor.unwrap_or_else(|| cfg.tutor.clone());
+    let client = crate::anki::connect::Client::new(&st.http, &anki.url);
+    let route = crate::anki::images::resolve_route(&st, &images_cfg, &tutor_cfg).await.map_err(|e| e.public_text())?;
+    let media = match (media_id, cue_idx) {
+        (Some(m), Some(ci)) => Some(crate::anki::jobs::preview_context(&st, &m, ci).await?),
+        (None, None) => None,
+        _ => return Err("Укажите фильм и реплику вместе".into()),
+    };
+    let media_ref = media.as_ref().map(|(m, c)| (m, c));
+    crate::anki::preview::build(&st, &client, &anki, &draft, media_ref, &route).await
 }
 
-/// Generates one picture for the preview and answers with a data URL; it lands in the same cache the
-/// add uses, so an unchanged prompt is not generated twice.
+/// The enabled providers, in order, without credentials: what the settings dialog shows and tests.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedImage {
+    pub key: String,
+    pub data_url: String,
+    pub provider: String,
+    pub model: String,
+}
+
 #[tauri::command]
-pub async fn images_generate(st: St<'_>, prompt: String, images: Option<crate::config::Images>) -> Res<String> {
-    let images = images.unwrap_or_else(|| st.cfg().images.clone());
-    let spec = crate::anki::images::effective(&st, &images).await;
-    let text = crate::anki::images::prompt(&prompt, &images.style, &spec.backend);
-    let path = crate::anki::images::generate(&st, &spec, &text).await?;
-    Ok(crate::anki::images::data_url(&path))
+pub async fn images_route(
+    st: St<'_>,
+    images: Option<crate::config::Images>,
+    tutor: Option<crate::config::Tutor>,
+) -> Res<crate::anki::images::ImageRouteView> {
+    let cfg = st.cfg();
+    let images = images.unwrap_or_else(|| cfg.images.clone());
+    let tutor = tutor.unwrap_or_else(|| cfg.tutor.clone());
+    let route = crate::anki::images::resolve_route(&st, &images, &tutor).await.map_err(|e| e.public_text())?;
+    Ok(crate::anki::images::ImageRouteView::of(&route))
+}
+
+/// Generates one picture through the whole unsaved route; it lands in the same cache the add uses.
+#[tauri::command]
+pub async fn images_generate(
+    st: St<'_>,
+    prompt: String,
+    images: Option<crate::config::Images>,
+    tutor: Option<crate::config::Tutor>,
+) -> Res<GeneratedImage> {
+    let cfg = st.cfg();
+    let images = images.unwrap_or_else(|| cfg.images.clone());
+    let tutor = tutor.unwrap_or_else(|| cfg.tutor.clone());
+    if prompt.trim().is_empty() {
+        return Err("Укажите промпт картинки".into());
+    }
+    let route = crate::anki::images::resolve_route(&st, &images, &tutor).await.map_err(|e| e.public_text())?;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let asset = crate::anki::images::generate(&st, &route, &prompt, &cancel, None).await.map_err(|e| e.public_text())?;
+    let data_url = crate::anki::images::data_url(&asset.path)?;
+    Ok(GeneratedImage { key: asset.key, data_url, provider: asset.provider, model: asset.model })
 }
 
 #[tauri::command]

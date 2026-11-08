@@ -76,6 +76,24 @@ pub fn validate(cfg: &Config) -> Result<(), String> {
     if !["none", "openai", "runware", "gemini", "omp"].contains(&cfg.images.backend.as_str()) {
         return Err(format!("images.backend: ожидается none, openai, runware, gemini или omp, получено «{}»", cfg.images.backend));
     }
+    let mut fallbacks: Vec<&str> = Vec::new();
+    for b in &cfg.images.fallbacks {
+        if !["openai", "runware", "gemini", "omp"].contains(&b.as_str()) {
+            return Err(format!(
+                "images.fallbacks: ожидается openai, runware, gemini или omp, получено «{b}»"
+            ));
+        }
+        if fallbacks.contains(&b.as_str()) {
+            return Err(format!("images.fallbacks: «{b}» указан дважды"));
+        }
+        fallbacks.push(b.as_str());
+    }
+    // Tutor owns the primary while it is enabled with its own image settings; the app's own
+    // backend is then unused, so it may also sit in the fallback order.
+    let tutor_primary = cfg.tutor.enabled && cfg.tutor.use_image_settings;
+    if !tutor_primary && cfg.images.backend != "none" && fallbacks.contains(&cfg.images.backend.as_str()) {
+        return Err(format!("images.fallbacks: «{}» уже выбран основным", cfg.images.backend));
+    }
     let mut seen: Vec<&str> = Vec::new();
     for s in &cfg.subtitles.sources {
         if !crate::config::SUBTITLE_SOURCES.contains(&s.as_str()) {
@@ -253,13 +271,30 @@ pub fn status(cfg: &Config, port: u16) -> SetupStatus {
     let subs_done = cfg.opensubtitles_enabled();
     let lampa_done = !cfg.lampa.origins.is_empty();
     let backend = cfg.images.backend.as_str();
-    let images_key_ok = match backend {
+    let tutor_primary = cfg.tutor.enabled && cfg.tutor.use_image_settings;
+    let enabled: Vec<&str> = if tutor_primary {
+        cfg.images.fallbacks.iter().map(String::as_str).collect()
+    } else if backend == "none" {
+        Vec::new()
+    } else {
+        std::iter::once(backend).chain(cfg.images.fallbacks.iter().map(String::as_str)).collect()
+    };
+    let images_key_ok = tutor_primary || enabled.is_empty() || enabled.iter().any(|provider| match *provider {
         "openai" => !cfg.images.openai.api_key.is_empty(),
         "runware" => !cfg.images.runware.api_key.is_empty(),
         "gemini" => !cfg.images.gemini.api_key.is_empty(),
-        _ => true,
-    };
+        "omp" => true,
+        _ => false,
+    });
     let anki_done = !cfg.anki.deck.trim().is_empty() && images_key_ok;
+    let images_desc = if tutor_primary {
+        std::iter::once("tutor (основной)").chain(enabled).collect::<Vec<_>>().join(" → ")
+    } else if enabled.is_empty() {
+        "выключены".into()
+    } else {
+        enabled.join(" → ")
+    };
+    let quick_desc = if cfg.anki.quick_add { "быстрое добавление" } else { "с предпросмотром" };
 
     let deps = crate::deps::check();
     let steps = vec![
@@ -303,15 +338,13 @@ pub fn status(cfg: &Config, port: u16) -> SetupStatus {
             done: anki_done,
             hint: if images_key_ok {
                 format!(
-                    "Колода «{}», тип «{}», картинки: {backend}{}",
-                    cfg.anki.deck,
-                    cfg.anki.note_type,
-                    if cfg.tutor.enabled { ", tutor" } else { "" }
+                    "Колода «{}», тип «{}», {quick_desc}, картинки: {images_desc}",
+                    cfg.anki.deck, cfg.anki.note_type
                 )
             } else {
                 format!("Нет API-ключа для картинок ({backend})")
             },
-            fields: vec!["anki.deck", "anki.noteType", "images.backend", "tutor.enabled"],
+            fields: vec!["anki.deck", "anki.noteType", "anki.quickAdd", "images.backend", "images.fallbacks", "tutor.enabled"],
         },
     ];
     let complete = steps.iter().filter(|s| s.importance == "required").all(|s| s.done);
@@ -481,6 +514,24 @@ mod tests {
         let empty = cfg(r#"{"anki":{"deck":" "}}"#);
         assert!(validate(&empty).is_err());
         assert!(validate(&Config::default()).is_ok());
+    }
+
+    #[test]
+    fn image_fallbacks_are_known_unique_and_not_the_primary() {
+        let unknown = cfg(r#"{"images":{"backend":"runware","fallbacks":["dalle"]}}"#);
+        assert!(validate(&unknown).unwrap_err().starts_with("images.fallbacks:"));
+        let dup = cfg(r#"{"images":{"backend":"openai","fallbacks":["runware","runware"]}}"#);
+        assert!(validate(&dup).unwrap_err().starts_with("images.fallbacks:"));
+        let primary = cfg(r#"{"images":{"backend":"runware","fallbacks":["gemini","runware"]}}"#);
+        assert!(validate(&primary).unwrap_err().starts_with("images.fallbacks:"));
+        assert!(validate(&cfg(r#"{"images":{"backend":"runware","fallbacks":["openai","gemini"]}}"#)).is_ok());
+        // `none` has no image calls, so nothing can duplicate it; the list stays inert.
+        assert!(validate(&cfg(r#"{"images":{"backend":"none","fallbacks":["omp"]}}"#)).is_ok());
+        // Tutor owns the primary while its image settings are on; the app list is independent.
+        let tutor = cfg(
+            r#"{"images":{"backend":"runware","fallbacks":["runware","openai"]},"tutor":{"enabled":true,"useImageSettings":true}}"#,
+        );
+        assert!(validate(&tutor).is_ok());
     }
 
     #[test]

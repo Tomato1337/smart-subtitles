@@ -63,19 +63,115 @@ export type CardsResult = {
  indices: number[]
  words: string[]
  added: number
+ /** Jobs of this proposal the user cancelled. */
+ cancelled: number
+ /** Durable job rows this report is about; a retry goes through them, not through the old words. */
+ jobIds: string[]
  /** Nothing reached Anki. */
  error: string | null
  /** Added, but some media is missing. */
  warnings: string[]
 }
 
-/** Stage of one background add (`cards:progress`); the draft modal and agent proposals show it. */
-export type CardsPhase = 'queued' | 'preparing' | 'clip' | 'image' | 'audio' | 'anki' | 'sync'
-export type CardsProgress = {
- proposalId: number
+/** Durable state of one card job (`card_job.state`). */
+export type CardJobState =
+ | 'grace'
+ | 'queued'
+ | 'drafting'
+ | 'generating'
+ | 'editing'
+ | 'committing'
+ | 'resolving'
+ | 'cancel_requested'
+ | 'cancelled'
+ | 'added'
+ | 'deleting'
+ | 'deleted'
+ | 'failed'
+ | 'interrupted'
+
+/** Free-form phase a job reports while it works. */
+export type JobPhase =
+ | 'queued'
+ | 'preparing'
+ | 'clip'
+ | 'image'
+ | 'audio'
+ | 'anki'
+ | 'sync'
+ | 'grace'
+ | 'draft'
+ | 'edit'
+ | 'media'
+ | 'committing'
+ | 'added'
+ | 'cancel_requested'
+ | 'cancelled'
+ | 'resolving'
+ | 'deleting'
+ | 'deleted'
+ | 'failed'
+ | 'interrupted'
+
+export type SelectedJobImage = { key: string; provider: string; model: string }
+
+/** One card job as the UI sees it: no URLs, paths or credentials. */
+export type CardJob = {
+ id: string
+ origin: 'quick' | 'review' | 'proposal'
+ proposalId: number | null
+ wordIndex: number | null
  mediaId: string
- phase: CardsPhase
+ cueIdx: number
+ span: string | null
+ title: string
+ cueText: string
+ cueStart: number
+ word: string
+ state: CardJobState
+ revision: number
+ version: number
+ remainingMs: number
+ held: boolean
+ cancelRequested: boolean
+ draft: WordDraft | null
+ noteId: number | null
+ hasCommittedNote: boolean
+ image: SelectedJobImage | null
+ phase: JobPhase | null
+ imageProvider: string | null
+ attempt: number | null
+ error: string | null
+ warnings: string[]
+ createdAt: number
+ updatedAt: number
 }
+
+export type JobCursor = { createdAt: number; id: string }
+export type CardJobPage = { items: CardJob[]; activeJobs: CardJob[]; nextCursor: JobCursor | null }
+export type CardJobEditor = {
+ job: CardJob
+ preview: CardPreview | null
+ fieldValues: Record<string, string> | null
+ baselineFields: Record<string, string> | null
+}
+
+/** One image provider of the resolved route, without credentials. */
+export type ImageRouteProvider = {
+ backend: ImageBackend
+ model: string
+ ready: boolean
+ inherited: boolean
+ reason: string | null
+}
+export type ImageRouteView = { disabled: boolean; providers: ImageRouteProvider[] }
+export type GeneratedImage = { key: string; dataUrl: string; provider: string; model: string }
+
+/** A 250 ms grace tick; it is not a SQLite version of its own. */
+export type JobGrace = { jobId: string; version: number; tick: number; remainingMs: number; held: boolean }
+
+/** One job of an agent proposal card. */
+export type ProposalJob = { jobId: string; wordIndex: number; state: CardJobState; noteId: number | null }
 
 export type Explanation = {
  chunk: string
@@ -140,7 +236,9 @@ export type ChatMessage = {
  at: number | null
  proposalId: number | null
  words: WordDraft[] | null
- status: 'pending' | 'adding' | 'added' | 'dismissed' | 'failed' | null
+ status: 'pending' | 'adding' | 'added' | 'partial' | 'dismissed' | 'failed' | null
+ /** One durable job per proposal word once the proposal was sent; null before that. */
+ jobs: ProposalJob[] | null
  createdAt: number
 }
 export type PatternStat = { id: string; count: number; status: 'learning' | 'known' | null }
@@ -299,10 +397,18 @@ export type AnkiConfig = {
  /** Cut the movie clip at all: off empties Clip/ClipText/ClipSource and disables clip audio. */
  clip: boolean
  syncAfterAdd: boolean
+ /** Add cards for clicked words without a preview dialog, with a five-second cancel window. */
+ quickAdd: boolean
 }
 
+/** One image backend the app can generate through. */
+export type ImageBackend = 'openai' | 'runware' | 'gemini' | 'omp'
+
 export type ImagesConfig = {
- backend: 'none' | 'openai' | 'runware' | 'gemini' | 'omp'
+ /** `none` disables image generation entirely. */
+ backend: 'none' | ImageBackend
+ /** Backends tried in order after the primary one fails. */
+ fallbacks: ImageBackend[]
  style: string
  openai: { baseUrl: string; apiKey: string; model: string; size: string }
  runware: { apiKey: string; model: string }

@@ -19,6 +19,8 @@ export type PlayerController = {
   setVolume: (v: number) => void
   toggleMute: () => void
   changeAudio: (index: number) => void
+  /** The audio track chosen in the player right now: what a new card captures. */
+  audioIndex: () => number
 }
 
 export const PlayerContext = createContext<PlayerController | null>(null)
@@ -40,7 +42,7 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
   const patch = usePlaybackStore.getState().patch
   const { sessionId, mediaId, duration } = session
 
-  const now = useCallback(() => videoRef.current?.currentTime ?? 0, [])
+  const now = useCallback(() => mseRef.current?.currentTime() ?? 0, [])
 
   const seek = useCallback(
     (t: number) => {
@@ -88,9 +90,9 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
       off('waiting', () => patch({ buffering: true })),
       off('canplay', () => patch({ buffering: false })),
       off('error', () => {
-        // Decode errors (corrupt torrent bytes) are recovered by MseStream itself.
-        if (v.error?.code === MediaError.MEDIA_ERR_DECODE) return patch({ buffering: true })
-        if (v.getAttribute('src')) notify('error', `Ошибка видео (код ${v.error?.code ?? '?'}): ${v.error?.message ?? ''}`)
+        // MseStream handles decode errors first and may already have cleared video.error by rebuilding.
+        if (!v.error || v.error.code === MediaError.MEDIA_ERR_DECODE) return patch({ buffering: true })
+        if (v.getAttribute('src')) notify('error', `Ошибка видео (код ${v.error.code}): ${v.error.message}`)
       }),
     ]
     patch({ duration, absTime: session.resumeAt, playing: false, buffering: true, rate: 1 })
@@ -100,7 +102,7 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
 
     const tick = setInterval(() => {
       if (!mseRef.current) return
-      const abs = v.currentTime
+      const abs = mse.currentTime()
       const end = rangeAt(toRanges(v.buffered), abs)?.[1] ?? abs
       const s = usePlaybackStore.getState()
       if (!v.paused && !v.seeking) patch({ absTime: abs, bufferedEnd: end })
@@ -108,7 +110,7 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
       mse.maintain()
     }, 100)
     const save = setInterval(() => {
-      const t = v.currentTime
+      const t = mse.currentTime()
       if (t > 0) void api.mediaSavePosition(mediaId, t)
     }, 5000)
 
@@ -117,7 +119,7 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
       clearInterval(save)
       clearTimeout(debounce.current)
       for (const o of offs) o()
-      const t = v.currentTime
+      const t = mse.currentTime()
       if (t > 0) void api.mediaSavePosition(mediaId, t)
       mse.destroy()
       mseRef.current = null
@@ -128,6 +130,7 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
     () => ({
       videoRef,
       now,
+      audioIndex: () => audioRef.current,
       seek,
       seekDebounced,
       togglePlay: () => {
@@ -159,7 +162,7 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
         audioRef.current = index
         void api.mediaSetAudio(mediaId, index)
         // now() is 0 until the first stream is attached: fall back to the position the UI shows.
-        const t = videoRef.current?.currentTime || usePlaybackStore.getState().absTime
+        const t = now() || usePlaybackStore.getState().absTime
         const play = !(videoRef.current?.paused ?? true)
         void mseRef.current?.clear().then(() => mseRef.current?.restart(t, play))
         patch({ buffering: true })

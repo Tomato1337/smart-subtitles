@@ -3,6 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { Icon, IconButton, shapeClip, toast, WavyProgress, WavySpinner } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText, type RecentMedia } from '@/common/api/tauri'
+import { CardsActivityButton } from '@/modules/Cards'
 import { Cover } from '@/common/ui/Cover'
 import { formatTime } from '@/common/utilities/time'
 import { useSessionStore } from '../store/sessionStore'
@@ -86,13 +87,16 @@ export function HomeScreen() {
     toast(`Удалено из недавних: «${m.title}»`, {
       durationMs: 6000,
       // After `hiding`: two invokes are not ordered, and the undo must be the last write.
-      action: { label: 'Отменить', run: () => { void hiding.then(() => api.mediaSetHidden(m.mediaId, false)).then(refresh, failed) } },
+      actions: [{ label: 'Отменить', run: () => { void hiding.then(() => api.mediaSetHidden(m.mediaId, false)).then(refresh, failed) } }],
     })
   }
 
   return (
     <div className="mx-auto flex h-full max-w-[880px] flex-col px-6 pb-6 pt-10">
-      <h1 className="type-hero">Smart Subtitles</h1>
+      <div className="flex items-center gap-2">
+        <h1 className="type-hero grow">Smart Subtitles</h1>
+        <CardsActivityButton />
+      </div>
       {loading ? (
         <div role="status" className="mt-6 flex min-h-20 items-center gap-4 rounded-[var(--md-sys-shape-corner-extra-large)] bg-[var(--md-sys-color-surface-container)] py-4 pl-6 pr-4">
           <WavySpinner label="Открываю" />

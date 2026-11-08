@@ -6,7 +6,7 @@ import { api, errorText } from '@/common/api/tauri'
 import type { AppConfig, LlmProvider } from '@/common/types/ipc'
 import { HotkeysDialog } from '@/modules/Hotkeys'
 import { AnkiSettingsDialog } from './AnkiSettingsDialog'
-import { IMAGE_BACKENDS } from './ImageFields'
+import { imageRouteLabel } from './ImageFields'
 import { EFFORT_LABEL, TASKS } from '../taskProfiles'
 import { LlmFields, llmReady } from './LlmFields'
 import { SubtitleSourcesFields } from './SubtitleSourcesFields'
@@ -76,6 +76,8 @@ function Form({ saved, providers, onCollapse, onOpenWizard }: { saved: AppConfig
   const [origins, setOrigins] = useState(saved.lampa.origins.join('\n'))
   const draft: AppConfig = { ...cfg, lampa: { origins: origins.split('\n').map((s) => s.trim()).filter(Boolean) } }
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved)
+  // Primary and fallbacks in the order generation would try them, tutor ownership included.
+  const imageRoute = imageRouteLabel(cfg.images, cfg.tutor)
 
   const save = useMutation({
     mutationFn: () => api.configSave(draft),
@@ -158,7 +160,8 @@ function Form({ saved, providers, onCollapse, onOpenWizard }: { saved: AppConfig
         <Section icon="style" title="Anki и карточки">
           <Summary label="Колода" value={cfg.anki.deck || '—'} />
           <Summary label="Тип заметки" value={cfg.anki.noteType || '—'} />
-          <Summary label="Картинки" value={IMAGE_BACKENDS.find(([id]) => id === cfg.images.backend)?.[1] ?? cfg.images.backend} />
+          <Summary label="Добавление" value={cfg.anki.quickAdd ? 'быстрое, без предпросмотра' : 'с предпросмотром'} />
+          <Summary label="Картинки" value={imageRoute} />
           <Summary label="Tutor" value={cfg.tutor.enabled ? 'включён' : 'выключен'} />
           <div>
             <button

@@ -5,20 +5,18 @@ use std::path::Path;
 use std::time::Duration;
 
 /// Writes one MP3 to `out`; the caller picks the file name the card will reference.
-pub async fn speak(text: &str, voice: &str, out: &Path) -> Result<(), String> {
+pub async fn speak(text: &str, voice: &str, out: &Path, cancel: &tokio_util::sync::CancellationToken) -> Result<(), String> {
     let uv = find_uv().ok_or_else(|| "нет uv — озвучка выключена".to_string())?;
     let out = out.to_path_buf();
-    let o = tokio::time::timeout(
-        Duration::from_secs(120),
-        crate::proc::command(&uv)
-            .args(["tool", "run", "edge-tts", "--voice", voice, "--text", text, "--write-media"])
-            .arg(&out)
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .map_err(|_| "edge-tts: таймаут 120 с".to_string())?
-    .map_err(|e| format!("edge-tts: {e}"))?;
+    let mut cmd = crate::proc::command(&uv);
+    cmd.args(["tool", "run", "edge-tts", "--voice", voice, "--text", text, "--write-media"]).arg(&out);
+    let o = crate::proc::output_cancellable(cmd, Duration::from_secs(120), cancel)
+        .await
+        .map_err(|e| match e {
+            crate::proc::ProcessError::Cancelled => "отменено".to_string(),
+            crate::proc::ProcessError::TimedOut => "edge-tts: таймаут 120 с".to_string(),
+            other => format!("edge-tts: {other}"),
+        })?;
     if !o.status.success() {
         let e = String::from_utf8_lossy(&o.stderr);
         return Err(format!("edge-tts: {}", e.trim().lines().last().unwrap_or("ошибка")));

@@ -16,14 +16,14 @@ pub fn to_srt(cues: &[(f64, f64, String)]) -> String {
 }
 
 /// Tutor's own settings document (`GET /api/settings`): `cards.imageBackend`, `cards.ompImageModel`,
-/// `learner.cefr`. `None` when the add-on is off or tutor is not running.
-pub async fn settings(st: &AppState) -> Option<Value> {
-    let cfg = st.cfg();
-    if !cfg.tutor.enabled {
+/// `learner.cefr`. `None` when the add-on is off or tutor is not running. The caller supplies the
+/// snapshot, so an image route is resolved once from one settings view.
+pub async fn settings(http: &reqwest::Client, tutor: &crate::config::Tutor) -> Option<Value> {
+    if !tutor.enabled {
         return None;
     }
-    let url = format!("{}/api/settings", cfg.tutor.api_url.trim_end_matches('/'));
-    let r = st.http.get(url).timeout(Duration::from_secs(3)).send().await.ok()?;
+    let url = format!("{}/api/settings", tutor.api_url.trim_end_matches('/'));
+    let r = http.get(url).timeout(Duration::from_secs(3)).send().await.ok()?;
     if !r.status().is_success() {
         return None;
     }

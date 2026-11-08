@@ -57,7 +57,7 @@ Setup steps, in wizard order: `deps` and `llm` are required; `opensubtitles` and
 
 JSON Merge Patch (RFC 7386): objects merge key by key, arrays are replaced as a whole, `null` resets a field to its default value. An unknown field is rejected with 400 and its dotted path. The string `***` in a secret field means "keep the stored value", so a config object from GET can be sent back. `restartRequired: true` appears only when `server.port` changed. Every change applies immediately and the app's UI updates itself.
 
-The patch is validated as a whole; a rejected patch changes nothing. Checked: `server.port` 1–65535; `learner.cefr` one of A1–C2; `lampa.origins` entries are bare origins; `anki.url` is http(s); `anki.deck` and `anki.noteType` are not empty; `anki.fields` values are known sources; `anki.sentenceAudio` and `images.backend` are known values; `subtitles.sources` entries are known and unique; a task with its own `source` names a `model`.
+The patch is validated as a whole; a rejected patch changes nothing. Checked: `server.port` 1–65535; `learner.cefr` one of A1–C2; `lampa.origins` entries are bare origins; `anki.url` is http(s); `anki.deck` and `anki.noteType` are not empty; `anki.fields` values are known sources; `anki.sentenceAudio` and `images.backend` are known values; `images.fallbacks` entries are known, unique and not the app-owned primary; `subtitles.sources` entries are known and unique; a task with its own `source` names a `model`.
 
 Examples:
 
@@ -115,7 +115,9 @@ Take provider ids and model names from `GET /api/setup/llm/providers`; the ones 
 | `anki.sentenceAudio` | string | `none` | `none`, `clip` (sound of the movie clip) or `tts` (synthesized). |
 | `anki.clip` | bool | `true` | Cut the movie clip at all; `false` empties `Clip`/`ClipText`/`ClipSource` and disables `sentenceAudio: "clip"`. |
 | `anki.syncAfterAdd` | bool | `true` | Sync with AnkiWeb after cards are added. |
-| `images.backend` | string | `none` | `none`, `openai`, `runware`, `gemini` or `omp`. |
+| `anki.quickAdd` | bool | `false` | Add a card for the clicked word without a preview dialog: a card is prepared after a five-second window the user can cancel or open for editing. |
+| `images.backend` | string | `none` | Primary image backend: `none`, `openai`, `runware`, `gemini` or `omp`; `none` disables image generation. |
+| `images.fallbacks` | string[] | `[]` | Backends tried in this order after the primary one fails: `openai`, `runware`, `gemini`, `omp`. Each at most once, and not the app-owned primary. |
 | `images.style` | string | `""` | Appended to every prompt as `. Style: …`. |
 | `images.openai.baseUrl` | string | `https://api.openai.com/v1` | OpenAI-compatible image endpoint root. |
 | `images.openai.apiKey` | string | `""` | Key for that endpoint. |

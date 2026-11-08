@@ -34,6 +34,20 @@ async fn ask<T: serde::de::DeserializeOwned>(st: &AppState, s: &Session, task: T
     client::chat_json(st, task, &s.media_id, tag, &messages, max_tokens).await.map_err(|e| e.to_string())
 }
 
+/// The same request from a captured media context, without touching the open session.
+async fn ask_media<T: serde::de::DeserializeOwned>(
+    st: &AppState,
+    media: &prompts::MediaContext,
+    task: Task,
+    tag: &str,
+    prompt: String,
+    max_tokens: u32,
+) -> Result<T, String> {
+    let mut messages = (*prompts::prefix_for_media(st, media).await.map_err(|e| e.to_string())?).clone();
+    messages.push(json!({ "role": "user", "content": prompt }));
+    client::chat_json(st, task, &media.media_id, tag, &messages, max_tokens).await.map_err(|e| e.to_string())
+}
+
 /// Contextual explanation of a span; cached per (media, cue, span).
 pub async fn explain(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: u32, span: String) -> Result<Explanation, String> {
     let (m, sp) = (s.media_id.clone(), span.clone());
@@ -77,17 +91,26 @@ pub fn fix_phrase_cloze(d: &mut WordDraft, chunk_fallback: Option<&str>) {
     if let Some(c) = target.and_then(|t| wrap_cloze(&d.full_sentence, &t)) { d.cloze_sentence = c; }
 }
 
-pub async fn draft(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: u32, span: Option<String>) -> Result<WordDraft, String> {
-    let text = one_line(&cue_text(st, &s.media_id, cue_idx).await?);
+/// One draft for a captured cue: a job uses the cue text and chunk it stored, not the rank of a
+/// subtitle set that may have been replaced since.
+pub async fn draft_for_job(
+    st: &Arc<AppState>,
+    media: &prompts::MediaContext,
+    cue_idx: u32,
+    text: &str,
+    span: Option<&str>,
+    chunk_fallback: Option<&str>,
+) -> Result<WordDraft, String> {
+    let text = one_line(text);
     let schema = "{\"word\":\"\",\"translation\":\"\",\"word_type\":\"\",\"cloze_sentence\":\"\",\"full_sentence\":\"\",\"sentence_translation\":\"\",\"image_prompt\":\"\"}";
     // Same image rule as tutor's collect_words: one concrete picture of the meaning, no text in it.
     let image = "image_prompt = a concrete English image prompt (one visible scene that shows the meaning of the word in this situation, no text, letters or signs in the picture, ≤40 words).";
-    let task = match &span {
+    let task = match span {
         Some(sp) => format!("TASK make one flashcard for \"{sp}\" from cue [{cue_idx}] «{text}». Return WORD_SCHEMA JSON {schema}: word = the span in canonical form, full_sentence = the cue in one line, cloze_sentence = the cue with {{{{c1::<span as it appears in the text>}}}}, word_type = part of speech. {image}"),
         None => format!("TASK make one PHRASE flashcard for the whole cue [{cue_idx}] «{text}». Return WORD_SCHEMA JSON {schema} where word = the whole cue as one line, translation = its contextual Russian translation, word_type = \"phrase\", full_sentence = the cue, sentence_translation = same translation, cloze_sentence = the cue with its single hardest chunk wrapped in {{{{c1::...}}}}. {image}"),
     };
-    let mut d: WordDraft = ask(st, s, Task::Draft, &format!("draft {cue_idx}"), task, 800).await?;
-    match &span {
+    let mut d: WordDraft = ask_media(st, media, Task::Draft, &format!("draft {cue_idx}"), task, 800).await?;
+    match span {
         Some(sp) => {
             if !d.cloze_sentence.contains("{{c1::") {
                 d.cloze_sentence = wrap_cloze(&d.full_sentence, sp).or_else(|| wrap_cloze(&text, sp)).ok_or("не удалось построить cloze")?;
@@ -96,9 +119,7 @@ pub async fn draft(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: u32, span: Opt
         None => {
             d.word_type = "phrase".into();
             d.full_sentence = text.clone();
-            let m = s.media_id.clone();
-            let chunk: Option<String> = st.db(move |c| Ok(c.query_row("SELECT text FROM chunk WHERE media_id=?1 AND cue_idx=?2 ORDER BY start_char LIMIT 1", params![m, cue_idx], |r| r.get(0)).ok())).await?;
-            fix_phrase_cloze(&mut d, chunk.as_deref());
+            fix_phrase_cloze(&mut d, chunk_fallback);
         }
     }
     Ok(d)

@@ -32,7 +32,7 @@ export function TopBar({ session, onBack, onOpenEpisode, rightSlot }: Props) {
     session.episodeTitle,
   ].filter(Boolean).join(' · ')
   return (
-    <div className="flex items-start gap-3 px-4 pb-10 pt-4" style={{ ...OVER_VIDEO, background: 'linear-gradient(to bottom, color-mix(in srgb, var(--md-sys-color-scrim) 80%, transparent), transparent)' }}>
+    <div data-app-topbar className="flex items-start gap-3 px-4 pb-10 pt-4" style={{ ...OVER_VIDEO, background: 'linear-gradient(to bottom, color-mix(in srgb, var(--md-sys-color-scrim) 80%, transparent), transparent)' }}>
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <IconButton icon="arrow_back" label="Закрыть" data-tour="close" variant="tonal" size="lg" tipPos="bottom-start" onClick={onBack} />
         <Cover src={session.posterUrl} title={session.title} className="h-[66px] w-11 shadow-[0_2px_10px_rgb(0_0_0/0.5)]" />
