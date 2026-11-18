@@ -16,6 +16,7 @@ pub struct AppState {
     pub llm_http: reqwest::Client,
     pub app: AppHandle,
     pub anki: Mutex<crate::anki::index::AnkiState>,
+    pub anki_refresh: tokio::sync::Mutex<()>,
     /// Media ids with an agent run in flight (one chat thread per film).
     pub agent_busy: Mutex<std::collections::HashSet<String>>,
     /// Serializes card preparation: one clip + image run at a time, in click order.

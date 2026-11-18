@@ -162,6 +162,22 @@ fn chat_url(ep: &Endpoint) -> String {
     }
 }
 
+#[derive(Debug)]
+pub(super) struct HttpError {
+    pub status: reqwest::StatusCode,
+    detail: String,
+}
+
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LLM HTTP {}", self.status)?;
+        if !self.detail.is_empty() { write!(f, ": {}", self.detail)?; }
+        Ok(())
+    }
+}
+
+impl std::error::Error for HttpError {}
+
 async fn post(http: &reqwest::Client, ep: &Endpoint, b: &Value, timeout: Duration) -> anyhow::Result<reqwest::Response> {
     let url = chat_url(ep);
     let mut last = anyhow!("нет попыток");
@@ -169,10 +185,13 @@ async fn post(http: &reqwest::Client, ep: &Endpoint, b: &Value, timeout: Duratio
         if delay > 0 { tokio::time::sleep(Duration::from_secs(delay)).await; }
         match authed(http.post(&url), ep).timeout(timeout).json(b).send().await {
             Ok(r) if r.status().is_success() => return Ok(r),
-            Ok(r) if r.status().is_server_error() || r.status().as_u16() == 429 => last = anyhow!("LLM HTTP {}", r.status()),
+            Ok(r) if r.status().is_server_error() || r.status().as_u16() == 429 => {
+                last = HttpError { status: r.status(), detail: String::new() }.into();
+            }
             Ok(r) => {
-                let s = r.status();
-                bail!("LLM HTTP {s}: {}", r.text().await.unwrap_or_default().chars().take(300).collect::<String>())
+                let status = r.status();
+                let detail = r.text().await.unwrap_or_default().chars().take(300).collect();
+                return Err(HttpError { status, detail }.into());
             }
             Err(e) => last = e.into(),
         }

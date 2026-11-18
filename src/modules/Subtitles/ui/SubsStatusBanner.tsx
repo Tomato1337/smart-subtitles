@@ -1,3 +1,4 @@
+import { useMutation } from '@tanstack/react-query'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import { useSubsStore } from '../store/subsStore'
@@ -12,6 +13,10 @@ export function SubsStatusBanner({ mediaId, llmEnabled, onChoose }: { mediaId: s
   const status = useSubsStore((s) => s.status)
   const cueCount = useSubsStore((s) => s.cues.length)
   const annot = useSubsStore((s) => s.annot)
+  const retry = useMutation({
+    mutationFn: () => api.annotSet(mediaId, true),
+    onError: (e) => notify('error', errorText(e)),
+  })
 
   const chip = 'type-label-large pointer-events-auto rounded-[var(--md-sys-shape-corner-medium)] bg-[var(--md-sys-color-surface-container-high)] px-4 py-2'
   const items: React.ReactNode[] = []
@@ -41,8 +46,9 @@ export function SubsStatusBanner({ mediaId, llmEnabled, onChoose }: { mediaId: s
   }
   // Background analysis: progress while it runs, a retry when some batches were written off.
   if (llmEnabled && annot?.consent === 'on') {
-    const pending = annot.total - annot.done - annot.failed
-    if (pending > 0) {
+    const failure = annot.failure
+    const running = retry.isPending || annot.running
+    if (running && !failure?.blocked && (retry.isPending || annot.done < annot.total)) {
       items.push(
         <div
           key="annot"
@@ -54,20 +60,30 @@ export function SubsStatusBanner({ mediaId, llmEnabled, onChoose }: { mediaId: s
           aria-valuenow={annot.done}
           aria-valuetext={`Разобрано ${annot.done} из ${annot.total}`}
         >
-          Разбор диалогов {annot.done}/{annot.total}
+          {retry.isPending || annot.done + annot.failed >= annot.total
+            ? 'Повторяю разбор диалогов…'
+            : `Разбор диалогов ${annot.done}/${annot.total}`}
         </div>,
       )
-    } else if (annot.failed > 0) {
+    } else if (annot.failed > 0 || failure) {
       items.push(
-        <div key="annot" className={`${chip} flex items-center gap-3`}>
-          <span>Не разобрано частей: {annot.failed}</span>
-          <button
-            type="button"
-            onClick={() => api.annotSet(mediaId, true).catch((e) => notify('error', errorText(e)))}
-            className="state-layer state-on-primary relative rounded-full bg-[var(--md-sys-color-primary)] px-4 py-1 text-[var(--md-sys-color-on-primary)]"
-          >
-            Повторить
-          </button>
+        <div key="annot" className={`${chip} mx-3 flex max-w-md flex-wrap items-center gap-3`}>
+          <div role="status">
+            <p>Не разобрано частей: {annot.total - annot.done}</p>
+            {failure && <p className="type-body-medium">{failure.message}</p>}
+            {failure?.blocked && (
+              <p className="type-body-small">Проверьте провайдера в «Настройки → Перевод и разбор», затем откройте фильм заново.</p>
+            )}
+          </div>
+          {!failure?.blocked && (
+            <button
+              type="button"
+              onClick={() => retry.mutate()}
+              className="state-layer state-on-primary relative rounded-full bg-[var(--md-sys-color-primary)] px-4 py-1 text-[var(--md-sys-color-on-primary)]"
+            >
+              Повторить
+            </button>
+          )}
         </div>,
       )
     }

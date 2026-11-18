@@ -261,8 +261,16 @@ export type SubsCandidates = {
  notes: { source: SubtitleSource; message: string }[]
 }
 
-/** Background dialog analysis of one film: consent plus batch counters (`annot_status`). */
-export type AnnotStatus = { mediaId: string; consent: 'on' | 'off' | null; total: number; done: number; failed: number }
+/** Background dialog analysis of one film (`annot_status` and `annot:progress`). */
+export type AnnotStatus = {
+ mediaId: string
+ consent: 'on' | 'off' | null
+ total: number
+ done: number
+ failed: number
+ running: boolean
+ failure: { message: string; blocked: boolean } | null
+}
 /** Tokens the remaining analysis will cost, counted without an LLM request (`annot_estimate`). */
 export type AnnotEstimate = {
  cues: number

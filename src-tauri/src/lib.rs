@@ -77,6 +77,7 @@ pub fn run() {
                 llm_http: llm::client::http_client()?,
                 app: app.handle().clone(),
                 anki: Default::default(),
+                anki_refresh: Default::default(),
                 agent_busy: Default::default(),
                 cards_queue: Default::default(),
                 card_jobs: Default::default(),

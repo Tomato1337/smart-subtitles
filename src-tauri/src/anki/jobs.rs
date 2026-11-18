@@ -167,6 +167,8 @@ pub struct ClipContext {
     pub audio_index: u32,
     pub video_index: Option<u32>,
     pub hdr: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_duration: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1225,6 +1227,7 @@ async fn capture_context(
             audio_index,
             video_index: Some(p.video.index),
             hdr: p.video.hdr,
+            source_duration: (p.duration.is_finite() && p.duration > 0.0).then_some(p.duration),
         })
     });
     let episode_title = captured.episode_title.clone().or_else(|| {
@@ -3950,7 +3953,7 @@ mod tests {
         changed.audio_index = 3;
         assert_ne!(key, intent_key(&changed, Some("bring")));
         let mut changed = base.clone();
-        changed.clip = Some(ClipContext { source_url: "http://source/raw".into(), audio_index: 0, video_index: Some(2), hdr: true });
+        changed.clip = Some(ClipContext { source_url: "http://source/raw".into(), audio_index: 0, video_index: Some(2), hdr: true, source_duration: None });
         assert_ne!(key, intent_key(&changed, Some("bring")));
         let mut changed = base.clone();
         changed.anki.deck = "Other".into();

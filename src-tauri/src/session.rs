@@ -26,7 +26,7 @@ pub struct Session {
     pub cancel: CancellationToken,
     /// Cached LLM prompt prefix (system, film+script, OK); cleared whenever the cue set changes.
     pub prefix: Mutex<Option<Arc<Vec<serde_json::Value>>>>,
-    pub annot_cancel: Mutex<CancellationToken>,
+    pub annot_run: Mutex<Arc<crate::llm::annotate::Run>>,
     pub annot_priority: std::sync::atomic::AtomicU32,
     /// Embedded subtitles being read out of the video file; `None` when no load is running.
     pub embedded: Mutex<Option<EmbeddedState>>,
@@ -200,7 +200,7 @@ pub async fn open(st: &Arc<AppState>, req: SessionRequest, file_size: Option<u64
         embedded_cancel: Mutex::new(cancel.child_token()),
         cancel,
         prefix: Mutex::new(None),
-        annot_cancel: Mutex::new(CancellationToken::new()),
+        annot_run: Default::default(),
         annot_priority: Default::default(),
         embedded: Mutex::new(None),
         embedded_decision: Mutex::new(None),

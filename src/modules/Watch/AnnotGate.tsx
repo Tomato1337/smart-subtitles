@@ -96,7 +96,7 @@ export function AnnotGate({ session, open, resumeOnClose, onOpenChange }: Props)
  const ready = headReady(session, subs)
  useEffect(() => {
   if (open !== 'wait') return
-  if (ready || (annot && annot.done + annot.failed >= annot.total)) onOpenChange(null)
+  if (ready || (annot && (annot.failure?.blocked || annot.done + annot.failed >= annot.total))) onOpenChange(null)
  }, [open, ready, annot, onOpenChange])
 
  const outlined = 'state-layer state-on-surface type-label-large relative rounded-full border border-[var(--md-sys-color-outline)] px-5 py-2'

@@ -181,6 +181,7 @@ export const Sidebar = memo(function Sidebar({ mediaId, onReplay, onSlowReplay, 
   cues: s.cues, annotations: s.annotations, offset: s.offset, showSidebarTranslation: s.showSidebarTranslation,
   sidebarFont: s.sidebarFont, failedBatches: s.failedBatches, set: s.set,
  })))
+ const canRetry = useSubsStore((s) => !s.annot?.running && !s.annot?.failure?.blocked)
  const focused = useFocusedCueIndex()
  const [query, setQuery] = useState('')
  const [searching, setSearching] = useState(false)
@@ -271,7 +272,7 @@ export const Sidebar = memo(function Sidebar({ mediaId, onReplay, onSlowReplay, 
          focusTo={active ? focusEnd(cues, cue.idx, offset) : 0}
          font={sidebarFont}
          translation={showSidebarTranslation}
-         needsRetry={!ann && failedBatches.has(batchOf(cue.idx))}
+         needsRetry={canRetry && !ann && failedBatches.has(batchOf(cue.idx))}
          on={on}
          renderEn={renderEn}
         />

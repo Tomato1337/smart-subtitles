@@ -3,6 +3,8 @@ import { Segmented, Switch } from '@tomato1337/m3e-react'
 import type { CardPreview as CardPreviewData } from '@/common/types/ipc'
 import { renderCard } from '../lib/ankiTemplate'
 
+export const CARD_PREVIEW_HEIGHT = 520
+
 /** The note type's own palette (tutor's card.css): the frame around the card must match it, not the app. */
 const CARD_BG = { light: '#f8f9fa', night: '#1a1a2e' }
 
@@ -51,7 +53,8 @@ export function CardPreview({ preview }: { preview: CardPreviewData }) {
         title="Предпросмотр карточки"
         sandbox=""
         srcDoc={srcDoc}
-        className="h-[520px] w-full rounded-[var(--md-sys-shape-corner-medium)] border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)]"
+        height={CARD_PREVIEW_HEIGHT}
+        className="w-full rounded-[var(--md-sys-shape-corner-medium)] border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)]"
       />
       <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
         {preview.noteType.name}

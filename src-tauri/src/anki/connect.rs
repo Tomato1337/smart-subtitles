@@ -104,10 +104,14 @@ impl<'a> Client<'a> {
             .send()
             .await
             .map_err(|e| AnkiError::Transport(format!("AnkiConnect {action}: {}", transport_text(&e))))?;
-        let v: Value = r
-            .json()
-            .await
-            .map_err(|e| AnkiError::Transport(format!("AnkiConnect {action}: {}", transport_text(&e))))?;
+        let v: Value = r.json().await.map_err(|e| {
+            let message = format!("AnkiConnect {action}: {}", transport_text(&e));
+            if e.is_decode() && !e.is_timeout() {
+                AnkiError::Protocol(message)
+            } else {
+                AnkiError::Transport(message)
+            }
+        })?;
         let Some(obj) = v.as_object() else {
             return Err(AnkiError::Protocol(format!("AnkiConnect {action}: ответ не объект")));
         };
@@ -218,34 +222,11 @@ impl<'a> Client<'a> {
 
     /// Decks with their card counts and every note type with its fields.
     pub async fn catalog(&self) -> Result<Catalog, AnkiError> {
-        let names: Vec<String> = str_list(self.call("deckNames", json!({}), Duration::from_secs(10)).await?);
-        let mut counts: HashMap<String, i64> = HashMap::new();
-        match self.call("getDeckStats", json!({ "decks": names }), Duration::from_secs(20)).await {
-            Ok(v) => {
-                for stats in objects(&v) {
-                    if let Some(name) = stats["name"].as_str() {
-                        counts.insert(name.to_string(), stats["total_in_deck"].as_i64().unwrap_or(0));
-                    }
-                }
-            }
-            // Old AnkiConnect without getDeckStats: one `multi` round for all the counts.
-            Err(e) => {
-                crate::logs::log("app", &format!("anki catalog: getDeckStats: {e}"));
-                let actions: Vec<Value> = names
-                    .iter()
-                    .map(|d| json!({ "action": "findCards", "version": 6, "params": { "query": format!("deck:\"{d}\"") } }))
-                    .collect();
-                if let Ok(v) = self.call("multi", json!({ "actions": actions }), Duration::from_secs(30)).await {
-                    for (name, r) in names.iter().zip(objects(&v)) {
-                        let n = r["result"].as_array().map_or(0, |a| a.len() as i64);
-                        counts.insert(name.clone(), n);
-                    }
-                }
-            }
-        }
-        let mut decks: Vec<DeckInfo> = names
+        let decks = self.deck_names().await?;
+        let counts = self.deck_counts(&decks).await;
+        let mut decks: Vec<DeckInfo> = decks
             .into_iter()
-            .map(|name| {
+            .map(|(name, _)| {
                 let cards = counts.get(&name).copied().unwrap_or(0);
                 DeckInfo { name, cards }
             })
@@ -259,6 +240,88 @@ impl<'a> Client<'a> {
         }
         Ok(Catalog { decks, note_types })
     }
+
+    /// Every deck with its id when `deckNamesAndIds` can report it. A name alone cannot tell the
+    /// default deck from a real deck that happens to be called "Default"; the id is what lets
+    /// `deck_counts` keep only the former out of `getDeckStats`.
+    async fn deck_names(&self) -> Result<Vec<(String, Option<i64>)>, AnkiError> {
+        if let Ok(v) = self.call("deckNamesAndIds", json!({}), Duration::from_secs(10)).await {
+            if let Some(decks) = deck_names_and_ids(&v) {
+                return Ok(decks);
+            }
+        }
+        // Older AnkiConnect only answered `deckNames`. Without ids the default deck cannot be
+        // singled out, but a working `getDeckStats` still counts every deck.
+        let names = str_list(self.call("deckNames", json!({}), Duration::from_secs(10)).await?);
+        Ok(names.into_iter().map(|name| (name, None)).collect())
+    }
+
+    /// Card totals per deck name. The default deck is never sent to `getDeckStats`: when it is
+    /// empty Anki hides it from the due tree the add-on reads, and the whole call fails on that one
+    /// deck. Its count, and that of any deck the stats answer leaves out, comes from one focused
+    /// `multi` instead.
+    async fn deck_counts(&self, decks: &[(String, Option<i64>)]) -> HashMap<String, i64> {
+        let mut counts: HashMap<String, i64> = HashMap::new();
+        let primary: Vec<&str> =
+            decks.iter().filter(|(_, id)| *id != Some(DEFAULT_DECK_ID)).map(|(name, _)| name.as_str()).collect();
+        let mut stats_error = None;
+        if !primary.is_empty() {
+            match self.call("getDeckStats", json!({ "decks": primary }), Duration::from_secs(20)).await {
+                Ok(v) => {
+                    for stats in objects(&v) {
+                        if let (Some(name), Some(cards)) = (stats["name"].as_str(), stats["total_in_deck"].as_i64()) {
+                            counts.insert(name.to_string(), cards);
+                        }
+                    }
+                }
+                Err(e) => stats_error = Some(e),
+            }
+        }
+
+        let missing: Vec<&(String, Option<i64>)> = decks.iter().filter(|(name, _)| !counts.contains_key(name)).collect();
+        if missing.is_empty() {
+            return counts;
+        }
+        let actions: Vec<Value> = missing
+            .iter()
+            .map(|(name, id)| {
+                // `did:` counts cards in exactly that deck, like `total_in_deck`, and it resolves
+                // the localized default deck whose name the add-on itself cannot look up.
+                let query = match id {
+                    Some(id) => format!("did:{id}"),
+                    None => format!("deck:\"{name}\""),
+                };
+                json!({ "action": "findCards", "version": 6, "params": { "query": query } })
+            })
+            .collect();
+        match self.call("multi", json!({ "actions": actions }), Duration::from_secs(30)).await {
+            Ok(v) => {
+                for ((name, _), answer) in missing.iter().zip(objects(&v)) {
+                    let n = answer["result"].as_array().map_or(0, |a| a.len() as i64);
+                    counts.insert(name.to_string(), n);
+                }
+            }
+            // A successful fallback is the normal path for old add-ons and is not worth a log line.
+            Err(e) => {
+                let line = match stats_error {
+                    Some(s) => format!("anki catalog: getDeckStats: {s}; findCards: {e}"),
+                    None => format!("anki catalog: findCards: {e}"),
+                };
+                crate::logs::log("app", &line);
+            }
+        }
+        counts
+    }
+}
+
+/// Anki's default deck has this id in every collection; its display name is localized.
+const DEFAULT_DECK_ID: i64 = 1;
+
+/// `deckNamesAndIds` names every deck with its numeric id. `None` when the answer is not an object;
+/// a malformed id still keeps that deck in the catalog.
+fn deck_names_and_ids(v: &Value) -> Option<Vec<(String, Option<i64>)>> {
+    let o = v.as_object()?;
+    Some(o.iter().map(|(name, id)| (name.clone(), id.as_i64())).collect())
 }
 
 /// Parses `notesInfo`. A missing note is `{}` and is skipped; any malformed entry or a note the
@@ -374,5 +437,102 @@ mod tests {
         assert!(parse_notes(json!([{ "noteId": 43 }]), &[42]).is_err(), "an unrequested note is not absence");
         assert!(parse_notes(json!([{ "noteId": 42, "modelName": "M" }]), &[42]).is_err(), "fields are required");
         assert!(parse_notes(json!({ "noteId": 42 }), &[42]).is_err());
+    }
+
+    /// A loopback AnkiConnect for `catalog()` tests. `reply` gets the action and its params and
+    /// returns the envelope's result and error; every request is recorded in arrival order.
+    async fn anki_server(
+        reply: impl Fn(&str, &Value) -> (Value, Option<String>) + Send + Sync + 'static,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<Value>>>) {
+        use axum::{routing::post, Json, Router};
+        use std::sync::{Arc, Mutex};
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorded = seen.clone();
+        let reply = Arc::new(reply);
+        let app = Router::new().route(
+            "/",
+            post(move |Json(req): Json<Value>| {
+                let recorded = recorded.clone();
+                let reply = reply.clone();
+                async move {
+                    recorded.lock().unwrap().push(req.clone());
+                    let action = req["action"].as_str().unwrap_or_default().to_string();
+                    let (result, error) = reply(&action, &req["params"]);
+                    Json(json!({ "result": result, "error": error }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    #[tokio::test]
+    async fn catalog_keeps_the_localized_default_deck_out_of_get_deck_stats() {
+        let (base, seen) = anki_server(|action, _| match action {
+            "deckNamesAndIds" => (
+                json!({ "По умолчанию": 1, "Default": 1795038843024_i64, "Learning English": 16000 }),
+                None,
+            ),
+            "getDeckStats" => (
+                json!({
+                    "16000": { "deck_id": 16000, "name": "Learning English", "total_in_deck": 142 },
+                    "1795038843024": { "deck_id": 1795038843024_i64, "name": "Default", "total_in_deck": 7 }
+                }),
+                None,
+            ),
+            // The default deck is hidden from the add-on's due tree; only a by-id query finds it.
+            "multi" => (json!([{ "result": [101, 102, 103], "error": null }]), None),
+            "modelNames" => (json!(["Basic"]), None),
+            "modelFieldNames" => (json!(["Front", "Back"]), None),
+            other => panic!("unexpected AnkiConnect action {other}"),
+        })
+        .await;
+        let http = reqwest::Client::new();
+        let catalog = Client::new(&http, &base).catalog().await.unwrap();
+        assert_eq!(
+            catalog.decks,
+            vec![
+                DeckInfo { name: "Default".into(), cards: 7 },
+                DeckInfo { name: "Learning English".into(), cards: 142 },
+                DeckInfo { name: "По умолчанию".into(), cards: 3 },
+            ],
+            "a real deck called Default keeps its stats, and the localized default keeps its cards"
+        );
+        assert_eq!(
+            catalog.note_types,
+            vec![NoteTypeInfo { name: "Basic".into(), fields: vec!["Front".into(), "Back".into()] }]
+        );
+
+        let seen = seen.lock().unwrap();
+        let stats = seen.iter().find(|r| r["action"] == "getDeckStats").expect("getDeckStats was called");
+        let asked: Vec<&str> = stats["params"]["decks"].as_array().unwrap().iter().map(|d| d.as_str().unwrap()).collect();
+        assert_eq!(asked, vec!["Default", "Learning English"], "one localized default would poison the whole stats call");
+        let multi = seen.iter().find(|r| r["action"] == "multi").expect("the default deck is counted separately");
+        assert_eq!(multi["params"]["actions"][0]["params"]["query"], "did:1");
+        assert_eq!(multi["params"]["actions"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn catalog_falls_back_to_deck_names_when_older_add_on_has_no_deck_ids() {
+        let (base, seen) = anki_server(|action, _| match action {
+            "deckNamesAndIds" => (Value::Null, Some("unsupported action".into())),
+            "deckNames" => (json!(["Learning English"]), None),
+            "getDeckStats" => (Value::Null, Some("unsupported action".into())),
+            "multi" => (json!([{ "result": [11, 12], "error": null }]), None),
+            "modelNames" => (json!([]), None),
+            other => panic!("unexpected AnkiConnect action {other}"),
+        })
+        .await;
+        let http = reqwest::Client::new();
+        let catalog = Client::new(&http, &base).catalog().await.unwrap();
+        assert_eq!(catalog.decks, vec![DeckInfo { name: "Learning English".into(), cards: 2 }]);
+
+        let seen = seen.lock().unwrap();
+        let multi = seen.iter().find(|r| r["action"] == "multi").expect("names are counted without stats");
+        assert_eq!(multi["params"]["actions"][0]["params"]["query"], "deck:\"Learning English\"");
     }
 }

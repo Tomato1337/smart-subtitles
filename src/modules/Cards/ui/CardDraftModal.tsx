@@ -8,7 +8,7 @@ import { useDebounced } from '@/common/utilities/useDebounced'
 import { lookupSpan, useAnkiStore } from '@/modules/Anki'
 import { adoptImageDraft, editorView, textFieldRows } from '../lib/editor'
 import { useCardsStore } from '../store/cardsStore'
-import { CardPreview } from './CardPreview'
+import { CARD_PREVIEW_HEIGHT, CardPreview } from './CardPreview'
 
 const FIELDS: [keyof WordDraft, string][] = [
   ['word', 'Слово или фраза'],
@@ -205,6 +205,9 @@ function EditorDialog({ editor }: Props) {
 
   const rows = view === 'added' ? textFieldRows(shownPreview, fields) : []
   const mediaOnly = view === 'added' && !!fields && !!shownPreview && rows.length === 0
+  // Keep a definite height for WebKit's scroll panes. The preview sets the preferred height;
+  // the extra space fits labels (including a wrapped preview caption), actions and dialog padding.
+  const blockSize = view === 'loading' ? undefined : `calc(${CARD_PREVIEW_HEIGHT}px + 17rem)`
 
   return (
     <Dialog
@@ -212,10 +215,10 @@ function EditorDialog({ editor }: Props) {
       dismissible
       aria-labelledby="card-editor-title"
       className="max-h-[90vh] w-[1040px] max-w-[95vw]"
-      style={{ userSelect: 'text' }}
+      style={{ blockSize, userSelect: 'text' }}
     >
-      <h2 id="card-editor-title" className="type-headline-small mb-1">{added ? 'Карточка в Anki' : 'Новая карточка'}</h2>
-      <p className="type-body-small mb-4 text-[var(--md-sys-color-on-surface-variant)]">
+      <h2 id="card-editor-title" className="type-headline-small mb-1 shrink-0">{added ? 'Карточка в Anki' : 'Новая карточка'}</h2>
+      <p className="type-body-small mb-4 shrink-0 text-[var(--md-sys-color-on-surface-variant)]">
         {job.title}{job.cueText ? ` · ${job.cueText.replace(/\s+/g, ' ').trim()}` : ''}
       </p>
       {view === 'loading' ? (
@@ -232,109 +235,111 @@ function EditorDialog({ editor }: Props) {
           </div>
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-[minmax(0,1fr)_420px]">
-          <div className="flex min-h-0 flex-col">
-            <div className="flex flex-col gap-3 overflow-y-auto">
-              {view === 'added' ? (
-                <>
-                  {rows.length === 0 && (preview.isFetching ? (
-                    <p className="type-body-medium">Загружаю поля карточки…</p>
-                  ) : mediaOnly ? (
-                    <p className="type-body-medium">В этой заметке нет текстовых полей для правки.</p>
-                  ) : (
-                    <p className="type-body-medium text-[var(--md-sys-color-error)]">
-                      Не удалось загрузить поля карточки. Закройте и откройте её снова.
+        <>
+          <div className="grid min-h-0 flex-auto grid-cols-[minmax(0,1fr)] grid-rows-[max-content_max-content] gap-4 overflow-y-auto overscroll-contain md:grid-cols-[minmax(0,1fr)_420px] md:grid-rows-[minmax(0,1fr)] md:overflow-hidden">
+            <div className="min-h-0 md:overflow-y-auto md:pr-2">
+              <div className="flex flex-col gap-3">
+                {view === 'added' ? (
+                  <>
+                    {rows.length === 0 && (preview.isFetching ? (
+                      <p className="type-body-medium">Загружаю поля карточки…</p>
+                    ) : mediaOnly ? (
+                      <p className="type-body-medium">В этой заметке нет текстовых полей для правки.</p>
+                    ) : (
+                      <p className="type-body-medium text-[var(--md-sys-color-error)]">
+                        Не удалось загрузить поля карточки. Закройте и откройте её снова.
+                      </p>
+                    ))}
+                    {rows.map(({ field, value }) => (
+                      <label key={field} className="flex flex-col gap-1">
+                        <span className="type-label-medium text-[var(--md-sys-color-on-surface-variant)]">{field}</span>
+                        <textarea
+                          rows={field.toLowerCase().includes('cloze') || field.toLowerCase().includes('sentence') ? 2 : 1}
+                          value={value}
+                          onChange={(e) => setFields((current) => (current ? { ...current, [field]: e.target.value } : current))}
+                          className="type-body-medium resize-none rounded-[var(--md-sys-shape-corner-small)] border border-[var(--md-sys-color-outline)] bg-transparent px-3 py-2 outline-hidden focus:border-[var(--md-sys-color-primary)] focus:ring-1 focus:ring-[var(--md-sys-color-primary)]"
+                        />
+                      </label>
+                    ))}
+                    <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
+                      Медиа-поля показаны в предпросмотре и не редактируются.
                     </p>
-                  ))}
-                  {rows.map(({ field, value }) => (
-                    <label key={field} className="flex flex-col gap-1">
-                      <span className="type-label-medium text-[var(--md-sys-color-on-surface-variant)]">{field}</span>
+                    <label className="flex flex-col gap-1">
+                      <span className="type-label-medium text-[var(--md-sys-color-on-surface-variant)]">Картинка (промпт)</span>
                       <textarea
-                        rows={field.toLowerCase().includes('cloze') || field.toLowerCase().includes('sentence') ? 2 : 1}
-                        value={value}
-                        onChange={(e) => setFields((current) => (current ? { ...current, [field]: e.target.value } : current))}
-                        className="type-body-medium resize-none rounded-[var(--md-sys-shape-corner-small)] border border-[var(--md-sys-color-outline)] bg-transparent px-3 py-2 outline-hidden focus:border-[var(--md-sys-color-primary)] focus:ring-1 focus:ring-[var(--md-sys-color-primary)]"
+                        rows={2}
+                        value={draft?.image_prompt ?? ''}
+                        disabled={!draft}
+                        onChange={(e) => setDraft((current) => (current ? { ...current, image_prompt: e.target.value } : current))}
+                        className="type-body-medium resize-none rounded-[var(--md-sys-shape-corner-small)] border border-[var(--md-sys-color-outline)] bg-transparent px-3 py-2 outline-hidden focus:border-[var(--md-sys-color-primary)] focus:ring-1 focus:ring-[var(--md-sys-color-primary)] disabled:opacity-50"
                       />
+                      <button
+                        type="button"
+                        disabled={generating || busy || !draft}
+                        onClick={() => void generate()}
+                        className="state-layer type-label-large relative mt-1 flex items-center gap-2 self-start rounded-full bg-[var(--md-sys-color-secondary-container)] px-4 py-1.5 text-[var(--md-sys-color-on-secondary-container)] disabled:opacity-50"
+                      >
+                        {generating && <Spinner size={16} width={2} />}
+                        {generating ? 'Генерирую картинку…' : 'Сгенерировать картинку'}
+                      </button>
                     </label>
-                  ))}
-                  <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
-                    Медиа-поля показаны в предпросмотре и не редактируются.
-                  </p>
-                  <label className="flex flex-col gap-1">
-                    <span className="type-label-medium text-[var(--md-sys-color-on-surface-variant)]">Картинка (промпт)</span>
-                    <textarea
-                      rows={2}
-                      value={draft?.image_prompt ?? ''}
-                      disabled={!draft}
-                      onChange={(e) => setDraft((current) => (current ? { ...current, image_prompt: e.target.value } : current))}
-                      className="type-body-medium resize-none rounded-[var(--md-sys-shape-corner-small)] border border-[var(--md-sys-color-outline)] bg-transparent px-3 py-2 outline-hidden focus:border-[var(--md-sys-color-primary)] focus:ring-1 focus:ring-[var(--md-sys-color-primary)] disabled:opacity-50"
-                    />
-                    <button
-                      type="button"
-                      disabled={generating || busy || !draft}
-                      onClick={() => void generate()}
-                      className="state-layer type-label-large relative mt-1 flex items-center gap-2 self-start rounded-full bg-[var(--md-sys-color-secondary-container)] px-4 py-1.5 text-[var(--md-sys-color-on-secondary-container)] disabled:opacity-50"
-                    >
-                      {generating && <Spinner size={16} width={2} />}
-                      {generating ? 'Генерирую картинку…' : 'Сгенерировать картинку'}
-                    </button>
-                  </label>
-                </>
-              ) : (
-                <>
-                  {dup && (
-                    <div className="type-body-small rounded-[var(--md-sys-shape-corner-small)] px-3 py-2" style={{ background: 'var(--app-anki-label-container)', color: 'var(--app-anki-on-label-container)' }}>
-                      Уже есть в Anki: {dup.translation || dup.word}
-                    </div>
-                  )}
-                  {FIELDS.map(([k, label]) => (
-                    <label key={k} className="flex flex-col gap-1">
-                      <span className="type-label-medium text-[var(--md-sys-color-on-surface-variant)]">{label}</span>
-                      <textarea
-                        rows={k === 'cloze_sentence' || k === 'full_sentence' || k === 'image_prompt' ? 2 : 1}
-                        value={draft?.[k] ?? ''}
-                        onChange={(e) => setDraft((current) => (current ? { ...current, [k]: e.target.value } : current))}
-                        className="type-body-medium resize-none rounded-[var(--md-sys-shape-corner-small)] border border-[var(--md-sys-color-outline)] bg-transparent px-3 py-2 outline-hidden focus:border-[var(--md-sys-color-primary)] focus:ring-1 focus:ring-[var(--md-sys-color-primary)]"
-                      />
-                      {k === 'image_prompt' && (
-                        <button
-                          type="button"
-                          disabled={generating || busy || !draft}
-                          onClick={() => void generate()}
-                          className="state-layer type-label-large relative mt-1 flex items-center gap-2 self-start rounded-full bg-[var(--md-sys-color-secondary-container)] px-4 py-1.5 text-[var(--md-sys-color-on-secondary-container)] disabled:opacity-50"
-                        >
-                          {generating && <Spinner size={16} width={2} />}
-                          {generating ? 'Генерирую картинку…' : 'Сгенерировать картинку'}
-                        </button>
-                      )}
-                    </label>
-                  ))}
-                </>
-              )}
-              {job.error && <p className="type-body-small text-[var(--md-sys-color-error)]">{job.error}</p>}
-              {error && <p className="type-body-small text-[var(--md-sys-color-error)]">{error}</p>}
+                  </>
+                ) : (
+                  <>
+                    {dup && (
+                      <div className="type-body-small rounded-[var(--md-sys-shape-corner-small)] px-3 py-2" style={{ background: 'var(--app-anki-label-container)', color: 'var(--app-anki-on-label-container)' }}>
+                        Уже есть в Anki: {dup.translation || dup.word}
+                      </div>
+                    )}
+                    {FIELDS.map(([k, label]) => (
+                      <label key={k} className="flex flex-col gap-1">
+                        <span className="type-label-medium text-[var(--md-sys-color-on-surface-variant)]">{label}</span>
+                        <textarea
+                          rows={k === 'cloze_sentence' || k === 'full_sentence' || k === 'image_prompt' ? 2 : 1}
+                          value={draft?.[k] ?? ''}
+                          onChange={(e) => setDraft((current) => (current ? { ...current, [k]: e.target.value } : current))}
+                          className="type-body-medium resize-none rounded-[var(--md-sys-shape-corner-small)] border border-[var(--md-sys-color-outline)] bg-transparent px-3 py-2 outline-hidden focus:border-[var(--md-sys-color-primary)] focus:ring-1 focus:ring-[var(--md-sys-color-primary)]"
+                        />
+                        {k === 'image_prompt' && (
+                          <button
+                            type="button"
+                            disabled={generating || busy || !draft}
+                            onClick={() => void generate()}
+                            className="state-layer type-label-large relative mt-1 flex items-center gap-2 self-start rounded-full bg-[var(--md-sys-color-secondary-container)] px-4 py-1.5 text-[var(--md-sys-color-on-secondary-container)] disabled:opacity-50"
+                          >
+                            {generating && <Spinner size={16} width={2} />}
+                            {generating ? 'Генерирую картинку…' : 'Сгенерировать картинку'}
+                          </button>
+                        )}
+                      </label>
+                    ))}
+                  </>
+                )}
+                {job.error && <p className="type-body-small text-[var(--md-sys-color-error)]">{job.error}</p>}
+                {error && <p className="type-body-small text-[var(--md-sys-color-error)]">{error}</p>}
+              </div>
             </div>
-            <div className="mt-4 flex flex-wrap justify-end gap-2">
-              <button type="button" onClick={closeEditor} className="state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-primary)]">Закрыть</button>
-              {view === 'added' ? (
-                <button type="button" disabled={busy || generating} onClick={() => void remove()} className="state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-error)] disabled:opacity-50">Удалить из Anki</button>
-              ) : (
-                <button type="button" disabled={busy || generating} onClick={() => void cancel()} className="state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-error)] disabled:opacity-50">Отменить добавление</button>
-              )}
-              <button type="button" disabled={busy || generating || !draft || (view === 'added' && !fields)} onClick={() => void save()} className="state-layer state-on-primary type-label-large relative flex items-center gap-2 rounded-full bg-[var(--md-sys-color-primary)] px-6 py-2 text-[var(--md-sys-color-on-primary)] disabled:opacity-50">
-                {busy && <Spinner size={16} width={2} />}
-                {view === 'added' ? 'Сохранить изменения' : 'Сохранить и добавить'}
-              </button>
+            <div className="min-h-0 md:overflow-y-auto">
+              <PreviewPane
+                preview={shownPreview}
+                error={preview.error ? errorText(preview.error) : null}
+                loading={preview.isFetching}
+              />
             </div>
           </div>
-          <div className="min-h-0 overflow-y-auto">
-            <PreviewPane
-              preview={shownPreview}
-              error={preview.error ? errorText(preview.error) : null}
-              loading={preview.isFetching}
-            />
+          <div className="mt-4 flex shrink-0 flex-wrap justify-end gap-2">
+            <button type="button" onClick={closeEditor} className="state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-primary)]">Закрыть</button>
+            {view === 'added' ? (
+              <button type="button" disabled={busy || generating} onClick={() => void remove()} className="state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-error)] disabled:opacity-50">Удалить из Anki</button>
+            ) : (
+              <button type="button" disabled={busy || generating} onClick={() => void cancel()} className="state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-error)] disabled:opacity-50">Отменить добавление</button>
+            )}
+            <button type="button" disabled={busy || generating || !draft || (view === 'added' && !fields)} onClick={() => void save()} className="state-layer state-on-primary type-label-large relative flex items-center gap-2 rounded-full bg-[var(--md-sys-color-primary)] px-6 py-2 text-[var(--md-sys-color-on-primary)] disabled:opacity-50">
+              {busy && <Spinner size={16} width={2} />}
+              {view === 'added' ? 'Сохранить изменения' : 'Сохранить и добавить'}
+            </button>
           </div>
-        </div>
+        </>
       )}
     </Dialog>
   )

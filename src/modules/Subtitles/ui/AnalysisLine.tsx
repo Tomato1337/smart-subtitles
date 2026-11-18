@@ -13,7 +13,7 @@ export function AnalysisLine() {
  const annot = useSubsStore((s) => s.annot)
  const embedded = useSubsStore((s) => s.embedded)
  const duration = usePlaybackStore((s) => s.duration)
- if (!annot || annot.consent !== 'on' || cues.length === 0 || duration <= 0) return null
+ if (!annot || annot.consent !== 'on' || annot.failure?.blocked || cues.length === 0 || duration <= 0) return null
  // While the subtitles are still being read out of the file, `total` covers only the cues stored
  // so far: "everything is done" then means the read part, not the film.
  const growing = embedded?.phase === 'loading' || embedded?.phase === 'confirm'

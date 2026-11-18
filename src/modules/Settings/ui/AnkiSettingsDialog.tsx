@@ -110,14 +110,15 @@ export function AnkiSettingsDialog({ cfg, set, onSave, dirty, saving, onClose }:
  }
 
  return (
-  <Dialog onClose={onClose} dismissible aria-labelledby="anki-settings-title" className="max-h-[92vh] w-[1100px] max-w-[96vw] p-0">
-   <div className="flex items-center justify-between px-6 pt-5 pb-2">
+  <Dialog onClose={onClose} dismissible aria-labelledby="anki-settings-title" className="h-[92vh] w-[1100px] max-w-[96vw] p-0">
+   <div className="flex shrink-0 items-center justify-between px-6 pt-5 pb-2">
     <h2 id="anki-settings-title" className="type-headline-small">Anki и карточки</h2>
     <IconButton icon="close" label="Закрыть" onClick={onClose} />
    </div>
 
-   <div className="grid min-h-0 flex-1 gap-4 overflow-hidden px-6 pb-4 lg:grid-cols-[minmax(0,1fr)_460px]">
-    <div className="flex min-h-0 flex-col gap-3 overflow-y-auto pr-1">
+   {/* A definite dialog height gives WKWebView a real scrollport for both columns. */}
+   <div className="grid min-h-0 flex-auto grid-rows-[max-content_max-content] gap-4 overflow-y-auto overscroll-contain px-6 pb-4 lg:grid-cols-[minmax(0,1fr)_460px] lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden">
+    <div className="flex min-h-0 flex-col gap-3 pr-1 lg:overflow-y-auto">
      <Group title="Подключение">
       <Field label="Адрес AnkiConnect">
        <Text value={cfg.anki.url} onChange={(url) => set('anki', { url })} placeholder="http://127.0.0.1:8765" />
@@ -307,7 +308,7 @@ export function AnkiSettingsDialog({ cfg, set, onSave, dirty, saving, onClose }:
      </Group>
     </div>
 
-    <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
+    <div className="flex min-h-0 flex-col gap-2 lg:overflow-y-auto">
      {preview.error ? (
       <p className="type-body-medium text-[var(--md-sys-color-error)]">{errorText(preview.error)}</p>
      ) : preview.data ? (
@@ -318,7 +319,7 @@ export function AnkiSettingsDialog({ cfg, set, onSave, dirty, saving, onClose }:
     </div>
    </div>
 
-   <div className="flex items-center justify-end gap-2 border-t border-[var(--md-sys-color-outline-variant)] px-6 py-4">
+   <div className="flex shrink-0 items-center justify-end gap-2 border-t border-[var(--md-sys-color-outline-variant)] px-6 py-4">
     <button type="button" className={TEXT_BUTTON} onClick={onClose}>Закрыть</button>
     <button type="button" className={PRIMARY} disabled={!dirty || saving} onClick={onSave}>
      Сохранить

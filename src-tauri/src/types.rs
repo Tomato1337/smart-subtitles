@@ -169,10 +169,22 @@ pub struct SourceNote { pub source: &'static str, pub message: String }
 #[serde(rename_all = "camelCase")]
 pub struct SubsCandidates { pub active_key: Option<String>, pub active_label: Option<String>, pub items: Vec<CandidateEntry>, pub notes: Vec<SourceNote> }
 
-/// Background dialog analysis of one media: consent plus batch counters for the progress chip.
+/// The latest annotation failure in the current session; a blocked provider needs configuration or billing changes.
+#[derive(Debug, Clone, Serialize)]
+pub struct AnnotFailure { pub message: String, pub blocked: bool }
+
+/// Background dialog analysis of one media: consent, batch counters and the current attempt.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AnnotStatus { pub media_id: String, pub consent: Option<String>, pub total: u32, pub done: u32, pub failed: u32 }
+pub struct AnnotStatus {
+    pub media_id: String,
+    pub consent: Option<String>,
+    pub total: u32,
+    pub done: u32,
+    pub failed: u32,
+    pub running: bool,
+    pub failure: Option<AnnotFailure>,
+}
 
 /// Token estimate of the remaining analysis, computed without any LLM request.
 #[derive(Debug, Clone, Serialize)]

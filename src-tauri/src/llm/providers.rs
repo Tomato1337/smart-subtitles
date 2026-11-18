@@ -257,6 +257,158 @@ fn found(source: &'static str, file: String, d: Draft) -> Found {
     }
 }
 
+/// The only keychain service omp writes provider keys under.
+const OMP_KEYCHAIN_SERVICE: &str = "omp";
+
+/// The only `!` command imported from omp: its macOS keychain lookup.
+///
+/// `models.yml` may hold `!security find-generic-password -s omp -a <provider> -w` instead of a
+/// key. Exactly this read-only template is recognized; the executable is invoked directly, never
+/// through a shell, and the account has to be the provider id itself.
+fn omp_keychain_account(raw: &str) -> Option<&str> {
+    let mut words = raw.strip_prefix('!')?.split_whitespace();
+    if words.next()? != "security" {
+        return None;
+    }
+    if words.next()? != "find-generic-password" || words.next()? != "-s" || words.next()? != OMP_KEYCHAIN_SERVICE {
+        return None;
+    }
+    if words.next()? != "-a" {
+        return None;
+    }
+    let account = words.next()?;
+    if account.starts_with('-') {
+        return None;
+    }
+    if words.next()? != "-w" || words.next().is_some() {
+        return None;
+    }
+    Some(account)
+}
+
+/// `security -w` prints the key and a newline; an empty, oversized or non-printable answer is not a key.
+#[cfg(any(target_os = "macos", test))]
+fn key_from_output(bytes: &[u8]) -> String {
+    const MAX: usize = 8 * 1024;
+    if bytes.len() > MAX {
+        return String::new();
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return String::new();
+    };
+    let key = text.trim_end_matches(['\r', '\n']);
+    if key.is_empty() || key.chars().any(char::is_control) {
+        return String::new();
+    }
+    key.to_string()
+}
+
+/// Reads one key from the login keychain. Any failure is a missing key: the caller never sees an
+/// error string, and neither stdout nor stderr is logged, so a secret cannot leak that way.
+///
+/// Discovery is synchronous (startup, settings save, the Tauri commands and setup all call it), so
+/// the async `crate::proc::output_cancellable` cannot be used here without blocking a runtime
+/// worker. This follows the same rules by hand: no shell, absolute `/usr/bin/security`, stdin null,
+/// stderr discarded, bounded stdout, and kill + reap on a deadline.
+#[cfg(target_os = "macos")]
+fn keychain_key(account: &str) -> String {
+    use std::io::Read;
+    use std::sync::{LazyLock, Mutex};
+    use std::time::Instant;
+
+    // One settings save resolves the main connection and every per-task one, so an ACL prompt
+    // would otherwise appear repeatedly for the same provider. A miss expires sooner, so a key
+    // just added to the keychain is picked up by the next settings save.
+    const TTL: Duration = Duration::from_secs(10);
+    const MISS_TTL: Duration = Duration::from_secs(5);
+    // A locked keychain or a refused ACL must not cost one deadline per omp provider.
+    const BLOCK: Duration = Duration::from_secs(15);
+    struct Cache {
+        keys: HashMap<String, (Instant, String)>,
+        blocked_until: Option<Instant>,
+    }
+    static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache { keys: HashMap::new(), blocked_until: None }));
+
+    if account.is_empty() || account.chars().any(char::is_control) {
+        return String::new();
+    }
+    let now = Instant::now();
+    {
+        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, key)) = cache.keys.get(account) {
+            let ttl = if key.is_empty() { MISS_TTL } else { TTL };
+            if now.duration_since(*at) < ttl {
+                return key.clone();
+            }
+        }
+        if cache.blocked_until.is_some_and(|until| now < until) {
+            return String::new();
+        }
+        cache.blocked_until = None;
+        cache.keys.retain(|_, (at, key)| {
+            let ttl = if key.is_empty() { MISS_TTL } else { TTL };
+            now.duration_since(*at) < ttl
+        });
+    }
+
+    let mut cmd = crate::proc::command("/usr/bin/security").into_std();
+    cmd.args(["find-generic-password", "-s", OMP_KEYCHAIN_SERVICE, "-a", account, "-w"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let (key, blocked) = match cmd.spawn() {
+        Ok(mut child) => {
+            let mut stdout = child.stdout.take();
+            // Read concurrently: a full pipe must not block the deadline poll below.
+            let reader = std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(p) = &mut stdout {
+                    let _ = (&mut *p).take(8 * 1024 + 1).read_to_end(&mut buf);
+                }
+                buf
+            });
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut blocked = false;
+            let status = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break Some(status),
+                    Ok(None) if Instant::now() >= deadline => {
+                        let _ = child.kill();
+                        blocked = true;
+                        break None;
+                    }
+                    Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                    Err(_) => {
+                        let _ = child.kill();
+                        blocked = true;
+                        break None;
+                    }
+                }
+            };
+            let _ = child.wait();
+            let bytes = reader.join().unwrap_or_default();
+            let key = match status {
+                Some(s) if s.success() => key_from_output(&bytes),
+                _ => String::new(),
+            };
+            (key, blocked)
+        }
+        Err(_) => (String::new(), true),
+    };
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache.keys.insert(account.to_string(), (now, key.clone()));
+    if blocked {
+        cache.blocked_until = Some(Instant::now() + BLOCK);
+    }
+    key
+}
+
+/// Other systems have no `security`; the provider stays listed and selectable without a key.
+#[cfg(not(target_os = "macos"))]
+fn keychain_key(_account: &str) -> String {
+    String::new()
+}
+
 fn omp(r: &Roots) -> anyhow::Result<Vec<Found>> {
     let dir = r.home.join(".omp/agent");
     let path = dir.join("models.yml");
@@ -280,8 +432,11 @@ fn omp(r: &Roots) -> anyhow::Result<Vec<Found>> {
         let raw = p.get("apiKey").and_then(|x| x.as_str()).unwrap_or("");
         let api_key = if is_env_name(raw) {
             env_lookup(r, raw, &[dir.join(".env")])
+        } else if omp_keychain_account(raw) == Some(id) {
+            // The account is the provider id, so a config entry cannot read another provider's key.
+            keychain_key(id)
         } else if raw.starts_with('!') {
-            // A shell command; commands are never executed.
+            // Any other command is never executed.
             String::new()
         } else {
             raw.to_string()
@@ -795,6 +950,26 @@ providers:
     api: openai-completions
     apiKey: "!secret-tool lookup x"
     models: [{ id: c1 }]
+  k-keychain-other:
+    baseUrl: https://k1.example/v1
+    api: openai-completions
+    apiKey: "!security find-generic-password -s omp -a someone-else -w"
+    models: [{ id: k1 }]
+  k-keychain-service:
+    baseUrl: https://k2.example/v1
+    api: openai-completions
+    apiKey: "!security find-generic-password -s other -a k-keychain-service -w"
+    models: [{ id: k2 }]
+  k-keychain-shell:
+    baseUrl: https://k3.example/v1
+    api: openai-completions
+    apiKey: "!sh -c 'security find-generic-password -s omp -a k-keychain-shell -w'"
+    models: [{ id: k3 }]
+  k-keychain-extra:
+    baseUrl: https://k4.example/v1
+    api: openai-completions
+    apiKey: "!security find-generic-password -s omp -a k-keychain-extra -w extra"
+    models: [{ id: k4 }]
   k-claude:
     baseUrl: https://a.example/v1
     api: anthropic-messages
@@ -815,9 +990,51 @@ providers:
         assert!(env.info.file.starts_with('~'));
         assert_eq!(by_id(&f, "k-literal").endpoint.api_key, "sk-literal");
         assert!(!by_id(&f, "k-cmd").info.has_key);
+        for id in ["k-keychain-other", "k-keychain-service", "k-keychain-shell", "k-keychain-extra"] {
+            assert!(!by_id(&f, id).info.has_key, "{id} must not produce a key");
+        }
         let a = by_id(&f, "k-claude");
         assert_eq!((a.info.api, a.endpoint.auth), (Api::Anthropic, Auth::XApiKey));
         assert!(!f.iter().any(|x| x.info.id == "k-image"));
+    }
+
+    #[test]
+    fn omp_keychain_template_is_exact() {
+        assert_eq!(omp_keychain_account("!security find-generic-password -s omp -a mangoboost -w"), Some("mangoboost"));
+        for raw in [
+            "!/usr/bin/security find-generic-password -s omp -a a-b.c -w",
+            "!security find-generic-password -s other -a mangoboost -w",
+            "!security find-generic-password -a mangoboost -s omp -w",
+            "!security find-generic-password -s omp -a mangoboost -w extra",
+            "!security find-generic-password -s omp -w -a mangoboost",
+            "!security find-generic-password -s omp -a -weird -w",
+            "!security find-generic-password -s omp -a mangoboost -g -w",
+            "!security find-generic-password -s omp -a mangoboost -w | cat",
+            "!sh -c 'security find-generic-password -s omp -a mangoboost -w'",
+            "!secret-tool lookup service omp",
+            "security find-generic-password -s omp -a mangoboost -w",
+            "",
+        ] {
+            assert_eq!(omp_keychain_account(raw), None, "{raw}");
+        }
+    }
+
+    #[test]
+    fn security_output_is_trimmed_and_bounded() {
+        assert_eq!(key_from_output(b"sk-live\n"), "sk-live");
+        assert_eq!(key_from_output(b"sk-live\r\n"), "sk-live");
+        assert_eq!(key_from_output(b""), "");
+        assert_eq!(key_from_output(b"\r\n"), "");
+        assert_eq!(key_from_output(b"a\nb\n"), "");
+        assert_eq!(key_from_output(&[0xff, 0xfe]), "");
+        assert_eq!(key_from_output(&vec![b'x'; 8 * 1024 + 1]), "");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn keychain_is_unavailable_off_macos() {
+        // On Linux and Windows the exact template stays selectable but yields no key.
+        assert_eq!(keychain_key("mangoboost"), "");
     }
 
     #[test]

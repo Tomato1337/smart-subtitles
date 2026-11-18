@@ -46,7 +46,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
 
   return (
     <Dialog onClose={onClose} dismissible label="Настройка Smart Subtitles" className="max-h-[90vh] w-[720px] max-w-[96vw] p-0">
-      <div className="flex items-center justify-between px-6 pt-5 pb-2">
+      <div className="flex shrink-0 items-center justify-between px-6 pt-5 pb-2">
         <h2 className="type-headline-small">{TITLES[step]}</h2>
         <IconButton icon="close" label="Закрыть" onClick={onClose} />
       </div>
@@ -65,7 +65,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
           onClose={onClose}
         />
       ) : (
-        <div className="min-h-0 flex-1 px-6 pb-6"><Spinner label="Загрузка" className="m-6" /></div>
+        <div className="px-6 pb-6"><Spinner label="Загрузка" className="m-6" /></div>
       )}
     </Dialog>
   )
@@ -73,7 +73,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
 
 function Progress({ step }: { step: Step }) {
   return (
-    <div className="flex gap-1.5 px-6 pb-3">
+    <div className="flex shrink-0 gap-1.5 px-6 pb-4">
       {STEPS.map((s) => (
         <span
           key={s}
@@ -119,23 +119,26 @@ function Body({ saved, providers, setup, step, agentMode, onAgentMode, onGo, onC
   const next = () => { if (dirty) save.mutate(undefined, { onSuccess: () => go(1) }); else go(1) }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 pb-4">
-        {step === 'welcome' && (
-          <Welcome
-            prompt={promptFor(setup.guideUrl)}
-            steps={setup.steps}
-            agentMode={agentMode}
-            onAgentMode={onAgentMode}
-            onStart={() => onGo('llm')}
-            onFinish={() => onGo('done')}
-          />
-        )}
-        {step === 'llm' && <StepLlm cfg={cfg} providers={providers} set={set} />}
-        {step === 'opensubtitles' && <StepSubs cfg={cfg} set={set} />}
-        {step === 'lampa' && <StepLampa origins={origins} setOrigins={setOrigins} port={setup.port} />}
-        {step === 'anki' && <StepAnki cfg={cfg} hint={setup.steps.find((s) => s.id === 'anki')?.hint ?? ''} set={set} />}
-        {step === 'done' && <Finished steps={setup.steps} onFinish={onClose} />}
+    <>
+      <div className="min-h-0 flex-auto overflow-y-auto overscroll-contain">
+        {/* Keep a natural-height column inside the scrollport so short windows scroll instead of squeezing fields. */}
+        <div className={`flex flex-col px-6 ${step === 'welcome' ? 'gap-5 pb-6' : 'gap-4 pb-4'}`}>
+          {step === 'welcome' && (
+            <Welcome
+              prompt={promptFor(setup.guideUrl)}
+              steps={setup.steps}
+              agentMode={agentMode}
+              onAgentMode={onAgentMode}
+              onStart={() => onGo('llm')}
+              onFinish={() => onGo('done')}
+            />
+          )}
+          {step === 'llm' && <StepLlm cfg={cfg} providers={providers} set={set} />}
+          {step === 'opensubtitles' && <StepSubs cfg={cfg} set={set} />}
+          {step === 'lampa' && <StepLampa origins={origins} setOrigins={setOrigins} port={setup.port} />}
+          {step === 'anki' && <StepAnki cfg={cfg} hint={setup.steps.find((s) => s.id === 'anki')?.hint ?? ''} set={set} />}
+          {step === 'done' && <Finished steps={setup.steps} onFinish={onClose} />}
+        </div>
       </div>
       <Footer
         step={step}
@@ -145,7 +148,7 @@ function Body({ saved, providers, setup, step, agentMode, onAgentMode, onGo, onC
         onSkip={() => go(1)}
         onNext={next}
       />
-    </div>
+    </>
   )
 }
 
@@ -157,10 +160,11 @@ function Footer({ step, dirty, pending, onBack, onSkip, onNext }: {
   onSkip: () => void
   onNext: () => void
 }) {
-  const editable = step !== 'welcome' && step !== 'done'
+  if (step === 'welcome') return null
+  const editable = step !== 'done'
   return (
-    <div className="flex items-center gap-2 border-t border-[var(--md-sys-color-outline-variant)] px-6 py-4">
-      {step !== 'welcome' && <button type="button" className={TEXT_BUTTON} onClick={onBack}>Назад</button>}
+    <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-[var(--md-sys-color-outline-variant)] px-6 py-4">
+      <button type="button" className={TEXT_BUTTON} onClick={onBack}>Назад</button>
       <span className="flex-1" />
       {editable && <button type="button" className={TEXT_BUTTON} onClick={onSkip}>Пропустить</button>}
       {editable && (
@@ -202,7 +206,7 @@ function Welcome({ prompt, steps, agentMode, onAgentMode, onStart, onFinish }: {
           {deps.hint}
         </p>
       )}
-      <p className="type-body-medium">
+      <p className="type-body-large">
         Плеер показывает английские субтитры с переводом, подсвечивает идиомы и грамматику и добавляет фразы в Anki.
         Настройка займёт пару минут, любой шаг можно пропустить и вернуться к нему позже через ⚙ → «Мастер настройки».
       </p>

@@ -123,8 +123,10 @@ fn clip_input_hash(c: &jobs::ClipContext, cue: &jobs::CapturedCue) -> String {
     let end = format!("{:.3}", cue.end);
     let offset = format!("{:.3}", cue.offset);
     let next = cue.next_start.map(|n| format!("{n:.3}")).unwrap_or_default();
+    let duration = c.source_duration.map(|n| format!("{n:.3}")).unwrap_or_default();
     hash(&[
-        "clip",
+        // Do not reuse pre-validation WebMs, including already-uploaded assets on old jobs.
+        "clip-v2",
         &c.source_url,
         &c.audio_index.to_string(),
         &c.video_index.map(|v| v.to_string()).unwrap_or_default(),
@@ -133,6 +135,7 @@ fn clip_input_hash(c: &jobs::ClipContext, cue: &jobs::CapturedCue) -> String {
         &end,
         &offset,
         &next,
+        &duration,
         &cue.text,
     ])
 }
@@ -232,7 +235,7 @@ async fn speech_window(
 ) -> (f64, f64) {
     let cached = span_cache_path(clip_key);
     if let Some(span) = read_span(&cached) {
-        return span;
+        return (span.0, span_end(span.1, next_start));
     }
     let _guard = tokio::select! {
         _ = cancel.cancelled() => {
@@ -242,7 +245,7 @@ async fn speech_window(
         guard = SPAN_LOCK.lock() => guard,
     };
     if let Some(span) = read_span(&cached) {
-        return span;
+        return (span.0, span_end(span.1, next_start));
     }
     let a = (start - 2.0).max(0.0);
     let dur = (end - start + 4.0).min(16.0);
@@ -482,32 +485,51 @@ async fn ensure_audio(
     }
 }
 
-/// Local copy of the selected clip, restored from Anki when only the uploaded file remains.
-async fn local_clip(
+/// Reuse an already uploaded clip if we can still read a valid local copy, or restore it from Anki.
+/// The versioned slot key proves this media was originally tested against its requested window.
+async fn restore_local_clip(
     client: &connect::Client<'_>,
-    slot: Option<&jobs::AssetSlot>,
+    slot: &jobs::AssetSlot,
+    file: &str,
+    cancel: &CancellationToken,
 ) -> Result<Option<PathBuf>, jobs::JobError> {
-    let Some(slot) = slot else { return Ok(None) };
-    if let Some(path) = slot.cache_path.as_deref() {
-        if tokio::fs::read(path).await.ok().is_some_and(|b| clip::is_webm(&b)) {
-            return Ok(Some(PathBuf::from(path)));
+    if let Some(path) = slot.cache_path.as_deref().map(Path::new) {
+        if clip::validate(path, None, cancel).await.is_ok() {
+            return Ok(Some(path.to_owned()));
         }
     }
-    if let Some(name) = &slot.file_name {
-        let path = clip::clips_dir().join(name);
-        match client.retrieve_media(name).await {
-            Ok(bytes) if clip::is_webm(&bytes) => {
-                write_atomic(&path, &bytes).await.map_err(|e| jobs::JobError::Failed(format!("клип: {e}")))?;
-                return Ok(Some(path));
-            }
-            _ => {}
+    let bytes = tokio::select! {
+        _ = cancel.cancelled() => return Err(jobs::JobError::Cancelled),
+        result = client.retrieve_media(file) => match result {
+            Ok(bytes) => bytes,
+            Err(_) => return Ok(None),
+        },
+    };
+    let dir = clip::clips_dir();
+    let path = dir.join(file);
+    let part = part_path(&path);
+    let result = async {
+        tokio::fs::create_dir_all(dir).await?;
+        tokio::fs::write(&part, bytes).await?;
+        clip::validate(&part, None, cancel).await?;
+        if cancel.is_cancelled() {
+            anyhow::bail!("отменено");
         }
+        tokio::fs::rename(&part, &path).await?;
+        Ok::<(), anyhow::Error>(())
+    }.await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&part).await;
+        if cancel.is_cancelled() {
+            return Err(jobs::JobError::Cancelled);
+        }
+        return Ok(None);
     }
-    Ok(None)
+    Ok(Some(path))
 }
 
 /// Builds every asset and renders the owned fields for one captured cue. Reuses an asset whose input
-/// hash did not change; a failed unchanged generation is not retried silently.
+/// hash did not change. Unlike image generation, a failed clip may succeed when the source recovers.
 pub async fn prepare(
     st: &Arc<AppState>,
     context: &jobs::JobContext,
@@ -563,53 +585,13 @@ pub async fn prepare(
             (Some(c), Some(h)) => {
                 // The stored URL never carries credentials; they are applied only here, when used.
                 let src = cfg.with_auth(&c.source_url);
-                if let Some(slot) = prior.clip.as_ref().filter(|s| &s.input_hash == h) {
-                    if slot.status == "failed" {
-                        let msg = slot.error.clone().map(|e| format!("без клипа ({e})")).unwrap_or_else(|| "без клипа".into());
-                        warnings.push(msg);
-                        clip_slot = Some(slot.clone());
-                    } else if slot.status == "ready" {
-                        let mut slot = slot.clone();
-                        if let Some(file) = slot.file_name.clone() {
-                            let local_exists = match slot.cache_path.as_deref() {
-                                Some(p) => tokio::fs::metadata(p).await.map(|m| m.len() > 0).unwrap_or(false),
-                                None => false,
-                            };
-                            if !local_exists {
-                                if let Ok(bytes) = client.retrieve_media(&file).await {
-                                    if clip::is_webm(&bytes) {
-                                        let path = clip::clips_dir().join(&file);
-                                        if write_atomic(&path, &bytes).await.is_ok() {
-                                            slot.cache_path = Some(path.to_string_lossy().into_owned());
-                                        }
-                                    }
-                                }
-                            }
-                        } else if let Some(bytes) = match slot.cache_path.as_deref() {
-                            Some(p) => tokio::fs::read(p).await.ok().filter(|b| clip::is_webm(b)),
-                            _ => None,
-                        } {
-                            // A ready local clip without a confirmed upload: retry only the upload.
-                            let file_name = match slot.cache_path.as_deref() {
-                                Some(p) => Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| format!("smartsubs_{}.webm", &h[..16])),
-                                None => format!("smartsubs_{}.webm", &h[..16]),
-                            };
-                            match upload_bytes(&client, &file_name, &bytes, cancel).await {
-                                Ok(()) => slot.file_name = Some(file_name),
-                                Err(JobError::Cancelled) => return Err(JobError::Cancelled),
-                                Err(e) => {
-                                    let msg = job_msg(e);
-                                    logs::log("app", &format!("cards: clip upload failed: {msg}"));
-                                    warnings.push(format!("без клипа ({msg})"));
-                                    slot.error = Some(msg);
-                                }
-                            }
-                        } else {
-                            slot.status = "failed".into();
-                            slot.error = Some("файл не найден".into());
-                            warnings.push("без клипа (файл не найден)".into());
+                if let Some(slot) = prior.clip.as_ref().filter(|s| &s.input_hash == h && s.status == "ready") {
+                    if let Some(file) = &slot.file_name {
+                        if let Some(path) = restore_local_clip(&client, slot, file, cancel).await? {
+                            let mut slot = slot.clone();
+                            slot.cache_path = Some(path.to_string_lossy().into_owned());
+                            clip_slot = Some(slot);
                         }
-                        clip_slot = Some(slot);
                     }
                 }
                 if clip_slot.is_none() {
@@ -634,8 +616,13 @@ pub async fn prepare(
                     if cancel.is_cancelled() {
                         return Err(JobError::Cancelled);
                     }
-                    let file_name = format!("smartsubs_{}.webm", &h[..16]);
-                    let spec = clip::ClipSpec { src: &src, video_index: c.video_index.unwrap_or(0), audio_index: c.audio_index, start: s0, end: e0, hdr: c.hdr };
+                    // A later successful speech match must not overwrite another note's fallback cut.
+                    let cut_key = hash(&[h, &format!("{s0:.3}:{e0:.3}")]);
+                    let file_name = format!("smartsubs_{}.webm", &cut_key[..16]);
+                    let spec = clip::ClipSpec {
+                        src: &src, video_index: c.video_index.unwrap_or(0), audio_index: c.audio_index,
+                        start: s0, end: e0, hdr: c.hdr, source_duration: c.source_duration,
+                    };
                     match clip::make(&spec, &file_name, cancel).await {
                         Ok(path) => {
                             let mut slot = AssetSlot {
@@ -823,39 +810,29 @@ pub async fn prepare(
         progress("audio");
     }
     if need_sentence_audio {
-        let input = if mode == "clip" {
-            assets
-                .clip
-                .as_ref()
-                .filter(|s| !s.input_hash.is_empty())
-                .map(|s| clip_audio_input_hash(&s.input_hash))
+        let audio = if mode == "clip" {
+            assets.clip.as_ref().and_then(|slot| slot.cache_path.as_deref()).and_then(|path| {
+                let path = Path::new(path);
+                let key = path.file_stem()?.to_str()?;
+                Some((clip_audio_input_hash(key), AudioProduce::Clip { path: path.to_owned() }))
+            })
         } else {
-            Some(sentence_audio_input_hash(&draft.full_sentence, &anki.tts_voice, mode))
+            Some((
+                sentence_audio_input_hash(&draft.full_sentence, &anki.tts_voice, mode),
+                AudioProduce::Tts { text: draft.full_sentence.clone(), voice: anki.tts_voice.clone() },
+            ))
         };
-        match input {
-            Some(input) => {
-                let cache_path = asset_file(&input, "mp3");
-                let file_name = fields::media_name(&draft.word, &format!("{input}:{mode}"), "mp3");
-                let produce = if mode == "clip" {
-                    match local_clip(&client, assets.clip.as_ref()).await? {
-                        Some(path) => Some(AudioProduce::Clip { path }),
-                        None => None,
-                    }
-                } else {
-                    Some(AudioProduce::Tts { text: draft.full_sentence.clone(), voice: anki.tts_voice.clone() })
-                };
-                if let Some(produce) = produce {
-                    let (_file, slot, warning) =
-                        ensure_audio(&client, cancel, prior.sentence_audio.as_ref(), &input, &file_name, &cache_path, produce, "без озвучки предложения").await?;
-                    if let Some(w) = warning {
-                        warnings.push(w);
-                    }
-                    assets.sentence_audio = slot;
-                } else {
-                    warnings.push("без озвучки предложения (клип недоступен)".into());
-                }
+        if let Some((input, produce)) = audio {
+            let cache_path = asset_file(&input, "mp3");
+            let file_name = fields::media_name(&draft.word, &format!("{input}:{mode}"), "mp3");
+            let (_file, slot, warning) =
+                ensure_audio(&client, cancel, prior.sentence_audio.as_ref(), &input, &file_name, &cache_path, produce, "без озвучки предложения").await?;
+            if let Some(w) = warning {
+                warnings.push(w);
             }
-            None => warnings.push("без озвучки предложения (клип недоступен)".into()),
+            assets.sentence_audio = slot;
+        } else {
+            warnings.push("без озвучки предложения (клип недоступен)".into());
         }
     }
     if need_word_audio {
@@ -1138,7 +1115,7 @@ mod tests {
             next_start: Some(20.0),
             chunk_fallback: None,
         };
-        let clip = jobs::ClipContext { source_url: "https://example/film.mkv".into(), audio_index: 1, video_index: Some(0), hdr: false };
+        let clip = jobs::ClipContext { source_url: "https://example/film.mkv".into(), audio_index: 1, video_index: Some(0), hdr: false, source_duration: None };
         let base = clip_input_hash(&clip, &cue);
         assert_eq!(base, clip_input_hash(&clip, &cue.clone()));
         assert_ne!(base, clip_input_hash(&jobs::ClipContext { audio_index: 2, ..clip.clone() }, &cue));

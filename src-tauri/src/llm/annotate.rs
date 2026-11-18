@@ -106,7 +106,7 @@ fn task_text(cues: &[(u32, String)], cefr_hint: &str) -> String {
     )
 }
 
-async fn run_batch(st: &Arc<AppState>, s: &Arc<Session>, first: u32) -> Result<(), String> {
+async fn run_batch(st: &Arc<AppState>, s: &Arc<Session>, first: u32) -> anyhow::Result<()> {
     let mid = s.media_id.clone();
     let cues: Vec<(u32, String)> = st
         .db(move |c| {
@@ -114,15 +114,15 @@ async fn run_batch(st: &Arc<AppState>, s: &Arc<Session>, first: u32) -> Result<(
                 .query_map(params![mid, first, first + BATCH], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect()
         })
-        .await?;
+        .await.map_err(anyhow::Error::msg)?;
     if cues.is_empty() { return Ok(()); }
 
-    let mut messages = (*prompts::prefix(st, s).await.map_err(|e| e.to_string())?).clone();
+    let mut messages = (*prompts::prefix(st, s).await?).clone();
     messages.push(json!({ "role": "user", "content": task_text(&cues, &st.cfg().learner.cefr) }));
-    let raw: RawBatch = client::chat_json(st, super::tasks::Task::Annotate, &s.media_id, &format!("annotate {first}"), &messages, 8000).await.map_err(|e| e.to_string())?;
+    let raw: RawBatch = client::chat_json(st, super::tasks::Task::Annotate, &s.media_id, &format!("annotate {first}"), &messages, 8000).await?;
     let anns = process(&cues, raw);
     if anns.len() * 2 < cues.len() {
-        return Err(format!("ответ не совпал с репликами: {} из {}", anns.len(), cues.len()));
+        anyhow::bail!("ответ не совпал с репликами: {} из {}", anns.len(), cues.len());
     }
 
     let (mid, a2) = (s.media_id.clone(), anns.clone());
@@ -140,14 +140,43 @@ async fn run_batch(st: &Arc<AppState>, s: &Arc<Session>, first: u32) -> Result<(
         tx.execute("INSERT OR REPLACE INTO annot_batch VALUES(?1,?2,'done')", params![mid, first])?;
         tx.commit()
     })
-    .await?;
+    .await.map_err(anyhow::Error::msg)?;
     let _ = st.app.emit("annot:updated", json!({ "mediaId": s.media_id, "cues": anns }));
     Ok(())
 }
 
-async fn run_batch_recorded(st: &Arc<AppState>, s: &Arc<Session>, first: u32) {
+#[derive(Default)]
+pub struct Run {
+    cancel: CancellationToken,
+    blocked: CancellationToken,
+    status: Mutex<(bool, Option<AnnotFailure>)>,
+}
+
+fn failure(error: &anyhow::Error) -> AnnotFailure {
+    let (message, blocked) = match error.downcast_ref::<client::HttpError>().map(|e| e.status.as_u16()) {
+        Some(401) => ("API-ключ не принят (HTTP 401)".into(), true),
+        Some(402) => ("Недостаточно средств у LLM-провайдера (HTTP 402)".into(), true),
+        Some(403) => ("LLM-провайдер отказал в доступе (HTTP 403)".into(), true),
+        Some(code) => (format!("Ошибка LLM-провайдера (HTTP {code})"), false),
+        None if error.downcast_ref::<reqwest::Error>().is_some_and(|e| e.is_timeout()) =>
+            ("LLM-провайдер не ответил вовремя".into(), false),
+        None => ("Не удалось разобрать диалоги. Подробности в llm.log".into(), false),
+    };
+    AnnotFailure { message, blocked }
+}
+
+async fn run_batch_recorded(st: &Arc<AppState>, s: &Arc<Session>, run: &Run, first: u32) {
     if let Err(e) = run_batch(st, s, first).await {
         crate::logs::log("llm", &format!("batch {first} failed: {e}"));
+        let failure = failure(&e);
+        {
+            let mut status = run.status.lock().unwrap();
+            // A concurrent transient error must not overwrite the reason the run stopped.
+            if !status.1.as_ref().is_some_and(|f| f.blocked) {
+                if failure.blocked { run.blocked.cancel(); }
+                status.1 = Some(failure);
+            }
+        }
         let mid = s.media_id.clone();
         let _ = st.db(move |c| { c.execute("INSERT OR REPLACE INTO annot_batch VALUES(?1,?2,'failed')", params![mid, first])?; Ok(()) }).await;
         let _ = st.app.emit("annot:failed", json!({ "mediaId": s.media_id, "firstIdx": first }));
@@ -158,7 +187,7 @@ async fn run_batch_recorded(st: &Arc<AppState>, s: &Arc<Session>, first: u32) {
 /// Batch counters of one media's analysis; no session is needed, so the home screen can ask too.
 pub async fn status(st: &AppState, media_id: &str) -> Result<AnnotStatus, String> {
     let mid = media_id.to_string();
-    st.db(move |c| {
+    let mut status = st.db(move |c| {
         let cues: u32 = c.query_row("SELECT count(*) FROM cue WHERE media_id=?1", [&mid], |r| r.get(0))?;
         let consent = c
             .query_row("SELECT annot FROM media WHERE id=?1", [&mid], |r| r.get::<_, Option<String>>(0))
@@ -171,9 +200,15 @@ pub async fn status(st: &AppState, media_id: &str) -> Result<AnnotStatus, String
             let (state, n) = row?;
             if state == "done" { done = n } else { failed = n }
         }
-        Ok(AnnotStatus { media_id: mid.clone(), consent, total: cues.div_ceil(BATCH), done, failed })
-    })
-    .await
+        Ok(AnnotStatus { media_id: mid, consent, total: cues.div_ceil(BATCH), done, failed, running: false, failure: None })
+    }).await?;
+    if let Some(s) = st.sessions.current().filter(|s| s.media_id == media_id) {
+        let run = s.annot_run.lock().unwrap();
+        let current = run.status.lock().unwrap();
+        status.running = current.0;
+        status.failure.clone_from(&current.1);
+    }
+    Ok(status)
 }
 
 pub async fn emit_status(st: &AppState, media_id: &str) {
@@ -253,7 +288,8 @@ pub fn eligible(count: u32, loading: bool) -> u32 {
     if loading { count / BATCH * BATCH } else { count }
 }
 
-async fn scheduler(st: Arc<AppState>, s: Arc<Session>, cancel: CancellationToken) {
+async fn scheduler(st: &Arc<AppState>, s: &Arc<Session>, run: &Arc<Run>) {
+    let cancel = &run.cancel;
     let mid = s.media_id.clone();
     let duration = s.probe.get().map(|p| p.duration).unwrap_or(0.0);
     let resume_at = s.req.resume_at;
@@ -291,6 +327,7 @@ async fn scheduler(st: Arc<AppState>, s: Arc<Session>, cancel: CancellationToken
         let permit = tokio::select! {
             p = sem.clone().acquire_owned() => p.unwrap(),
             _ = cancel.cancelled() => break,
+            _ = run.blocked.cancelled() => break,
         };
         // The cue set grows while the embedded subtitles load, so the count is read every time.
         // `loading` also needs a loader that is actually running: after a failed or cancelled load
@@ -308,6 +345,7 @@ async fn scheduler(st: Arc<AppState>, s: Arc<Session>, cancel: CancellationToken
             Ok(x) => x,
             Err(_) => break,
         };
+        if cancel.is_cancelled() || run.blocked.is_cancelled() { break; }
         let loading = row_loading && running;
         let next = {
             let mut t = taken.lock().unwrap();
@@ -322,11 +360,12 @@ async fn scheduler(st: Arc<AppState>, s: Arc<Session>, cancel: CancellationToken
             tokio::select! {
                 _ = s.cues_grew.notified() => continue,
                 _ = cancel.cancelled() => break,
+                _ = run.blocked.cancelled() => break,
             }
         };
-        let (st2, s2, c2) = (st.clone(), s.clone(), cancel.clone());
+        let (st2, s2, r2) = (st.clone(), s.clone(), run.clone());
         tasks.spawn(async move {
-            tokio::select! { _ = run_batch_recorded(&st2, &s2, first) => {}, _ = c2.cancelled() => {} }
+            tokio::select! { _ = run_batch_recorded(&st2, &s2, &r2, first) => {}, _ = r2.cancel.cancelled() => {} }
             drop(permit);
         });
         // The first request alone fills DeepSeek's prefix cache; the parallel ones after it hit it.
@@ -341,18 +380,45 @@ async fn scheduler(st: Arc<AppState>, s: Arc<Session>, cancel: CancellationToken
 /// (Re)starts background annotation: drops the cached prompt prefix and cancels the previous scheduler.
 pub fn restart(st: &Arc<AppState>, s: &Arc<Session>) {
     *s.prefix.lock().unwrap() = None;
-    let token = s.cancel.child_token();
-    let old = std::mem::replace(&mut *s.annot_cancel.lock().unwrap(), token.clone());
-    old.cancel();
-    if !st.cfg().llm_enabled() { return; }
-    tauri::async_runtime::spawn(scheduler(st.clone(), s.clone(), token));
+    start(st, s, None);
+}
+
+fn start(st: &Arc<AppState>, s: &Arc<Session>, first: Option<u32>) {
+    let enabled = st.cfg().llm_enabled();
+    let run = {
+        let mut current = s.annot_run.lock().unwrap();
+        if first.is_some() && (current.blocked.is_cancelled() || current.status.lock().unwrap().0) { return; }
+        current.cancel.cancel();
+        let run = Arc::new(Run {
+            cancel: s.cancel.child_token(),
+            status: Mutex::new((enabled, None)),
+            ..Default::default()
+        });
+        *current = run.clone();
+        run
+    };
+    if !enabled { return; }
+    let (st, s) = (st.clone(), s.clone());
+    tauri::async_runtime::spawn(async move {
+        emit_status(&st, &s.media_id).await;
+        if let Some(first) = first {
+            tokio::select! {
+                _ = run_batch_recorded(&st, &s, &run, first) => {},
+                _ = run.cancel.cancelled() => {},
+            }
+        } else {
+            scheduler(&st, &s, &run).await;
+        }
+        run.status.lock().unwrap().0 = false;
+        if !run.cancel.is_cancelled() { emit_status(&st, &s.media_id).await; }
+    });
 }
 
 pub fn prioritize(s: &Session, cue_idx: u32) { s.annot_priority.store(cue_idx, Ordering::Relaxed); }
 
 /// Retries one failed batch (from the "перевести снова" button).
-pub async fn retry(st: &Arc<AppState>, s: &Arc<Session>, first: u32) {
-    run_batch_recorded(st, s, first).await;
+pub fn retry(st: &Arc<AppState>, s: &Arc<Session>, first: u32) {
+    start(st, s, Some(first));
 }
 
 #[cfg(test)]

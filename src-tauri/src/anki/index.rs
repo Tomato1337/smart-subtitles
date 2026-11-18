@@ -5,14 +5,13 @@
 
 use crate::{
     anki::{
-        connect,
+        connect::{self, AnkiError},
         fields::{self, Source},
     },
     config,
     logs,
     state::AppState,
 };
-use anyhow::anyhow;
 use regex::Regex;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -51,7 +50,39 @@ pub struct AnkiState {
     pub exact: HashSet<String>,
     /// Note types met in those decks, for the settings dialog's field pickers.
     pub models: Vec<IndexModel>,
-    pub warned: bool,
+    warned: Option<IndexFailure>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum IndexFailure {
+    Busy,
+    Unreachable,
+    UnexpectedReply,
+    Rejected,
+}
+
+impl IndexFailure {
+    fn of(error: &AnkiError) -> Self {
+        match error {
+            AnkiError::Action(m) if m.ends_with(": Collection lifecycle operation is active.") => Self::Busy,
+            AnkiError::Transport(_) => Self::Unreachable,
+            AnkiError::Protocol(_) => Self::UnexpectedReply,
+            AnkiError::Action(_) => Self::Rejected,
+        }
+    }
+
+    fn retryable(self) -> bool {
+        matches!(self, Self::Busy | Self::Unreachable)
+    }
+
+    fn message(self) -> &'static str {
+        match self {
+            Self::Busy => "Anki занят синхронизацией или открытием коллекции",
+            Self::Unreachable => "Anki не отвечает — проверьте, что он запущен и адрес AnkiConnect верен",
+            Self::UnexpectedReply => "Ответ не похож на AnkiConnect — проверьте адрес и установку дополнения",
+            Self::Rejected => "AnkiConnect не смог прочитать коллекцию — подробности в журнале",
+        }
+    }
 }
 
 /// Card status as in tutor's classifyCard (without answer history). None = suspended.
@@ -140,22 +171,37 @@ fn ordered_fields(fields: &Value) -> Vec<String> {
 
 type Picked = (Option<String>, Option<String>, Vec<String>);
 
-async fn fetch(st: &AppState) -> anyhow::Result<(Vec<AnkiCard>, Vec<IndexModel>)> {
-    let cfg = st.cfg();
-    let client = connect::Client::new(&st.http, &cfg.anki.url);
-    let q = query(&cfg.anki.index_decks, &cfg.anki.deck);
+async fn fetch(http: &reqwest::Client, cfg: &config::Anki) -> Result<(Vec<AnkiCard>, Vec<IndexModel>), AnkiError> {
+    let mut delays = [1, 2, 5].into_iter();
+    loop {
+        match fetch_snapshot(http, cfg).await {
+            Err(e) if IndexFailure::of(&e).retryable() => match delays.next() {
+                Some(seconds) => tokio::time::sleep(Duration::from_secs(seconds)).await,
+                None => return Err(e),
+            },
+            result => return result,
+        }
+    }
+}
+
+async fn fetch_snapshot(http: &reqwest::Client, cfg: &config::Anki) -> Result<(Vec<AnkiCard>, Vec<IndexModel>), AnkiError> {
+    let client = connect::Client::new(http, &cfg.url);
+    let q = query(&cfg.index_decks, &cfg.deck);
     let ids = client.call("findCards", json!({ "query": q }), Duration::from_secs(10)).await?;
-    let ids: Vec<i64> = ids.as_array().ok_or_else(|| anyhow!("findCards"))?.iter().filter_map(Value::as_i64).collect();
+    let ids = ids.as_array().and_then(|ids| ids.iter().map(Value::as_i64).collect::<Option<Vec<_>>>())
+        .ok_or_else(|| AnkiError::Protocol("AnkiConnect findCards: ожидался список ID".into()))?;
     let mut by_note: HashMap<i64, AnkiCard> = HashMap::new();
     let mut picked: HashMap<String, Picked> = HashMap::new();
     let mut counts: HashMap<String, usize> = HashMap::new();
     for chunk in ids.chunks(400) {
         let infos = client.call("cardsInfo", json!({ "cards": chunk }), Duration::from_secs(20)).await?;
-        for c in infos.as_array().cloned().unwrap_or_default() {
+        let infos = infos.as_array()
+            .ok_or_else(|| AnkiError::Protocol("AnkiConnect cardsInfo: ожидался список карточек".into()))?;
+        for c in infos {
             let model = c["modelName"].as_str().unwrap_or("").to_string();
             let entry = picked.entry(model.clone()).or_insert_with(|| {
                 let ordered = ordered_fields(&c["fields"]);
-                let (w, t) = pick_fields(&model, &ordered, &cfg.anki);
+                let (w, t) = pick_fields(&model, &ordered, cfg);
                 (w, t, ordered)
             });
             let value = |field: &Option<String>| {
@@ -195,30 +241,34 @@ async fn fetch(st: &AppState) -> anyhow::Result<(Vec<AnkiCard>, Vec<IndexModel>)
     Ok((by_note.into_values().collect(), models))
 }
 
-/// Reloads the index, stores it and tells the frontend. Anki being down yields an empty index and one toast.
+/// Publishes a complete snapshot only. Sync or a dropped connection must not erase the last good index.
 pub async fn refresh(st: &AppState) {
-    match fetch(st).await {
+    // Concurrent refreshes (e.g. a save during sync) must not publish out of order.
+    let _refresh = st.anki_refresh.lock().await;
+    match fetch(&st.http, &st.cfg().anki).await {
         Ok((cards, models)) => {
+            let exact = cards.iter().map(|c| c.word.trim().to_lowercase()).collect();
             let mut s = st.anki.lock().unwrap();
-            s.exact = cards.iter().map(|c| c.word.trim().to_lowercase()).collect();
+            s.exact = exact;
             s.cards = cards.clone();
             s.models = models;
-            s.warned = false;
+            s.warned = None;
             drop(s);
             let _ = st.app.emit("anki:index", &cards);
         }
         Err(e) => {
             logs::log("app", &format!("anki index: {e:#}"));
-            let first = {
+            let failure = IndexFailure::of(&e);
+            let (first, has_snapshot) = {
                 let mut s = st.anki.lock().unwrap();
-                s.cards.clear();
-                s.exact.clear();
-                s.models.clear();
-                !std::mem::replace(&mut s.warned, true)
+                (s.warned.replace(failure) != Some(failure), !s.cards.is_empty())
             };
-            let _ = st.app.emit("anki:index", Vec::<AnkiCard>::new());
             if first {
-                let _ = crate::notify::push(st, crate::notify::Level::Warn, "Anki не запущен — подписи и проверка дублей выключены");
+                let mut message = failure.message().to_owned();
+                if has_snapshot {
+                    message.push_str(". Используется предыдущий список известных слов.");
+                }
+                let _ = crate::notify::push(st, crate::notify::Level::Warn, message);
             }
         }
     }
@@ -234,6 +284,36 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn index_recovers_when_collection_is_temporarily_busy() {
+        use axum::{routing::post, Json, Router};
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+
+        let busy = Arc::new(AtomicBool::new(true));
+        let app = Router::new().route("/", post(move |Json(req): Json<Value>| {
+            let busy = req["action"] == "cardsInfo" && busy.swap(false, Ordering::Relaxed);
+            async move {
+                Json(match req["action"].as_str().unwrap() {
+                    "findCards" => json!({ "result": [42], "error": null }),
+                    "cardsInfo" if busy => json!({ "result": null, "error": "Collection lifecycle operation is active." }),
+                    "cardsInfo" => json!({ "result": [{
+                        "note": 24, "modelName": "Basic",
+                        "fields": { "Front": { "order": 0, "value": "weirdo" } }
+                    }], "error": null }),
+                    action => panic!("unexpected action: {action}"),
+                })
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let cfg = config::Anki { url: format!("http://{}", listener.local_addr().unwrap()), ..Default::default() };
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let snapshot = fetch(&reqwest::Client::new(), &cfg).await;
+        server.abort();
+        let (cards, models) = snapshot.unwrap();
+        assert_eq!(cards[0].word, "weirdo");
+        assert_eq!(models[0].note_type, "Basic");
     }
 
     #[test]

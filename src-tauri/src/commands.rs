@@ -370,8 +370,7 @@ pub fn annot_model(st: St<'_>) -> AnnotModel {
 #[tauri::command]
 pub async fn annot_retry(st: St<'_>, media_id: String, first_idx: u32) -> Res<()> {
     let s = current_for(&st, &media_id)?;
-    let st2 = st.inner().clone();
-    tauri::async_runtime::spawn(async move { crate::llm::annotate::retry(&st2, &s, first_idx).await });
+    crate::llm::annotate::retry(&st, &s, first_idx);
     Ok(())
 }
 

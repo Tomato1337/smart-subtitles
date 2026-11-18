@@ -41,8 +41,9 @@ export function ModelPicker({ conn, providers, model, onModel, inherit }: { conn
  const key = connKey(conn)
  const draft = useDebounced(conn, 600)
  const connection = connKey(draft)
+ const draftProvider = providers?.find((p) => p.source === draft.source && p.id === draft.provider)
  const enabled = draft.source
-  ? !!providers?.some((p) => p.source === draft.source && p.id === draft.provider && p.hasKey)
+  ? !!draftProvider?.hasKey
   : !!(draft.baseUrl && draft.apiKey)
  const query = useQuery({
   queryKey: ['llm-models', connection],
@@ -53,11 +54,14 @@ export function ModelPicker({ conn, providers, model, onModel, inherit }: { conn
  })
  // Until the debounce catches up, `query.data` still belongs to the previous provider.
  const list = (connection === key ? query.data : undefined) ?? selected?.models ?? []
- const hint = query.isFetching
-  ? 'Загружаю список моделей…'
-  : query.error
-   ? `${errorText(query.error)}. Модель можно вписать вручную`
-   : `Моделей: ${list.length}`
+ const keyless = selected?.hasKey === false
+ const hint = keyless
+  ? 'Нет ключа: список моделей — из конфига агента, проверка недоступна'
+  : query.isFetching
+   ? 'Загружаю список моделей…'
+   : query.error
+    ? `${errorText(query.error)}. Модель можно вписать вручную`
+    : `Моделей: ${list.length}`
 
  // An empty model with `inherit` means the main connection's model: that is what a real call would use.
  const pingModel = inherit !== undefined && !model ? inherit : model
@@ -111,6 +115,15 @@ export function ModelPicker({ conn, providers, model, onModel, inherit }: { conn
      />
     </div>
    </div>
+   {keyless && (
+    <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
+     {`В ${selected.file} ключ не найден. `}
+     {selected.source === 'omp'
+      ? 'Проверьте apiKey в models.yml и переменную окружения или ключ в «Связке ключей» (macOS).'
+      : 'Добавьте ключ в настройки агента.'}
+     {' Затем сохраните настройки или выберите другое подключение.'}
+    </p>
+   )}
    {ping.isPending && <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">Проверяю модель…</p>}
    {ping.data && (
     <p className="type-body-small text-[var(--md-sys-color-primary)]">
@@ -160,7 +173,7 @@ export function LlmFields({ llm, providers, onChange }: { llm: Llm; providers: L
      {groups.map((g) => (
       <optgroup key={g.label} label={g.label}>
        {g.items.map((p) => (
-        <option key={`${p.source}\n${p.id}`} value={`${p.source}\n${p.id}`} disabled={!p.hasKey}>
+        <option key={`${p.source}\n${p.id}`} value={`${p.source}\n${p.id}`}>
          {p.hasKey ? p.label : `${p.label} — нет ключа`}
         </option>
        ))}
@@ -169,29 +182,26 @@ export function LlmFields({ llm, providers, onChange }: { llm: Llm; providers: L
     </select>
    </Field>
 
-   {selected ? (
+   {selected?.hasKey && (
     <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
-     {selected.hasKey
-      ? `${selected.baseUrl} · ${selected.api === 'anthropic' ? 'Anthropic' : 'OpenAI-совместимый'} · ключ из ${selected.file}`
-      : `В ${selected.file} нет API-ключа для этого провайдера`}
+     {`${selected.baseUrl} · ${selected.api === 'anthropic' ? 'Anthropic' : 'OpenAI-совместимый'} · ключ из ${selected.file}`}
     </p>
-   ) : (
-    !llm.source && (
-     <>
-      <Field label="API-ключ">
-       <Secret value={llm.apiKey} onChange={(apiKey) => onChange({ apiKey })} placeholder="sk-…" />
-      </Field>
-      <Field label="Адрес API">
-       <Text value={llm.baseUrl} onChange={(baseUrl) => onChange({ baseUrl })} />
-      </Field>
-      <Field label="Протокол">
-       <select className={inputClass} value={llm.api} onChange={(e) => onChange({ api: e.target.value as Llm['api'] })}>
-        <option value="openai">OpenAI-совместимый</option>
-        <option value="anthropic">Anthropic</option>
-       </select>
-      </Field>
-     </>
-    )
+   )}
+   {!llm.source && (
+    <>
+     <Field label="API-ключ">
+      <Secret value={llm.apiKey} onChange={(apiKey) => onChange({ apiKey })} placeholder="sk-…" />
+     </Field>
+     <Field label="Адрес API">
+      <Text value={llm.baseUrl} onChange={(baseUrl) => onChange({ baseUrl })} />
+     </Field>
+     <Field label="Протокол">
+      <select className={inputClass} value={llm.api} onChange={(e) => onChange({ api: e.target.value as Llm['api'] })}>
+       <option value="openai">OpenAI-совместимый</option>
+       <option value="anthropic">Anthropic</option>
+      </select>
+     </Field>
+    </>
    )}
 
    <ModelPicker conn={llm} providers={providers} model={llm.model} onModel={(model) => onChange({ model })} />

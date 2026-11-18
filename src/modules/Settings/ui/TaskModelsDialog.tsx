@@ -39,12 +39,12 @@ export function TaskModelsDialog({ cfg, set, onSave, dirty, saving, onClose }: T
 
  return (
   <Dialog onClose={onClose} dismissible aria-labelledby="task-models-title" className="max-h-[92vh] w-[760px] max-w-[96vw] p-0">
-   <div className="flex items-center justify-between px-6 pt-5 pb-2">
+   <div className="flex shrink-0 items-center justify-between px-6 pt-5 pb-2">
     <h2 id="task-models-title" className="type-headline-small">Модели по задачам</h2>
     <IconButton icon="close" label="Закрыть" onClick={onClose} />
    </div>
 
-   <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto px-6 pb-4">
+   <div className="grid min-h-0 flex-auto grid-cols-[minmax(0,1fr)] content-start gap-3 overflow-y-auto overscroll-contain px-6 pb-4">
     <p className={HINT}>Каждой задаче можно дать свою модель. По умолчанию все задачи используют основные настройки.</p>
     {TASKS.map((task) => (
      <TaskCard key={task.key} task={task} cfg={cfg} set={set} providers={providers.data} />
@@ -52,7 +52,7 @@ export function TaskModelsDialog({ cfg, set, onSave, dirty, saving, onClose }: T
     <p className={HINT}>Оценки по журналу реальных запросов. Цены: ~/.omp/agent/models.yml, иначе models.dev.</p>
    </div>
 
-   <div className="flex items-center justify-end gap-2 border-t border-[var(--md-sys-color-outline-variant)] px-6 py-4">
+   <div className="flex shrink-0 items-center justify-end gap-2 border-t border-[var(--md-sys-color-outline-variant)] px-6 py-4">
     <button type="button" className={TEXT_BUTTON} onClick={onClose}>Закрыть</button>
     <button type="button" className={PRIMARY} disabled={!dirty || saving} onClick={onSave}>
      Сохранить
@@ -123,7 +123,7 @@ function TaskCard({ task, cfg, set, providers }: { task: TaskProfile; cfg: AppCo
      {groupProviders(providers).map((g) => (
       <optgroup key={g.label} label={g.label}>
        {g.items.map((p) => (
-        <option key={`${p.source}\n${p.id}`} value={`${p.source}\n${p.id}`} disabled={!p.hasKey}>
+        <option key={`${p.source}\n${p.id}`} value={`${p.source}\n${p.id}`}>
          {p.hasKey ? p.label : `${p.label} — нет ключа`}
         </option>
        ))}
