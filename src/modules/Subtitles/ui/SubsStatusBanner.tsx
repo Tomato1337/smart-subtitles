@@ -13,12 +13,14 @@ export function SubsStatusBanner({ mediaId, llmEnabled, onChoose }: { mediaId: s
   const status = useSubsStore((s) => s.status)
   const cueCount = useSubsStore((s) => s.cues.length)
   const annot = useSubsStore((s) => s.annot)
+  const embedded = useSubsStore((s) => s.embedded)
   const retry = useMutation({
     mutationFn: () => api.annotSet(mediaId, true),
     onError: (e) => notify('error', errorText(e)),
   })
 
   const chip = 'type-label-large pointer-events-auto rounded-[var(--md-sys-shape-corner-medium)] bg-[var(--md-sys-color-surface-container-high)] px-4 py-2'
+  const growing = embedded?.phase === 'loading' || embedded?.phase === 'confirm'
   const items: React.ReactNode[] = []
   if (!llmEnabled) {
     items.push(<div key="llm" className={chip}>LLM не настроен: Настройки → «Перевод и разбор»</div>)
@@ -48,7 +50,12 @@ export function SubsStatusBanner({ mediaId, llmEnabled, onChoose }: { mediaId: s
   if (llmEnabled && annot?.consent === 'on') {
     const failure = annot.failure
     const running = retry.isPending || annot.running
-    if (running && !failure?.blocked && (retry.isPending || annot.done < annot.total)) {
+    if (running && !failure?.blocked && (retry.isPending || annot.done < annot.total || (growing && annot.total > 0))) {
+      const text = retry.isPending
+        ? 'Повторяю разбор диалогов…'
+        : !growing && annot.failed > 0 && annot.done + annot.failed >= annot.total
+          ? (annot.done > 0 ? `Повторяю разбор диалогов ${annot.done}/${annot.total}…` : 'Повторяю разбор диалогов…')
+          : `Разбор диалогов ${annot.done}/${annot.total}`
       items.push(
         <div
           key="annot"
@@ -58,11 +65,9 @@ export function SubsStatusBanner({ mediaId, llmEnabled, onChoose }: { mediaId: s
           aria-valuemin={0}
           aria-valuemax={annot.total}
           aria-valuenow={annot.done}
-          aria-valuetext={`Разобрано ${annot.done} из ${annot.total}`}
+          aria-valuetext={annot.total > 0 ? `Разобрано ${annot.done} из ${annot.total}` : 'Повторяю разбор диалогов…'}
         >
-          {retry.isPending || annot.done + annot.failed >= annot.total
-            ? 'Повторяю разбор диалогов…'
-            : `Разбор диалогов ${annot.done}/${annot.total}`}
+          {text}
         </div>,
       )
     } else if (annot.failed > 0 || failure) {

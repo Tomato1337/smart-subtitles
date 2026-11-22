@@ -262,15 +262,16 @@ function GuideDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Dialog onClose={onClose} dismissible aria-labelledby="highlight-guide-title" className="max-h-[90vh] w-[1040px] max-w-[96vw] p-0">
-      <div className="flex items-center justify-between px-6 pb-2 pt-5">
-        <div>
+      <div className="flex shrink-0 items-start justify-between gap-2 px-6 pb-2 pt-5">
+        <div className="min-w-0">
           <h2 id="highlight-guide-title" className="type-headline-small">Как читать подсветку</h2>
           <p className="type-body-medium text-[var(--md-sys-color-on-surface-variant)]">Цвет линии говорит, что это за выражение. Тип линии говорит, откуда разметка: сплошная от разбора фразы, двойная от каталога грамматики, пунктир от твоей колоды Anki.</p>
         </div>
         <IconButton icon="close" label="Закрыть" onClick={onClose} />
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[1fr_380px] gap-6 overflow-y-auto px-6 pb-6">
+      <div className="min-h-0 flex-auto overflow-y-auto overscroll-contain">
+        <div className="grid grid-cols-1 gap-6 px-6 pb-6 md:grid-cols-[minmax(0,1fr)_380px]">
         <section className="flex min-w-0 flex-col gap-4">
           <div className="flex flex-col gap-5 rounded-[var(--md-sys-shape-corner-large)] bg-black px-6 py-6 text-center">
             {samples.map((b, si) => {
@@ -321,7 +322,7 @@ function GuideDialog({ onClose }: { onClose: () => void }) {
           </div>
         </section>
 
-        <aside className="flex flex-col gap-1">
+        <aside className="flex min-w-0 flex-col gap-1">
           <div className="type-label-large px-3 pb-1 text-[var(--md-sys-color-on-surface-variant)]">Наведи на пункт, чтобы выделить его в примере. Клик закрепляет выделение.</div>
           {LEGEND.map((l) => {
             const active = spot === l.layer
@@ -365,6 +366,7 @@ function GuideDialog({ onClose }: { onClose: () => void }) {
             </ul>
           </div>
         </aside>
+        </div>
       </div>
     </Dialog>
   )

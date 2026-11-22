@@ -117,8 +117,9 @@ export function AnkiSettingsDialog({ cfg, set, onSave, dirty, saving, onClose }:
    </div>
 
    {/* A definite dialog height gives WKWebView a real scrollport for both columns. */}
-   <div className="grid min-h-0 flex-auto grid-rows-[max-content_max-content] gap-4 overflow-y-auto overscroll-contain px-6 pb-4 lg:grid-cols-[minmax(0,1fr)_460px] lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden">
-    <div className="flex min-h-0 flex-col gap-3 pr-1 lg:overflow-y-auto">
+   <div className="grid min-h-0 flex-auto grid-cols-[minmax(0,1fr)] grid-rows-[max-content_max-content] gap-4 overflow-y-auto overscroll-contain px-6 pb-4 lg:grid-cols-[minmax(0,1fr)_460px] lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden">
+    <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-1">
+     <div className="flex flex-col gap-3">
      <Group title="Подключение">
       <Field label="Адрес AnkiConnect">
        <Text value={cfg.anki.url} onChange={(url) => set('anki', { url })} placeholder="http://127.0.0.1:8765" />
@@ -306,9 +307,11 @@ export function AnkiSettingsDialog({ cfg, set, onSave, dirty, saving, onClose }:
        onChange={setUseImageSettings}
       />
      </Group>
+     </div>
     </div>
 
-    <div className="flex min-h-0 flex-col gap-2 lg:overflow-y-auto">
+    <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-1">
+     <div className="flex flex-col gap-2">
      {preview.error ? (
       <p className="type-body-medium text-[var(--md-sys-color-error)]">{errorText(preview.error)}</p>
      ) : preview.data ? (
@@ -316,6 +319,7 @@ export function AnkiSettingsDialog({ cfg, set, onSave, dirty, saving, onClose }:
      ) : (
       <Spinner label="Загружаю предпросмотр" className="m-6" />
      )}
+     </div>
     </div>
    </div>
 

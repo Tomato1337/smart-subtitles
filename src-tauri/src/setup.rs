@@ -360,10 +360,16 @@ pub fn status(cfg: &Config, port: u16) -> SetupStatus {
 
 /// Saves and applies the config at once, for the UI and for agents alike. Returns true when the
 /// change needs an app restart (server port).
-pub async fn apply(st: &Arc<AppState>, mut cfg: Config, by: By) -> Result<bool, String> {
+pub async fn apply(st: &Arc<AppState>, cfg: Config, by: By) -> Result<bool, String> {
     validate(&cfg)?;
-    // Re-read the referenced provider now: a rotated key must be in effect for the swapped-in config.
-    cfg.resolve_llm();
+    // Re-read the referenced provider off the async runtime: on macOS this may wait on a Keychain ACL prompt.
+    let cfg = tokio::task::spawn_blocking(move || {
+        let mut cfg = cfg;
+        cfg.resolve_llm();
+        cfg
+    })
+    .await
+    .map_err(|e| format!("Не удалось проверить провайдера: {e}"))?;
     let old = st.cfg();
     cfg.save().map_err(|e| format!("Не удалось сохранить config.json: {e}"))?;
     let vaapi_changed = old.ffmpeg.vaapi_device != cfg.ffmpeg.vaapi_device;
@@ -450,7 +456,11 @@ async fn api_patch(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
 }
 
 async fn api_providers() -> Response {
-    let list: Vec<providers::ProviderInfo> = providers::discover(&Roots::from_env()).into_iter().map(|f| f.info).collect();
+    let list: Vec<providers::ProviderInfo> = tokio::task::spawn_blocking(|| {
+        providers::discover(&Roots::from_env()).into_iter().map(|f| f.info).collect()
+    })
+    .await
+    .unwrap_or_default();
     Json(list).into_response()
 }
 

@@ -15,8 +15,15 @@ pub fn theme_current() -> Option<crate::theme::InirTheme> { crate::theme::load()
 
 /// Providers already configured in other coding agents, with their declared models.
 #[tauri::command]
-pub fn llm_providers() -> Vec<crate::llm::providers::ProviderInfo> {
-    crate::llm::providers::discover(&crate::llm::providers::Roots::from_env()).into_iter().map(|f| f.info).collect()
+pub async fn llm_providers() -> Vec<crate::llm::providers::ProviderInfo> {
+    tokio::task::spawn_blocking(|| {
+        crate::llm::providers::discover(&crate::llm::providers::Roots::from_env())
+            .into_iter()
+            .map(|f| f.info)
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Live model list for an unsaved draft, so a manual baseUrl/key can be listed before saving.
@@ -38,7 +45,9 @@ pub async fn llm_ping(st: St<'_>, llm: crate::config::Llm, model: String) -> Res
         return Err("Выберите модель".into());
     }
     let roots = crate::llm::providers::Roots::from_env();
-    let endpoint = crate::llm::providers::endpoint_for(&roots, &llm).ok_or_else(|| format!("Провайдер {}/{} не найден", llm.source, llm.provider))?;
+    let endpoint = crate::llm::providers::endpoint_for_async(roots, llm.clone())
+        .await
+        .ok_or_else(|| format!("Провайдер {}/{} не найден", llm.source, llm.provider))?;
     if endpoint.api_key.is_empty() {
         return Err("Нет API-ключа".into());
     }
@@ -331,7 +340,7 @@ pub async fn annot_cost(st: St<'_>, media_id: String) -> Res<crate::llm::cost::A
 /// `remember` also stops asking for as long as the annotate model stays the same.
 #[tauri::command]
 pub async fn annot_set(st: St<'_>, media_id: String, on: bool, remember: bool) -> Res<()> {
-    let s = current_for(&st, &media_id)?;
+    let _ = current_for(&st, &media_id)?;
     if on && remember {
         // A config change, saved before the per-film consent it replaces.
         let mut cfg = (*st.cfg()).clone();
@@ -347,8 +356,15 @@ pub async fn annot_set(st: St<'_>, media_id: String, on: bool, remember: bool) -
         Ok(())
     })
     .await?;
-    crate::llm::annotate::restart(&st, &s);
-    crate::llm::annotate::emit_status(&st, &media_id).await;
+    let s = current_for(&st, &media_id)?;
+    if on {
+        if !crate::llm::annotate::restart(&st, &s) {
+            crate::llm::annotate::emit_status(&st, &media_id).await;
+        }
+    } else {
+        crate::llm::annotate::stop(&s);
+        crate::llm::annotate::emit_status(&st, &media_id).await;
+    }
     Ok(())
 }
 
@@ -578,6 +594,11 @@ pub async fn images_route(
     let tutor = tutor.unwrap_or_else(|| cfg.tutor.clone());
     let route = crate::anki::images::resolve_route(&st, &images, &tutor).await.map_err(|e| e.public_text())?;
     Ok(crate::anki::images::ImageRouteView::of(&route))
+}
+
+#[tauri::command]
+pub async fn images_omp_agent_models() -> Res<std::collections::BTreeMap<String, Vec<String>>> {
+    crate::anki::images::omp_agent_models().await
 }
 
 /// Generates one picture through the whole unsaved route; it lands in the same cache the add uses.

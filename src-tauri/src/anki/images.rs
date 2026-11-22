@@ -1199,6 +1199,52 @@ fn omp_bin() -> Option<PathBuf> {
     crate::proc::find_in("omp", dirs)
 }
 
+fn parse_omp_agent_models(bytes: &[u8]) -> Result<std::collections::BTreeMap<String, Vec<String>>, String> {
+    #[derive(Deserialize)]
+    struct Catalog {
+        models: Vec<Model>,
+    }
+    #[derive(Deserialize)]
+    struct Model {
+        provider: String,
+        selector: String,
+    }
+
+    let catalog: Catalog = serde_json::from_slice(bytes)
+        .map_err(|_| "Не удалось разобрать каталог моделей omp".to_string())?;
+    let mut groups = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for model in catalog.models {
+        let provider = model.provider.trim();
+        let selector = model.selector.trim();
+        if provider.is_empty() || selector.is_empty() {
+            continue;
+        }
+        groups.entry(provider.to_string()).or_default().push(selector.to_string());
+    }
+    for selectors in groups.values_mut() {
+        selectors.sort_unstable();
+        selectors.dedup();
+    }
+    Ok(groups)
+}
+
+/// Ask omp for the chat selectors it accepts, including built-in providers absent from models.yml.
+pub async fn omp_agent_models() -> Result<std::collections::BTreeMap<String, Vec<String>>, String> {
+    let omp = omp_bin().ok_or_else(|| "omp не найден в PATH".to_string())?;
+    let mut cmd = crate::proc::command(omp);
+    cmd.args(["models", "--kind", "chat", "--json", "--no-extensions"])
+        .env("PATH", crate::proc::without_npm_bins(&std::env::var_os("PATH").unwrap_or_default()));
+    let out = crate::proc::output_cancellable(cmd, Duration::from_secs(30), &CancellationToken::new())
+        .await
+        .map_err(|e| format!("Не удалось прочитать каталог omp: {e}"))?;
+    if !out.status.success() {
+        let err = crate::logs::redact(&String::from_utf8_lossy(&out.stderr));
+        logs::log("app", &format!("images: omp models failed ({}): {}", out.status, err.trim()));
+        return Err(format!("Не удалось прочитать каталог omp ({})", out.status));
+    }
+    parse_omp_agent_models(&out.stdout)
+}
+
 /// The image-role primary from `omp config get modelRoles --json`, pinned so omp cannot delegate to
 /// its own multi-provider chain. Read-only; missing, non-string or chain-valued data is a config
 /// error. The read shares the provider deadline and is cancelled with the whole route.
@@ -2396,5 +2442,49 @@ mod tests {
         assert_eq!(err.kind, ImageErrorKind::OpaqueRejection);
         assert!(err.message.contains("отклонён"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parse_omp_agent_models_groups_sorts_and_dedups() {
+        let raw = br#"{
+            "models": [
+                { "provider": "openai", "selector": "openai/gpt-5" },
+                { "provider": "anthropic", "selector": "anthropic/claude-sonnet-4-5" },
+                { "provider": " openai ", "selector": " openai/gpt-4o " },
+                { "provider": "openai", "selector": "openai/gpt-5" },
+                { "provider": "anthropic", "selector": "anthropic/claude-haiku-4-5" }
+            ]
+        }"#;
+        let parsed = parse_omp_agent_models(raw).unwrap();
+        let providers: Vec<&str> = parsed.keys().map(String::as_str).collect();
+        assert_eq!(providers, ["anthropic", "openai"]);
+        assert_eq!(
+            parsed["anthropic"],
+            ["anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-5"]
+        );
+        assert_eq!(parsed["openai"], ["openai/gpt-4o", "openai/gpt-5"]);
+    }
+
+    #[test]
+    fn parse_omp_agent_models_skips_empty_entries() {
+        let raw = br#"{
+            "models": [
+                { "provider": "", "selector": "openai/gpt-5" },
+                { "provider": "   ", "selector": "openai/gpt-4o" },
+                { "provider": "anthropic", "selector": "" },
+                { "provider": "anthropic", "selector": "   " },
+                { "provider": "anthropic", "selector": "anthropic/claude-haiku-5-5" }
+            ]
+        }"#;
+        let parsed = parse_omp_agent_models(raw).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed["anthropic"], ["anthropic/claude-haiku-5-5"]);
+    }
+
+    #[test]
+    fn parse_omp_agent_models_rejects_malformed_json() {
+        assert!(parse_omp_agent_models(b"not json").is_err());
+        assert!(parse_omp_agent_models(b"{}").is_err());
+        assert!(parse_omp_agent_models(br#"{"models":[{"provider":"openai"}]}"#).is_err());
     }
 }

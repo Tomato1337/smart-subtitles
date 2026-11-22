@@ -106,7 +106,7 @@ fn task_text(cues: &[(u32, String)], cefr_hint: &str) -> String {
     )
 }
 
-async fn run_batch(st: &Arc<AppState>, s: &Arc<Session>, first: u32) -> anyhow::Result<()> {
+async fn run_batch(st: &Arc<AppState>, s: &Arc<Session>, first: u32, blocked: &CancellationToken) -> anyhow::Result<bool> {
     let mid = s.media_id.clone();
     let cues: Vec<(u32, String)> = st
         .db(move |c| {
@@ -115,11 +115,17 @@ async fn run_batch(st: &Arc<AppState>, s: &Arc<Session>, first: u32) -> anyhow::
                 .collect()
         })
         .await.map_err(anyhow::Error::msg)?;
-    if cues.is_empty() { return Ok(()); }
+    if cues.is_empty() { return Ok(true); }
 
-    let mut messages = (*prompts::prefix(st, s).await?).clone();
-    messages.push(json!({ "role": "user", "content": task_text(&cues, &st.cfg().learner.cefr) }));
-    let raw: RawBatch = client::chat_json(st, super::tasks::Task::Annotate, &s.media_id, &format!("annotate {first}"), &messages, 8000).await?;
+    let cefr = st.cfg().learner.cefr.clone();
+    let raw: RawBatch = tokio::select! {
+        r = async {
+            let mut messages = (*prompts::prefix(st, s).await?).clone();
+            messages.push(json!({ "role": "user", "content": task_text(&cues, &cefr) }));
+            client::chat_json(st, super::tasks::Task::Annotate, &s.media_id, &format!("annotate {first}"), &messages, 8000).await
+        } => r?,
+        _ = blocked.cancelled() => return Ok(false),
+    };
     let anns = process(&cues, raw);
     if anns.len() * 2 < cues.len() {
         anyhow::bail!("ответ не совпал с репликами: {} из {}", anns.len(), cues.len());
@@ -142,7 +148,7 @@ async fn run_batch(st: &Arc<AppState>, s: &Arc<Session>, first: u32) -> anyhow::
     })
     .await.map_err(anyhow::Error::msg)?;
     let _ = st.app.emit("annot:updated", json!({ "mediaId": s.media_id, "cues": anns }));
-    Ok(())
+    Ok(true)
 }
 
 #[derive(Default)]
@@ -150,9 +156,13 @@ pub struct Run {
     cancel: CancellationToken,
     blocked: CancellationToken,
     status: Mutex<(bool, Option<AnnotFailure>)>,
+    emit_lock: tokio::sync::Mutex<()>,
 }
 
 fn failure(error: &anyhow::Error) -> AnnotFailure {
+    if error.downcast_ref::<client::MissingKeyError>().is_some() {
+        return AnnotFailure { message: "Нет API-ключа для разбора диалогов".into(), blocked: true };
+    }
     let (message, blocked) = match error.downcast_ref::<client::HttpError>().map(|e| e.status.as_u16()) {
         Some(401) => ("API-ключ не принят (HTTP 401)".into(), true),
         Some(402) => ("Недостаточно средств у LLM-провайдера (HTTP 402)".into(), true),
@@ -166,22 +176,26 @@ fn failure(error: &anyhow::Error) -> AnnotFailure {
 }
 
 async fn run_batch_recorded(st: &Arc<AppState>, s: &Arc<Session>, run: &Run, first: u32) {
-    if let Err(e) = run_batch(st, s, first).await {
-        crate::logs::log("llm", &format!("batch {first} failed: {e}"));
-        let failure = failure(&e);
-        {
-            let mut status = run.status.lock().unwrap();
-            // A concurrent transient error must not overwrite the reason the run stopped.
-            if !status.1.as_ref().is_some_and(|f| f.blocked) {
-                if failure.blocked { run.blocked.cancel(); }
-                status.1 = Some(failure);
+    match run_batch(st, s, first, &run.blocked).await {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(e) => {
+            crate::logs::log("llm", &format!("batch {first} failed: {e}"));
+            let failure = failure(&e);
+            {
+                let mut status = run.status.lock().unwrap();
+                // A concurrent transient error must not overwrite the reason the run stopped.
+                if !status.1.as_ref().is_some_and(|f| f.blocked) {
+                    if failure.blocked { run.blocked.cancel(); }
+                    status.1 = Some(failure);
+                }
             }
+            let mid = s.media_id.clone();
+            let _ = st.db(move |c| { c.execute("INSERT OR REPLACE INTO annot_batch VALUES(?1,?2,'failed')", params![mid, first])?; Ok(()) }).await;
+            let _ = st.app.emit("annot:failed", json!({ "mediaId": s.media_id, "firstIdx": first }));
         }
-        let mid = s.media_id.clone();
-        let _ = st.db(move |c| { c.execute("INSERT OR REPLACE INTO annot_batch VALUES(?1,?2,'failed')", params![mid, first])?; Ok(()) }).await;
-        let _ = st.app.emit("annot:failed", json!({ "mediaId": s.media_id, "firstIdx": first }));
     }
-    emit_status(st, &s.media_id).await;
+    emit_status_for_run(st, &s.media_id, run).await;
 }
 
 /// Batch counters of one media's analysis; no session is needed, so the home screen can ask too.
@@ -213,6 +227,22 @@ pub async fn status(st: &AppState, media_id: &str) -> Result<AnnotStatus, String
 
 pub async fn emit_status(st: &AppState, media_id: &str) {
     if let Ok(x) = status(st, media_id).await { let _ = st.app.emit("annot:progress", x); }
+}
+
+async fn emit_status_for_run(st: &AppState, media_id: &str, run: &Run) {
+    let _guard = tokio::select! {
+        g = run.emit_lock.lock() => g,
+        _ = run.cancel.cancelled() => return,
+    };
+    if run.cancel.is_cancelled() { return; }
+    let res = tokio::select! {
+        r = status(st, media_id) => r,
+        _ = run.cancel.cancelled() => return,
+    };
+    let Ok(x) = res else { return };
+    if !run.cancel.is_cancelled() {
+        let _ = st.app.emit("annot:progress", x);
+    }
 }
 
 /// Calibrated on real usage logs: prompt tokens / prompt chars ≈ 2.8 (script-heavy, digits and brackets tokenize densely).
@@ -377,17 +407,24 @@ async fn scheduler(st: &Arc<AppState>, s: &Arc<Session>, run: &Arc<Run>) {
     while tasks.join_next().await.is_some() {}
 }
 
-/// (Re)starts background annotation: drops the cached prompt prefix and cancels the previous scheduler.
-pub fn restart(st: &Arc<AppState>, s: &Arc<Session>) {
-    *s.prefix.lock().unwrap() = None;
-    start(st, s, None);
+/// Cancels the current annotation run and resets its status to idle.
+pub fn stop(s: &Arc<Session>) {
+    let mut current = s.annot_run.lock().unwrap();
+    current.cancel.cancel();
+    *current = Arc::new(Run::default());
 }
 
-fn start(st: &Arc<AppState>, s: &Arc<Session>, first: Option<u32>) {
+/// (Re)starts background annotation: drops the cached prompt prefix and cancels the previous scheduler.
+pub fn restart(st: &Arc<AppState>, s: &Arc<Session>) -> bool {
+    *s.prefix.lock().unwrap() = None;
+    start(st, s, None)
+}
+
+fn start(st: &Arc<AppState>, s: &Arc<Session>, first: Option<u32>) -> bool {
     let enabled = st.cfg().llm_enabled();
     let run = {
         let mut current = s.annot_run.lock().unwrap();
-        if first.is_some() && (current.blocked.is_cancelled() || current.status.lock().unwrap().0) { return; }
+        if first.is_some() && (current.blocked.is_cancelled() || current.status.lock().unwrap().0) { return false; }
         current.cancel.cancel();
         let run = Arc::new(Run {
             cancel: s.cancel.child_token(),
@@ -397,10 +434,10 @@ fn start(st: &Arc<AppState>, s: &Arc<Session>, first: Option<u32>) {
         *current = run.clone();
         run
     };
-    if !enabled { return; }
+    if !enabled { return false; }
     let (st, s) = (st.clone(), s.clone());
     tauri::async_runtime::spawn(async move {
-        emit_status(&st, &s.media_id).await;
+        emit_status_for_run(&st, &s.media_id, &run).await;
         if let Some(first) = first {
             tokio::select! {
                 _ = run_batch_recorded(&st, &s, &run, first) => {},
@@ -410,8 +447,9 @@ fn start(st: &Arc<AppState>, s: &Arc<Session>, first: Option<u32>) {
             scheduler(&st, &s, &run).await;
         }
         run.status.lock().unwrap().0 = false;
-        if !run.cancel.is_cancelled() { emit_status(&st, &s.media_id).await; }
+        emit_status_for_run(&st, &s.media_id, &run).await;
     });
+    true
 }
 
 pub fn prioritize(s: &Session, cue_idx: u32) { s.annot_priority.store(cue_idx, Ordering::Relaxed); }
@@ -505,5 +543,29 @@ mod tests {
         assert_eq!(eligible(39, true), 0);
         assert_eq!(eligible(40, true), 40);
         assert_eq!(eligible(0, true), 0);
+    }
+
+    #[test]
+    fn failure_classifies_missing_key_and_http_statuses() {
+        let missing = failure(&anyhow::Error::new(client::MissingKeyError));
+        assert!(missing.blocked);
+        assert_eq!(missing.message, "Нет API-ключа для разбора диалогов");
+
+        for status in [
+            reqwest::StatusCode::UNAUTHORIZED,
+            reqwest::StatusCode::PAYMENT_REQUIRED,
+            reqwest::StatusCode::FORBIDDEN,
+        ] {
+            let f = failure(&anyhow::Error::new(client::HttpError::test(status)));
+            assert!(f.blocked, "status {status} should block");
+        }
+
+        let server_err = failure(&anyhow::Error::new(client::HttpError::test(reqwest::StatusCode::INTERNAL_SERVER_ERROR)));
+        assert!(!server_err.blocked);
+        assert_eq!(server_err.message, "Ошибка LLM-провайдера (HTTP 500)");
+
+        let generic = failure(&anyhow::anyhow!("boom"));
+        assert!(!generic.blocked);
+        assert_eq!(generic.message, "Не удалось разобрать диалоги. Подробности в llm.log");
     }
 }

@@ -9,12 +9,15 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, collections::HashMap, fmt, time::Duration};
 
-/// Why an AnkiConnect call failed. The kinds matter to the job lifecycle: a transport failure is
-/// ambiguous (the action may have been applied), a protocol error means Anki answered something the
-/// add-on never sends, and an action error is Anki's own explicit refusal.
+/// Why an AnkiConnect call failed. The kinds matter to the job lifecycle: a refused connection never
+/// reached Anki, a transport failure is ambiguous (the action may have been applied), a protocol
+/// error means Anki answered something the add-on never sends, and an action error is Anki's own
+/// explicit refusal.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnkiError {
-    /// The request never produced a well-formed answer: refused, timed out, connection dropped.
+    /// The TCP connection was actively refused (for example, Anki is not running).
+    Refused(String),
+    /// The request never produced a well-formed answer: timed out, connection dropped.
     Transport(String),
     /// An answer arrived but its envelope or payload does not have the documented shape.
     Protocol(String),
@@ -25,7 +28,9 @@ pub enum AnkiError {
 impl fmt::Display for AnkiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AnkiError::Transport(m) | AnkiError::Protocol(m) | AnkiError::Action(m) => f.write_str(m),
+            AnkiError::Refused(m) | AnkiError::Transport(m) | AnkiError::Protocol(m) | AnkiError::Action(m) => {
+                f.write_str(m)
+            }
         }
     }
 }
@@ -103,7 +108,14 @@ impl<'a> Client<'a> {
             .json(&json!({ "action": action, "version": 6, "params": params }))
             .send()
             .await
-            .map_err(|e| AnkiError::Transport(format!("AnkiConnect {action}: {}", transport_text(&e))))?;
+            .map_err(|e| {
+                let message = format!("AnkiConnect {action}: {}", transport_text(&e));
+                if is_connection_refused(&e) {
+                    AnkiError::Refused(message)
+                } else {
+                    AnkiError::Transport(message)
+                }
+            })?;
         let v: Value = r.json().await.map_err(|e| {
             let message = format!("AnkiConnect {action}: {}", transport_text(&e));
             if e.is_decode() && !e.is_timeout() {
@@ -245,10 +257,14 @@ impl<'a> Client<'a> {
     /// default deck from a real deck that happens to be called "Default"; the id is what lets
     /// `deck_counts` keep only the former out of `getDeckStats`.
     async fn deck_names(&self) -> Result<Vec<(String, Option<i64>)>, AnkiError> {
-        if let Ok(v) = self.call("deckNamesAndIds", json!({}), Duration::from_secs(10)).await {
-            if let Some(decks) = deck_names_and_ids(&v) {
-                return Ok(decks);
+        match self.call("deckNamesAndIds", json!({}), Duration::from_secs(10)).await {
+            Ok(v) => {
+                if let Some(decks) = deck_names_and_ids(&v) {
+                    return Ok(decks);
+                }
             }
+            Err(AnkiError::Action(_)) => {}
+            Err(e) => return Err(e),
         }
         // Older AnkiConnect only answered `deckNames`. Without ids the default deck cannot be
         // singled out, but a working `getDeckStats` still counts every deck.
@@ -289,7 +305,7 @@ impl<'a> Client<'a> {
                 // the localized default deck whose name the add-on itself cannot look up.
                 let query = match id {
                     Some(id) => format!("did:{id}"),
-                    None => format!("deck:\"{name}\""),
+                    None => format!("deck:\"{}\"", escape_query(name)),
                 };
                 json!({ "action": "findCards", "version": 6, "params": { "query": query } })
             })
@@ -370,6 +386,24 @@ fn parse_notes(v: Value, requested: &[i64]) -> Result<Vec<NoteInfo>, AnkiError> 
         });
     }
     Ok(out)
+}
+
+/// Escapes Anki search-query string literals (`\` and `"`) inside `deck:"..."`.
+pub(crate) fn escape_query(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn is_connection_refused(err: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(e) = cur {
+        if e.downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::ConnectionRefused)
+        {
+            return true;
+        }
+        cur = e.source();
+    }
+    false
 }
 
 /// Request errors without their URL: a URL may carry credentials, and the reason is user-visible.
@@ -534,5 +568,47 @@ mod tests {
         let seen = seen.lock().unwrap();
         let multi = seen.iter().find(|r| r["action"] == "multi").expect("names are counted without stats");
         assert_eq!(multi["params"]["actions"][0]["params"]["query"], "deck:\"Learning English\"");
+    }
+
+    #[test]
+    fn query_escaping_escapes_backslashes_and_quotes() {
+        assert_eq!(escape_query(r#"Deck "A"\Sub"#), r#"Deck \"A\"\\Sub"#);
+    }
+
+    #[tokio::test]
+    async fn catalog_propagates_protocol_or_transport_error_from_deck_names_and_ids() {
+        use axum::{routing::post, Json, Router};
+        use std::sync::{Arc, Mutex};
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorded = seen.clone();
+        let app = Router::new().route(
+            "/",
+            post(move |Json(req): Json<Value>| {
+                let recorded = recorded.clone();
+                async move {
+                    recorded.lock().unwrap().push(req);
+                    Json(json!("not an envelope"))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let err = Client::new(&http, &format!("http://{addr}")).catalog().await.unwrap_err();
+        server.abort();
+        assert!(matches!(err, AnkiError::Protocol(_)), "expected Protocol, got {err:?}");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "deckNames must not be called after protocol error");
+        assert_eq!(seen[0]["action"], "deckNamesAndIds");
+
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed_addr = closed.local_addr().unwrap();
+        drop(closed);
+        let err = Client::new(&http, &format!("http://{closed_addr}")).catalog().await.unwrap_err();
+        assert!(matches!(err, AnkiError::Refused(_)), "expected Refused, got {err:?}");
     }
 }

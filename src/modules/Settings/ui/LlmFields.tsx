@@ -99,7 +99,7 @@ export function ModelPicker({ conn, providers, model, onModel, inherit }: { conn
       )}
       {custom && list.length > 0 && (
        <button type="button" onClick={() => setCustom(false)} className="type-body-small self-start text-[var(--md-sys-color-primary)]">
-        Вписать вручную
+        Выбрать из списка
        </button>
       )}
      </Field>

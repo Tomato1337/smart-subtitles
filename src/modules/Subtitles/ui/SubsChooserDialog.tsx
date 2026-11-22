@@ -99,7 +99,7 @@ export function SubsChooserDialog({ mediaId, onClose }: { mediaId: string; onClo
    aria-labelledby="subs-chooser-title"
    className="max-h-[90vh] w-[560px] max-w-[96vw] p-0"
   >
-   <div className="flex items-start justify-between gap-2 px-6 pt-5 pb-2">
+   <div className="flex shrink-0 items-start justify-between gap-2 px-6 pt-5 pb-2">
     <div className="min-w-0">
      <h2 id="subs-chooser-title" className="type-headline-small">Субтитры</h2>
      {data && <p className={`${HINT} truncate`}>{data.activeLabel ? `Сейчас: ${data.activeLabel}` : 'Субтитры не выбраны'}</p>}
@@ -107,7 +107,8 @@ export function SubsChooserDialog({ mediaId, onClose }: { mediaId: string; onClo
     <IconButton icon="close" label="Закрыть" onClick={onClose} />
    </div>
 
-   <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-1">
+   <div className="min-h-0 flex-auto overflow-y-auto overscroll-contain">
+    <div className="flex flex-col gap-4 px-6 py-1">
     {q.isPending && <p className={HINT}>Ищу варианты…</p>}
     {q.error && (
      <div className="flex items-center gap-3">
@@ -152,9 +153,10 @@ export function SubsChooserDialog({ mediaId, onClose }: { mediaId: string; onClo
        </section>
       )
      })}
+    </div>
    </div>
 
-   <div className="flex flex-col gap-2 px-6 pt-2 pb-4">
+   <div className="flex shrink-0 flex-col gap-2 px-6 pt-2 pb-4">
     {pending && (
      <div className="flex flex-col gap-1 rounded-[var(--md-sys-shape-corner-medium)] bg-[var(--md-sys-color-error-container)] px-4 py-3 text-[var(--md-sys-color-on-error-container)]">
       <p className="type-body-medium">Разбор диалогов этого фильма будет удалён, новый придётся запускать заново.</p>

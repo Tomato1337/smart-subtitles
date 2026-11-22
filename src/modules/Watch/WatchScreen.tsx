@@ -164,7 +164,13 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
     setResumeOnClose(true)
     setGate('ask')
    })
-  } else if (annot.consent === 'on' && !headReady(session, useSubsStore.getState())) {
+  } else if (
+   session.llmEnabled &&
+   annot.consent === 'on' &&
+   !annot.failure?.blocked &&
+   (annot.running || annot.done + annot.failed < annot.total || subs.embedded?.phase === 'loading' || subs.embedded?.phase === 'confirm') &&
+   !headReady(session, useSubsStore.getState())
+  ) {
    // The user already agreed earlier: wait for the batches at the resume point, then play.
    setResumeOnClose(true)
    setGate('wait')

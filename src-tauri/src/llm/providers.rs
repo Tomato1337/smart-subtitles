@@ -58,6 +58,7 @@ pub struct Found {
     pub endpoint: Endpoint,
 }
 
+#[derive(Clone)]
 pub struct Roots {
     pub home: PathBuf,
     pub xdg_config: PathBuf,
@@ -319,7 +320,7 @@ fn keychain_key(account: &str) -> String {
     // One settings save resolves the main connection and every per-task one, so an ACL prompt
     // would otherwise appear repeatedly for the same provider. A miss expires sooner, so a key
     // just added to the keychain is picked up by the next settings save.
-    const TTL: Duration = Duration::from_secs(10);
+    const TTL: Duration = Duration::from_secs(60);
     const MISS_TTL: Duration = Duration::from_secs(5);
     // A locked keychain or a refused ACL must not cost one deadline per omp provider.
     const BLOCK: Duration = Duration::from_secs(15);
@@ -328,27 +329,38 @@ fn keychain_key(account: &str) -> String {
         blocked_until: Option<Instant>,
     }
     static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache { keys: HashMap::new(), blocked_until: None }));
+    // Serialize external `/usr/bin/security` invocations so concurrent calls for the same uncached
+    // account cannot trigger duplicate Keychain ACL dialogs; the second caller hits `CACHE`.
+    static FETCH_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     if account.is_empty() || account.chars().any(char::is_control) {
         return String::new();
     }
-    let now = Instant::now();
-    {
+    let lookup_cached = |now: Instant| -> Option<String> {
         let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((at, key)) = cache.keys.get(account) {
             let ttl = if key.is_empty() { MISS_TTL } else { TTL };
             if now.duration_since(*at) < ttl {
-                return key.clone();
+                return Some(key.clone());
             }
         }
         if cache.blocked_until.is_some_and(|until| now < until) {
-            return String::new();
+            return Some(String::new());
         }
         cache.blocked_until = None;
         cache.keys.retain(|_, (at, key)| {
             let ttl = if key.is_empty() { MISS_TTL } else { TTL };
             now.duration_since(*at) < ttl
         });
+        None
+    };
+
+    if let Some(cached) = lookup_cached(Instant::now()) {
+        return cached;
+    }
+    let _fetch_guard = FETCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(cached) = lookup_cached(Instant::now()) {
+        return cached;
     }
 
     let mut cmd = crate::proc::command("/usr/bin/security").into_std();
@@ -367,7 +379,7 @@ fn keychain_key(account: &str) -> String {
                 }
                 buf
             });
-            let deadline = Instant::now() + Duration::from_secs(3);
+            let deadline = Instant::now() + Duration::from_secs(30);
             let mut blocked = false;
             let status = loop {
                 match child.try_wait() {
@@ -395,10 +407,11 @@ fn keychain_key(account: &str) -> String {
         }
         Err(_) => (String::new(), true),
     };
+    let finished = Instant::now();
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    cache.keys.insert(account.to_string(), (now, key.clone()));
+    cache.keys.insert(account.to_string(), (finished, key.clone()));
     if blocked {
-        cache.blocked_until = Some(Instant::now() + BLOCK);
+        cache.blocked_until = Some(finished + BLOCK);
     }
     key
 }
@@ -410,6 +423,10 @@ fn keychain_key(_account: &str) -> String {
 }
 
 fn omp(r: &Roots) -> anyhow::Result<Vec<Found>> {
+    omp_filtered(r, None)
+}
+
+fn omp_filtered(r: &Roots, only_id: Option<&str>) -> anyhow::Result<Vec<Found>> {
     let dir = r.home.join(".omp/agent");
     let path = dir.join("models.yml");
     if !path.exists() {
@@ -423,6 +440,9 @@ fn omp(r: &Roots) -> anyhow::Result<Vec<Found>> {
     let mut out = vec![];
     for (id, p) in providers {
         let Some(id) = id.as_str() else { continue };
+        if only_id.is_some_and(|target| id != target) {
+            continue;
+        }
         let api = match p.get("api").and_then(|a| a.as_str()) {
             Some("openai-completions") => Api::Openai,
             Some("anthropic-messages") => Api::Anthropic,
@@ -819,6 +839,17 @@ fn gemini(r: &Roots) -> anyhow::Result<Vec<Found>> {
 
 type Parser = fn(&Roots) -> anyhow::Result<Vec<Found>>;
 
+fn run_parser(source: &str, result: anyhow::Result<Vec<Found>>) -> Vec<Found> {
+    match result {
+        Ok(f) => f,
+        // Only the first line: toml's message quotes the offending source line, which may hold a token.
+        Err(e) => {
+            crate::logs::log("llm", &format!("providers {source}: {}", e.to_string().lines().next().unwrap_or("ошибка разбора")));
+            vec![]
+        }
+    }
+}
+
 /// Every provider found in the agents' own configs; one broken source never hides the others.
 pub fn discover(r: &Roots) -> Vec<Found> {
     let parsers: [(&'static str, Parser); 8] = [
@@ -833,13 +864,24 @@ pub fn discover(r: &Roots) -> Vec<Found> {
     ];
     let mut out = vec![];
     for (source, parse) in parsers {
-        match parse(r) {
-            Ok(mut f) => out.append(&mut f),
-            // Only the first line: toml's message quotes the offending source line, which may hold a token.
-            Err(e) => crate::logs::log("llm", &format!("providers {source}: {}", e.to_string().lines().next().unwrap_or("ошибка разбора"))),
-        }
+        out.extend(run_parser(source, parse(r)));
     }
     out
+}
+
+fn find_provider(r: &Roots, source: &str, id: &str) -> Option<Found> {
+    let result = match source {
+        "omp" => omp_filtered(r, Some(id)),
+        "opencode" => opencode(r),
+        "claude" => claude(r),
+        "codex" => codex(r),
+        "crush" => crush(r),
+        "qwen" => qwen(r),
+        "goose" => goose(r),
+        "gemini" => gemini(r),
+        _ => return None,
+    };
+    run_parser(source, result).into_iter().find(|f| f.info.id == id)
 }
 
 /// Resolves the referenced provider to a live endpoint; `None` when it no longer exists.
@@ -848,7 +890,12 @@ pub fn endpoint_for(r: &Roots, llm: &Llm) -> Option<Endpoint> {
         let api_key = if llm.api_key.is_empty() { r.env.get("DEEPSEEK_API_KEY").cloned().unwrap_or_default() } else { llm.api_key.clone() };
         return Some(Endpoint { api: llm.api, base_url: llm.base_url.clone(), api_key, auth: auth_for(llm.api) });
     }
-    discover(r).into_iter().find(|f| f.info.source == llm.source && f.info.id == llm.provider).map(|f| f.endpoint)
+    find_provider(r, &llm.source, &llm.provider).map(|f| f.endpoint)
+}
+
+/// Async wrapper for `endpoint_for` so macOS Keychain ACL prompts never block Tokio workers.
+pub async fn endpoint_for_async(r: Roots, llm: Llm) -> Option<Endpoint> {
+    tokio::task::spawn_blocking(move || endpoint_for(&r, &llm)).await.ok().flatten()
 }
 
 /// `{base}/v1{path}` unless the base already carries the version segment.
@@ -877,14 +924,23 @@ async fn live_models(http: &reqwest::Client, ep: &Endpoint) -> anyhow::Result<Ve
 
 /// The provider's declared models first, then whatever its `/models` endpoint adds.
 pub async fn list_models(http: &reqwest::Client, r: &Roots, llm: &Llm) -> Result<Vec<String>, String> {
-    let declared = if llm.source.is_empty() {
-        vec![]
-    } else {
-        discover(r).into_iter().find(|f| f.info.source == llm.source && f.info.id == llm.provider).map(|f| f.info.models).unwrap_or_default()
-    };
-    let Some(ep) = endpoint_for(r, llm) else {
-        return Err(format!("Провайдер {}/{} не найден", llm.source, llm.provider));
-    };
+    let r2 = r.clone();
+    let llm2 = llm.clone();
+    let (declared, ep) = tokio::task::spawn_blocking(move || {
+        if llm2.source.is_empty() {
+            let Some(ep) = endpoint_for(&r2, &llm2) else {
+                return Err(format!("Провайдер {}/{} не найден", llm2.source, llm2.provider));
+            };
+            Ok((vec![], ep))
+        } else {
+            let Some(f) = find_provider(&r2, &llm2.source, &llm2.provider) else {
+                return Err(format!("Провайдер {}/{} не найден", llm2.source, llm2.provider));
+            };
+            Ok((f.info.models, f.endpoint))
+        }
+    })
+    .await
+    .map_err(|_| "Не удалось прочитать настройки провайдера".to_string())??;
     if ep.api_key.is_empty() {
         return if declared.is_empty() { Err("Нет ключа API".into()) } else { Ok(declared) };
     }
@@ -1224,5 +1280,64 @@ env_key = "GW_KEY"
     fn anthropic_url_keeps_one_v1() {
         assert_eq!(anthropic_url("https://x.com", "/messages"), "https://x.com/v1/messages");
         assert_eq!(anthropic_url("https://x.com/v1/", "/messages"), "https://x.com/v1/messages");
+    }
+
+    #[test]
+    fn endpoint_for_and_find_provider_resolve_single_omp_entry() {
+        let r = root(&[(
+            ".omp/agent/models.yml",
+            r#"
+providers:
+  alpha:
+    baseUrl: https://a.example/v1
+    api: openai-completions
+    apiKey: sk-alpha
+    models: [{ id: a1 }]
+  beta:
+    baseUrl: https://b.example
+    api: anthropic-messages
+    apiKey: sk-beta
+    models: [{ id: b1 }, { id: b2 }]
+  gamma:
+    baseUrl: https://g.example/v1
+    api: openai-completions
+    apiKey: "!security find-generic-password -s omp -a gamma -w"
+    models: [{ id: g1 }]
+"#,
+        )]);
+        let found = find_provider(&r, "omp", "beta").unwrap();
+        assert_eq!(found.info.id, "beta");
+        assert_eq!(found.info.models, vec!["b1", "b2"]);
+        assert_eq!(found.endpoint.api, Api::Anthropic);
+        assert_eq!(found.endpoint.base_url, "https://b.example");
+        assert_eq!(found.endpoint.api_key, "sk-beta");
+
+        let ep = endpoint_for(&r, &Llm { source: "omp".into(), provider: "alpha".into(), ..Default::default() }).unwrap();
+        assert_eq!(ep.api, Api::Openai);
+        assert_eq!(ep.base_url, "https://a.example/v1");
+        assert_eq!(ep.api_key, "sk-alpha");
+
+        assert!(find_provider(&r, "omp", "missing").is_none());
+        assert!(find_provider(&r, "unknown", "alpha").is_none());
+        assert!(endpoint_for(&r, &Llm { source: "omp".into(), provider: "missing".into(), ..Default::default() }).is_none());
+        assert!(endpoint_for(&r, &Llm { source: "unknown".into(), provider: "alpha".into(), ..Default::default() }).is_none());
+    }
+
+    #[tokio::test]
+    async fn list_models_returns_declared_models_without_key() {
+        let r = root(&[(
+            ".omp/agent/models.yml",
+            r#"
+providers:
+  local:
+    baseUrl: http://127.0.0.1:9/v1
+    api: openai-completions
+    models: [{ id: m1 }, { id: m2 }]
+"#,
+        )]);
+        let llm = Llm { source: "omp".into(), provider: "local".into(), ..Default::default() };
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let models = list_models(&http, &r, &llm).await.unwrap();
+        assert_eq!(models, vec!["m1", "m2"]);
     }
 }

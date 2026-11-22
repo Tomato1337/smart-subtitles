@@ -163,9 +163,27 @@ fn chat_url(ep: &Endpoint) -> String {
 }
 
 #[derive(Debug)]
+pub(super) struct MissingKeyError;
+
+impl std::fmt::Display for MissingKeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LLM не настроен")
+    }
+}
+
+impl std::error::Error for MissingKeyError {}
+
+#[derive(Debug)]
 pub(super) struct HttpError {
     pub status: reqwest::StatusCode,
     detail: String,
+}
+
+#[cfg(test)]
+impl HttpError {
+    pub(super) fn test(status: reqwest::StatusCode) -> Self {
+        Self { status, detail: String::new() }
+    }
 }
 
 impl std::fmt::Display for HttpError {
@@ -247,7 +265,7 @@ pub async fn ping(http: &reqwest::Client, t: &Target) -> anyhow::Result<Ping> {
 
 /// JSON-mode completion. One extra attempt if the reply is not valid JSON for `T`.
 pub(crate) async fn json_completion<T: DeserializeOwned>(http: &reqwest::Client, t: &Target, tag: &str, messages: &[Value], max_tokens: u32, usage: &mut Usage) -> anyhow::Result<T> {
-    if t.endpoint.api_key.is_empty() { bail!("LLM не настроен"); }
+    if t.endpoint.api_key.is_empty() { return Err(MissingKeyError.into()); }
     let mut b = match t.endpoint.api {
         Api::Openai => body(t, messages, max_tokens, true),
         Api::Anthropic => anthropic_body(&t.model, t.effort, messages, &[], max_tokens, false),
@@ -427,7 +445,7 @@ impl SseAccumulator {
 
 /// Streaming completion with tools; `on_text` receives each text delta as it arrives.
 pub(crate) async fn stream_completion(http: &reqwest::Client, t: &Target, tag: &str, messages: &[Value], tools: &[Value], usage: &mut Usage, mut on_text: impl FnMut(&str)) -> anyhow::Result<Turn> {
-    if t.endpoint.api_key.is_empty() { bail!("LLM не настроен"); }
+    if t.endpoint.api_key.is_empty() { return Err(MissingKeyError.into()); }
     let max_tokens = 2000 + t.effort.extra_tokens();
     let mut b = match t.endpoint.api {
         Api::Openai => {

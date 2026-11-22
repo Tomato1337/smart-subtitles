@@ -20,6 +20,7 @@ export const IMAGE_BACKENDS: [Backend, string][] = [
 const IMAGE_PROVIDERS: [ImageBackend, string][] = IMAGE_BACKENDS.filter(([id]) => id !== 'none') as [ImageBackend, string][]
 
 const IMAGE_LABEL = Object.fromEntries(IMAGE_BACKENDS) as Record<Backend, string>
+const CUSTOM = '__custom__'
 
 /** Tutor's image settings replace the app-owned primary; the app's fallbacks stay its own. */
 export function tutorOwnsImages(tutor: AppConfig['tutor']): boolean {
@@ -110,12 +111,72 @@ export function ProviderFields({ backend, images, disabled, onChange }: {
           <Field label="Модель картинки" hint="Пусто — модель роли image в omp; omp не сможет уйти в свою цепочку">
             <Text value={images.omp.model} onChange={(model) => onChange({ omp: { ...images.omp, model } })} />
           </Field>
-          <Field label="Модель агента">
-            <Text value={images.omp.agentModel} onChange={(agentModel) => onChange({ omp: { ...images.omp, agentModel } })} placeholder="anthropic/claude-haiku-5-5" />
-          </Field>
+          <OmpAgentModel
+            value={images.omp.agentModel}
+            disabled={disabled}
+            onChange={(agentModel) => onChange({ omp: { ...images.omp, agentModel } })}
+          />
         </>
       )}
     </fieldset>
+  )
+}
+
+function OmpAgentModel({ value, disabled, onChange }: {
+  value: string
+  disabled?: boolean
+  onChange: (value: string) => void
+}) {
+  const [custom, setCustom] = useState(false)
+  const catalog = useQuery({
+    queryKey: ['images-omp-agent-models'],
+    queryFn: api.imagesOmpAgentModels,
+    enabled: !disabled,
+    staleTime: 300_000,
+    retry: false,
+  })
+  const groups = Object.entries(catalog.data ?? {})
+  const listed = groups.some(([, models]) => models.includes(value))
+  const hint = disabled
+    ? undefined
+    : catalog.isFetching
+      ? 'Загружаю модели из omp…'
+      : catalog.error
+        ? `${errorText(catalog.error)}. Модель можно вписать вручную`
+        : groups.length === 0
+          ? 'В каталоге omp нет моделей агента. Модель можно вписать вручную'
+          : undefined
+
+  return (
+    <Field label="Модель агента" hint={hint}>
+      {groups.length > 0 && !custom ? (
+        <select
+          className={inputClass}
+          value={value}
+          disabled={disabled}
+          onChange={(e) => {
+            if (e.target.value === CUSTOM) setCustom(true)
+            else onChange(e.target.value)
+          }}
+        >
+          {!value && <option value="" disabled>Выберите модель</option>}
+          {value && !listed && <option value={value}>{value} (нет в списке)</option>}
+          {groups.map(([provider, models]) => (
+            <optgroup key={provider} label={provider}>
+              {models.map((model) => <option key={model} value={model}>{model}</option>)}
+            </optgroup>
+          ))}
+          <option value={CUSTOM}>Другая модель…</option>
+        </select>
+      ) : (
+        <Text value={value} onChange={onChange} placeholder="anthropic/claude-haiku-5-5" />
+      )}
+      {!disabled && custom && groups.length > 0 && (
+        <button type="button" onClick={() => setCustom(false)} className="type-body-small self-start text-[var(--md-sys-color-primary)] disabled:opacity-40">
+          Выбрать из списка
+        </button>
+      )}
+    </Field>
   )
 }
 

@@ -193,6 +193,7 @@ pub fn run() {
             commands::cards_preview,
             commands::images_generate,
             commands::images_route,
+            commands::images_omp_agent_models,
             commands::tutor_import_script,
             commands::config_get,
             commands::config_save,

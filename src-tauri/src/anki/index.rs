@@ -61,18 +61,25 @@ enum IndexFailure {
     Rejected,
 }
 
+fn is_busy_action(msg: &str) -> bool {
+    let text = msg.split_once(": ").map_or(msg, |(_, rest)| rest).to_lowercase();
+    [
+        "collection lifecycle operation is active",
+        "collection is not available",
+        "collection is unavailable",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
 impl IndexFailure {
     fn of(error: &AnkiError) -> Self {
         match error {
-            AnkiError::Action(m) if m.ends_with(": Collection lifecycle operation is active.") => Self::Busy,
-            AnkiError::Transport(_) => Self::Unreachable,
+            AnkiError::Action(m) if is_busy_action(m) => Self::Busy,
+            AnkiError::Refused(_) | AnkiError::Transport(_) => Self::Unreachable,
             AnkiError::Protocol(_) => Self::UnexpectedReply,
             AnkiError::Action(_) => Self::Rejected,
         }
-    }
-
-    fn retryable(self) -> bool {
-        matches!(self, Self::Busy | Self::Unreachable)
     }
 
     fn message(self) -> &'static str {
@@ -125,9 +132,16 @@ pub fn query(index_decks: &[String], deck: &str) -> String {
         return "deck:*".into();
     }
     if index_decks.is_empty() {
-        return format!("deck:\"{deck}\"");
+        return format!("deck:\"{}\"", connect::escape_query(deck));
     }
-    format!("({})", index_decks.iter().map(|d| format!("deck:\"{d}\"")).collect::<Vec<_>>().join(" OR "))
+    format!(
+        "({})",
+        index_decks
+            .iter()
+            .map(|d| format!("deck:\"{}\"", connect::escape_query(d)))
+            .collect::<Vec<_>>()
+            .join(" OR ")
+    )
 }
 
 /// Word and translation fields of one note type: the saved override, the app's mapping for the
@@ -172,14 +186,29 @@ fn ordered_fields(fields: &Value) -> Vec<String> {
 type Picked = (Option<String>, Option<String>, Vec<String>);
 
 async fn fetch(http: &reqwest::Client, cfg: &config::Anki) -> Result<(Vec<AnkiCard>, Vec<IndexModel>), AnkiError> {
-    let mut delays = [1, 2, 5].into_iter();
+    let started = tokio::time::Instant::now();
+    let mut busy_delays = [1, 2, 5].into_iter();
+    let mut transport_delays = [1, 2].into_iter();
     loop {
         match fetch_snapshot(http, cfg).await {
-            Err(e) if IndexFailure::of(&e).retryable() => match delays.next() {
-                Some(seconds) => tokio::time::sleep(Duration::from_secs(seconds)).await,
-                None => return Err(e),
-            },
-            result => return result,
+            Err(e) => {
+                let delay = match &e {
+                    AnkiError::Refused(_) => return Err(e),
+                    AnkiError::Transport(_) => {
+                        if started.elapsed() >= Duration::from_secs(20) {
+                            return Err(e);
+                        }
+                        transport_delays.next()
+                    }
+                    _ if IndexFailure::of(&e) == IndexFailure::Busy => busy_delays.next(),
+                    _ => return Err(e),
+                };
+                match delay {
+                    Some(seconds) => tokio::time::sleep(Duration::from_secs(seconds)).await,
+                    None => return Err(e),
+                }
+            }
+            Ok(snapshot) => return Ok(snapshot),
         }
     }
 }
@@ -309,10 +338,55 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let cfg = config::Anki { url: format!("http://{}", listener.local_addr().unwrap()), ..Default::default() };
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let snapshot = fetch(&reqwest::Client::new(), &cfg).await;
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let snapshot = fetch(&http, &cfg).await;
         server.abort();
         let (cards, models) = snapshot.unwrap();
         assert_eq!(cards[0].word, "weirdo");
+        assert_eq!(models[0].note_type, "Basic");
+    }
+
+    #[tokio::test]
+    async fn index_fails_fast_on_connection_refused() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let cfg = config::Anki { url: format!("http://{addr}"), ..Default::default() };
+        let started = std::time::Instant::now();
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let err = fetch(&http, &cfg).await.unwrap_err();
+        assert!(matches!(err, AnkiError::Refused(_)), "expected Refused, got {err:?}");
+        assert!(started.elapsed() < Duration::from_secs(2), "refused took too long: {:?}", started.elapsed());
+    }
+
+    #[tokio::test]
+    async fn index_retries_collection_not_available() {
+        use axum::{routing::post, Json, Router};
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+
+        let unavailable = Arc::new(AtomicBool::new(true));
+        let app = Router::new().route("/", post(move |Json(req): Json<Value>| {
+            let unavailable = req["action"] == "findCards" && unavailable.swap(false, Ordering::Relaxed);
+            async move {
+                Json(match req["action"].as_str().unwrap() {
+                    "findCards" if unavailable => json!({ "result": null, "error": "collection is not available" }),
+                    "findCards" => json!({ "result": [42], "error": null }),
+                    "cardsInfo" => json!({ "result": [{
+                        "note": 24, "modelName": "Basic",
+                        "fields": { "Front": { "order": 0, "value": "brisk" } }
+                    }], "error": null }),
+                    action => panic!("unexpected action: {action}"),
+                })
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let cfg = config::Anki { url: format!("http://{}", listener.local_addr().unwrap()), ..Default::default() };
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let snapshot = fetch(&http, &cfg).await;
+        server.abort();
+        let (cards, models) = snapshot.unwrap();
+        assert_eq!(cards[0].word, "brisk");
         assert_eq!(models[0].note_type, "Basic");
     }
 

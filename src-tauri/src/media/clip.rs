@@ -30,7 +30,7 @@ pub fn clip_args(c: &ClipSpec, out: &Path) -> Vec<String> {
     let (ss, t) = window(c);
     let scale = "fps='min(24,source_fps)',scale='min(640,iw)':-2";
     let vf = if c.hdr { format!("zscale=t=linear:npl=100,tonemap=hable,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,{scale}") } else { scale.to_string() };
-    let mut a: Vec<String> = ["-hide_banner", "-v", "error", "-y", "-xerror", "-err_detect", "explode", "-ss"].map(String::from).to_vec();
+    let mut a: Vec<String> = ["-hide_banner", "-v", "error", "-y", "-xerror", "-ss"].map(String::from).to_vec();
     // Limit the output timeline, not how long the demuxer is allowed to read around the seek.
     a.extend([format!("{ss:.3}"), "-i".into(), super::input(c.src), "-t".into(), format!("{t:.3}")]);
     a.extend(["-map".into(), format!("0:{}", c.video_index), "-map".into(), format!("0:{}", c.audio_index), "-vf".into(), vf]);
@@ -85,8 +85,8 @@ impl Timing {
     }
 
     fn spans(&self, duration: f64) -> bool {
-        self.0.is_some_and(|(first, last)| first.abs() <= TIMING_TOLERANCE
-            && (last - duration).abs() <= TIMING_TOLERANCE)
+        let tol = TIMING_TOLERANCE.min((duration * 0.5).max(0.05));
+        self.0.is_some_and(|(first, last)| last > first && first.abs() <= tol && (last - duration).abs() <= tol)
     }
 }
 
@@ -170,14 +170,42 @@ async fn make_in(c: &ClipSpec<'_>, dir: &Path, file_name: &str, cancel: &Cancell
         Err(e) if e.kind() == ErrorKind::NotFound => {}
         Err(e) => return Err(e.into()),
     }
+    const RETRY_DELAY: Duration = Duration::from_secs(1);
     if let Err(e) = cut(c, &out, duration, cancel).await {
         if cancel.is_cancelled() {
             return Err(e);
         }
         logs::log("ffmpeg", &format!("clip rejected, reopening source: {e:#}"));
+        tokio::select! {
+            _ = cancel.cancelled() => return Err(anyhow!("отменено")),
+            _ = tokio::time::sleep(RETRY_DELAY) => {}
+        }
         cut(c, &out, duration, cancel).await?;
     }
     Ok(out)
+}
+
+fn has_fatal_stderr(stderr: &str) -> bool {
+    let lower = stderr.to_lowercase();
+    [
+        "invalid as first byte of an ebml",
+        "ebml header parsing failed",
+        "read error",
+        "i/o error",
+        "input/output error",
+        "invalid data found",
+        "truncated",
+        "corrupt",
+        "server returned 4",
+        "server returned 5",
+        "connection reset",
+        "connection timed out",
+        "broken pipe",
+        "premature end",
+        "end of file",
+    ]
+    .iter()
+    .any(|pattern| lower.contains(pattern))
 }
 
 async fn cut(c: &ClipSpec<'_>, out: &Path, duration: f64, cancel: &CancellationToken) -> anyhow::Result<()> {
@@ -187,8 +215,8 @@ async fn cut(c: &ClipSpec<'_>, out: &Path, duration: f64, cancel: &CancellationT
         cmd.args(clip_args(c, &part));
         let output = proc::output_cancellable(cmd, Duration::from_secs(180), cancel).await
             .map_err(|e| anyhow!("ffmpeg: {e}"))?;
-        if !output.status.success() || !output.stderr.is_empty() {
-            let error = String::from_utf8_lossy(&output.stderr);
+        let error = String::from_utf8_lossy(&output.stderr);
+        if !output.status.success() || has_fatal_stderr(&error) {
             logs::log("ffmpeg", &format!("clip failed: {error}"));
             bail!("ffmpeg: {}", error.trim().lines().last().unwrap_or("ошибка"));
         }
@@ -286,10 +314,73 @@ mod tests {
     fn args_sdr_and_hdr() {
         let c = ClipSpec { src: "U", video_index: 0, audio_index: 2, start: 100.0, end: 103.0, hdr: false, source_duration: None };
         let s = clip_args(&c, Path::new("/o.webm")).join(" ");
-        assert!(s.starts_with("-hide_banner -v error -y -xerror -err_detect explode -ss 99.500 -i U -t 4.000 -map 0:0 -map 0:2 -vf fps='min(24,source_fps)',scale='min(640,iw)':-2 -c:v libvpx-vp9"));
+        assert!(s.starts_with("-hide_banner -v error -y -xerror -ss 99.500 -i U -t 4.000 -map 0:0 -map 0:2 -vf fps='min(24,source_fps)',scale='min(640,iw)':-2 -c:v libvpx-vp9"));
         assert!(s.ends_with("-c:a libopus -b:a 32k -ac 1 /o.webm"));
         let h = clip_args(&ClipSpec { hdr: true, start: 0.2, end: 60.0, ..c }, Path::new("/o.webm")).join(" ");
         assert!(h.contains("-ss 0.000 -i U -t 12.000"));
         assert!(h.contains("-vf zscale=t=linear:npl=100,tonemap=hable,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,fps="));
+    }
+
+    #[test]
+    fn timing_rejects_zero_span_on_short_clips() {
+        let mut zero = Timing::default();
+        zero.add(0.0, 0.0);
+        assert!(!zero.spans(0.20));
+
+        let mut full = Timing::default();
+        full.add(0.0, 0.20);
+        assert!(full.spans(0.20));
+    }
+
+    #[test]
+    fn fatal_stderr_ignores_open_gop_seek_notes_and_catches_ebml_corruption() {
+        assert!(!has_fatal_stderr("[h264] mmco: unref short failure"));
+        assert!(has_fatal_stderr("0x00 at pos ... invalid as first byte of an EBML number"));
+        assert!(has_fatal_stderr("Error reading input: Input/output error"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ffmpeg with libvpx-vp9/libopus and ffprobe"]
+    async fn cuts_valid_open_gop_h264_mkv_across_recovery_point() {
+        let dir = std::env::temp_dir().join(format!("smartsubs-open-gop-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir(&dir).await.unwrap();
+        let src = dir.join("source.mkv");
+        let output = proc::command("ffmpeg")
+            .args([
+                "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=24:duration=10",
+                "-f", "lavfi", "-i", "sine=duration=10",
+                "-c:v", "libx264", "-x264-params", "open-gop=1:bframes=3:keyint=48",
+                "-c:a", "aac",
+            ])
+            .arg(&src)
+            .output()
+            .await
+            .unwrap();
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr).into_owned();
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+            panic!("ffmpeg encode failed: {err}");
+        }
+
+        let spec = ClipSpec {
+            src: src.to_str().unwrap(),
+            video_index: 0,
+            audio_index: 1,
+            start: 8.3,
+            end: 9.3,
+            hdr: false,
+            source_duration: None,
+        };
+        let cancel = CancellationToken::new();
+        let out_res = make_in(&spec, &dir, "clip.webm", &cancel).await;
+        let validate_res = match &out_res {
+            Ok(path) => Some(validate(path, Some(2.0), &cancel).await),
+            Err(_) => None,
+        };
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+
+        let out = out_res.unwrap();
+        assert_eq!(out.file_name().unwrap(), "clip.webm");
+        validate_res.unwrap().unwrap();
     }
 }

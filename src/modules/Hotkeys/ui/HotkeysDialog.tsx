@@ -50,7 +50,7 @@ export function HotkeysDialog({ onClose }: { onClose: () => void }) {
    aria-labelledby="hotkeys-title"
    className="max-h-[90vh] w-[520px] max-w-[96vw] p-0"
   >
-   <div className="flex items-start justify-between gap-2 px-6 pt-5 pb-2">
+   <div className="flex shrink-0 items-start justify-between gap-2 px-6 pt-5 pb-2">
     <div className="min-w-0">
      <h2 id="hotkeys-title" className="type-headline-small">Горячие клавиши</h2>
      <p className={HINT}>Работают в плеере. Нажмите на клавишу, чтобы изменить; Esc — отмена.</p>
@@ -58,33 +58,35 @@ export function HotkeysDialog({ onClose }: { onClose: () => void }) {
     <IconButton icon="close" label="Закрыть" onClick={onClose} />
    </div>
 
-   <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 py-1">
-    {HOTKEY_ACTIONS.map((a) => {
-     const combo = bindings[a.id]
-     const here = capturing === a.id
-     return (
-      <div key={a.id} className="flex items-center gap-2 border-b border-[var(--md-sys-color-outline-variant)] py-1.5 last:border-0">
-       <span className="type-body-medium min-w-0 flex-1">{a.label}</span>
-       <button
-        type="button"
-        aria-pressed={here}
-        onClick={() => setCapturing((c) => (c === a.id ? null : a.id))}
-        className={`state-layer state-on-surface type-label-large relative shrink-0 rounded-full px-4 py-1.5 ${here
-         ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)]'
-         : combo === null
-          ? 'border border-dashed border-[var(--md-sys-color-outline)] text-[var(--md-sys-color-on-surface-variant)]'
-          : 'bg-[var(--md-sys-color-surface-container-highest)]'
-         }`}
-       >
-        {here ? 'Нажмите клавишу…' : combo === null ? 'Не назначено' : keyLabel(combo)}
-       </button>
-       <IconButton icon="close" label="Убрать клавишу" tipPos="left" disabled={combo === null} onClick={() => unbind(a.id)} />
-      </div>
-     )
-    })}
+   <div className="min-h-0 flex-auto overflow-y-auto overscroll-contain">
+    <div className="flex flex-col px-6 py-1">
+     {HOTKEY_ACTIONS.map((a) => {
+      const combo = bindings[a.id]
+      const here = capturing === a.id
+      return (
+       <div key={a.id} className="flex items-center gap-2 border-b border-[var(--md-sys-color-outline-variant)] py-1.5 last:border-0">
+        <span className="type-body-medium min-w-0 flex-1">{a.label}</span>
+        <button
+         type="button"
+         aria-pressed={here}
+         onClick={() => setCapturing((c) => (c === a.id ? null : a.id))}
+         className={`state-layer state-on-surface type-label-large relative shrink-0 rounded-full px-4 py-1.5 ${here
+          ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)]'
+          : combo === null
+           ? 'border border-dashed border-[var(--md-sys-color-outline)] text-[var(--md-sys-color-on-surface-variant)]'
+           : 'bg-[var(--md-sys-color-surface-container-highest)]'
+          }`}
+        >
+         {here ? 'Нажмите клавишу…' : combo === null ? 'Не назначено' : keyLabel(combo)}
+        </button>
+        <IconButton icon="close" label="Убрать клавишу" tipPos="left" disabled={combo === null} onClick={() => unbind(a.id)} />
+       </div>
+      )
+     })}
+    </div>
    </div>
 
-   <div className="flex items-center justify-end gap-2 px-6 pt-2 pb-4">
+   <div className="flex shrink-0 items-center justify-end gap-2 px-6 pt-2 pb-4">
     <button type="button" className={TEXT_BUTTON} onClick={() => { reset(); toast('Клавиши сброшены') }}>Сбросить все</button>
     <button type="button" data-autofocus className={PRIMARY} onClick={onClose}>Готово</button>
    </div>

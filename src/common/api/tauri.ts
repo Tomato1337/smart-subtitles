@@ -130,6 +130,7 @@ export const api = {
   call<GeneratedImage>('images_generate', { prompt, images, tutor }),
  imagesRoute: (images: AppConfig['images'] | null = null, tutor: AppConfig['tutor'] | null = null) =>
   call<ImageRouteView>('images_route', { images, tutor }),
+ imagesOmpAgentModels: () => call<Record<string, string[]>>('images_omp_agent_models'),
 
  patternsExposure: (mediaId: string, cueIdx: number) => call<void>('patterns_exposure', { mediaId, cueIdx }),
  patternsStats: () => call<PatternStat[]>('patterns_stats'),
