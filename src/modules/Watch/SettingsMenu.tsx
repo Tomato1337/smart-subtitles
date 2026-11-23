@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { IconButton, Menu, MenuDivider, MenuItem, toast } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
@@ -14,9 +14,13 @@ function trackLabel(t: SessionState['audioTracks'][number]): string {
   return [t.lang ?? '??', t.codec, `${t.channels}ch`, t.title].filter(Boolean).join(' · ')
 }
 
-export function SettingsMenu({ session, onChanged, onTour, onGuide, onHotkeys, onAnnotate, onChooseSubs }: { session: SessionState; onChanged: () => void; onTour: () => void; onGuide: () => void; onHotkeys: () => void; onAnnotate: () => void; onChooseSubs: () => void }) {
+export function SettingsMenu({ session, onChanged, onTour, onGuide, onHotkeys, onAnnotate, onChooseSubs, onOpenChange }: { session: SessionState; onChanged: () => void; onTour: () => void; onGuide: () => void; onHotkeys: () => void; onAnnotate: () => void; onChooseSubs: () => void; onOpenChange?: (open: boolean) => void }) {
   const p = usePlayer()
   const [open, setOpen] = useState(false)
+  useEffect(() => {
+    onOpenChange?.(open)
+  }, [open, onOpenChange])
+  useEffect(() => () => onOpenChange?.(false), [onOpenChange])
   const [audio, setAudio] = useState(session.audioIndex)
   const subs = useSubsStore(useShallow((s) => ({
     hideMode: s.hideMode, patterns: s.patterns, consent: s.annot?.consent, hasCues: s.cues.length > 0, offset: s.offset, set: s.set,

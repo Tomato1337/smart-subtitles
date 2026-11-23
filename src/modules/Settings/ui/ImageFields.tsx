@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { IconButton, Switch } from '@tomato1337/m3e-react'
+import { Button, IconButton, Select, Switch, TextField } from '@tomato1337/m3e-react'
 import { api, errorText } from '@/common/api/tauri'
 import type { AppConfig, ImageBackend, ImagesConfig } from '@/common/types/ipc'
 import { useDebounced } from '@/common/utilities/useDebounced'
-import { Field, Secret, Text, inputClass } from './SettingsPanel'
+import { SecretField } from './SettingsPrimitives'
 
 type Backend = ImagesConfig['backend']
 
@@ -17,9 +17,11 @@ export const IMAGE_BACKENDS: [Backend, string][] = [
 ]
 
 /** Backends that can actually generate; `none` only disables the whole route. */
-const IMAGE_PROVIDERS: [ImageBackend, string][] = IMAGE_BACKENDS.filter(([id]) => id !== 'none') as [ImageBackend, string][]
+export const IMAGE_PROVIDERS: [ImageBackend, string][] = IMAGE_BACKENDS.filter(
+  ([id]) => id !== 'none',
+) as [ImageBackend, string][]
 
-const IMAGE_LABEL = Object.fromEntries(IMAGE_BACKENDS) as Record<Backend, string>
+export const IMAGE_LABEL = Object.fromEntries(IMAGE_BACKENDS) as Record<Backend, string>
 const CUSTOM = '__custom__'
 
 /** Tutor's image settings replace the app-owned primary; the app's fallbacks stay its own. */
@@ -59,10 +61,15 @@ export function imageSettingsKey(images: ImagesConfig, tutor: AppConfig['tutor']
   return (hash >>> 0).toString(36)
 }
 
-const TEST_PROMPT = 'A smiling man receiving a gift'
+export const IMAGE_TEST_PROMPT = 'A smiling man receiving a gift'
 
 /** Credentials and model of one provider; shared by the primary and every enabled fallback. */
-export function ProviderFields({ backend, images, disabled, onChange }: {
+export function ProviderFields({
+  backend,
+  images,
+  disabled,
+  onChange,
+}: {
   backend: ImageBackend
   images: ImagesConfig
   disabled?: boolean
@@ -72,45 +79,98 @@ export function ProviderFields({ backend, images, disabled, onChange }: {
     <fieldset disabled={disabled} className="m-0 flex min-w-0 flex-col gap-3 border-0 p-0">
       {backend === 'openai' && (
         <>
-          <Field label="Адрес API" hint="Любой OpenAI-совместимый прокси">
-            <Text value={images.openai.baseUrl} onChange={(baseUrl) => onChange({ openai: { ...images.openai, baseUrl } })} />
-          </Field>
-          <Field label="API-ключ">
-            <Secret value={images.openai.apiKey} onChange={(apiKey) => onChange({ openai: { ...images.openai, apiKey } })} placeholder="sk-…" />
-          </Field>
-          <Field label="Модель">
-            <Text value={images.openai.model} onChange={(model) => onChange({ openai: { ...images.openai, model } })} placeholder="gpt-image-1" />
-          </Field>
-          <Field label="Размер">
-            <Text value={images.openai.size} onChange={(size) => onChange({ openai: { ...images.openai, size } })} placeholder="1024x1024" />
-          </Field>
+          <TextField
+            label="Адрес API"
+            hint="Любой OpenAI-совместимый прокси"
+            variant="outlined"
+            value={images.openai.baseUrl}
+            spellCheck={false}
+            onChange={(e) => onChange({ openai: { ...images.openai, baseUrl: e.target.value } })}
+          />
+          <div id="setting-images.openai.apiKey" data-focus-id="images.openai.apiKey">
+            <SecretField
+              label="API-ключ"
+              variant="outlined"
+              value={images.openai.apiKey}
+              placeholder="sk-…"
+              onValueChange={(apiKey) => onChange({ openai: { ...images.openai, apiKey } })}
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <TextField
+              label="Модель"
+              variant="outlined"
+              value={images.openai.model}
+              placeholder="gpt-image-1"
+              spellCheck={false}
+              onChange={(e) => onChange({ openai: { ...images.openai, model: e.target.value } })}
+            />
+            <TextField
+              label="Размер"
+              variant="outlined"
+              value={images.openai.size}
+              placeholder="1024x1024"
+              spellCheck={false}
+              onChange={(e) => onChange({ openai: { ...images.openai, size: e.target.value } })}
+            />
+          </div>
         </>
       )}
       {backend === 'runware' && (
         <>
-          <Field label="API-ключ">
-            <Secret value={images.runware.apiKey} onChange={(apiKey) => onChange({ runware: { ...images.runware, apiKey } })} />
-          </Field>
-          <Field label="Модель">
-            <Text value={images.runware.model} onChange={(model) => onChange({ runware: { ...images.runware, model } })} placeholder="runware:400@2" />
-          </Field>
+          <div id="setting-images.runware.apiKey" data-focus-id="images.runware.apiKey">
+            <SecretField
+              label="API-ключ"
+              variant="outlined"
+              value={images.runware.apiKey}
+              onValueChange={(apiKey) => onChange({ runware: { ...images.runware, apiKey } })}
+            />
+          </div>
+          <TextField
+            label="Модель"
+            variant="outlined"
+            value={images.runware.model}
+            placeholder="runware:400@2"
+            spellCheck={false}
+            onChange={(e) => onChange({ runware: { ...images.runware, model: e.target.value } })}
+          />
         </>
       )}
       {backend === 'gemini' && (
         <>
-          <Field label="API-ключ">
-            <Secret value={images.gemini.apiKey} onChange={(apiKey) => onChange({ gemini: { ...images.gemini, apiKey } })} />
-          </Field>
-          <Field label="Модель" hint="gemini-*-image или imagen-*">
-            <Text value={images.gemini.model} onChange={(model) => onChange({ gemini: { ...images.gemini, model } })} placeholder="gemini-2.5-flash-image" />
-          </Field>
+          <div id="setting-images.gemini.apiKey" data-focus-id="images.gemini.apiKey">
+            <SecretField
+              label="API-ключ"
+              hint="Google AI Studio"
+              variant="outlined"
+              value={images.gemini.apiKey}
+              onValueChange={(apiKey) => onChange({ gemini: { ...images.gemini, apiKey } })}
+            />
+          </div>
+          <div id="setting-images.gemini.model" data-focus-id="images.gemini.model">
+            <TextField
+              label="Модель"
+              hint="gemini-*-image или imagen-*"
+              variant="outlined"
+              value={images.gemini.model}
+              placeholder="gemini-2.5-flash-image"
+              spellCheck={false}
+              onChange={(e) => onChange({ gemini: { ...images.gemini, model: e.target.value } })}
+            />
+          </div>
         </>
       )}
       {backend === 'omp' && (
         <>
-          <Field label="Модель картинки" hint="Пусто — модель роли image в omp; omp не сможет уйти в свою цепочку">
-            <Text value={images.omp.model} onChange={(model) => onChange({ omp: { ...images.omp, model } })} />
-          </Field>
+          <TextField
+            label="Модель картинки"
+            hint="Пусто — модель роли image в omp; omp не сможет уйти в свою цепочку"
+            variant="outlined"
+            value={images.omp.model}
+            placeholder="роль image"
+            spellCheck={false}
+            onChange={(e) => onChange({ omp: { ...images.omp, model: e.target.value } })}
+          />
           <OmpAgentModel
             value={images.omp.agentModel}
             disabled={disabled}
@@ -122,7 +182,11 @@ export function ProviderFields({ backend, images, disabled, onChange }: {
   )
 }
 
-function OmpAgentModel({ value, disabled, onChange }: {
+export function OmpAgentModel({
+  value,
+  disabled,
+  onChange,
+}: {
   value: string
   disabled?: boolean
   onChange: (value: string) => void
@@ -145,13 +209,15 @@ function OmpAgentModel({ value, disabled, onChange }: {
         ? `${errorText(catalog.error)}. Модель можно вписать вручную`
         : groups.length === 0
           ? 'В каталоге omp нет моделей агента. Модель можно вписать вручную'
-          : undefined
+          : 'Агент, через которого omp вызывает generate_image'
 
   return (
-    <Field label="Модель агента" hint={hint}>
+    <div className="flex flex-col gap-2">
       {groups.length > 0 && !custom ? (
-        <select
-          className={inputClass}
+        <Select
+          label="Модель агента"
+          hint={hint}
+          variant="outlined"
           value={value}
           disabled={disabled}
           onChange={(e) => {
@@ -163,25 +229,45 @@ function OmpAgentModel({ value, disabled, onChange }: {
           {value && !listed && <option value={value}>{value} (нет в списке)</option>}
           {groups.map(([provider, models]) => (
             <optgroup key={provider} label={provider}>
-              {models.map((model) => <option key={model} value={model}>{model}</option>)}
+              {models.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
             </optgroup>
           ))}
           <option value={CUSTOM}>Другая модель…</option>
-        </select>
+        </Select>
       ) : (
-        <Text value={value} onChange={onChange} placeholder="anthropic/claude-haiku-5-5" />
+        <TextField
+          label="Модель агента"
+          hint={hint}
+          variant="outlined"
+          value={value}
+          disabled={disabled}
+          placeholder="anthropic/claude-haiku-5-5"
+          spellCheck={false}
+          onChange={(e) => onChange(e.target.value)}
+        />
       )}
       {!disabled && custom && groups.length > 0 && (
-        <button type="button" onClick={() => setCustom(false)} className="type-body-small self-start text-[var(--md-sys-color-primary)] disabled:opacity-40">
+        <Button variant="text" size="xs" className="self-start" onClick={() => setCustom(false)}>
           Выбрать из списка
-        </button>
+        </Button>
       )}
-    </Field>
+    </div>
   )
 }
 
-/** Arrow controls of one fallback row, matching the subtitle sources list. */
-function RowControls({ index, count, enabled, canSwapPrimary, onUp, onDown }: {
+/** Arrow controls of one fallback row. */
+function RowControls({
+  index,
+  count,
+  enabled,
+  canSwapPrimary,
+  onUp,
+  onDown,
+}: {
   index: number
   count: number
   enabled: boolean
@@ -190,37 +276,45 @@ function RowControls({ index, count, enabled, canSwapPrimary, onUp, onDown }: {
   onUp: () => void
   onDown: () => void
 }) {
-  const button = 'size-8 disabled:opacity-30'
   return (
     <>
       <IconButton
         icon="arrow_upward"
         label="Выше"
+        size="sm"
         tipPos="left"
         disabled={!enabled || (index === 0 && !canSwapPrimary)}
         onClick={onUp}
-        className={button}
       />
       <IconButton
         icon="arrow_downward"
         label="Ниже"
+        size="sm"
         tipPos="left"
         disabled={!enabled || index === count - 1}
         onClick={onDown}
-        className={button}
       />
     </>
   )
 }
 
 /** Primary image backend, ordered fallbacks, the resolved route and a live whole-route check. */
-export function ImageFields({ images, tutor, disabled, onChange }: {
+export function ImageFields({
+  images,
+  tutor,
+  disabled,
+  onChange,
+}: {
   images: ImagesConfig
   tutor: AppConfig['tutor']
   disabled: boolean
   onChange: (patch: Partial<ImagesConfig>) => void
 }) {
-  const [test, setTest] = useState<{ pending: boolean; image?: { dataUrl: string; provider: string; model: string }; error?: string }>({ pending: false })
+  const [test, setTest] = useState<{
+    pending: boolean
+    image?: { dataUrl: string; provider: string; model: string }
+    error?: string
+  }>({ pending: false })
   const debounced = useDebounced({ images, tutor }, 400)
   const route = useQuery({
     // The draft contains API keys, so the query key is a digest and devtools never see them.
@@ -234,7 +328,7 @@ export function ImageFields({ images, tutor, disabled, onChange }: {
   const check = async () => {
     setTest({ pending: true })
     try {
-      const image = await api.imagesGenerate(TEST_PROMPT, images, tutor)
+      const image = await api.imagesGenerate(IMAGE_TEST_PROMPT, images, tutor)
       setTest({ pending: false, image })
     } catch (e) {
       setTest({ pending: false, error: errorText(e) })
@@ -255,7 +349,6 @@ export function ImageFields({ images, tutor, disabled, onChange }: {
   const setFallbacks = (fallbacks: ImageBackend[]) => onChange({ fallbacks })
   const enable = (backend: ImageBackend) => {
     if (images.fallbacks.includes(backend) || backend === appPrimary) return
-    // Enabling appends to the end; disabling keeps every credential field untouched.
     setFallbacks([...images.fallbacks, backend])
   }
   const disable = (backend: ImageBackend) => setFallbacks(images.fallbacks.filter((b) => b !== backend))
@@ -264,7 +357,6 @@ export function ImageFields({ images, tutor, disabled, onChange }: {
     if (from < 0) return
     const to = from + (up ? -1 : 1)
     if (up && from === 0) {
-      // The first fallback trades places with an app-owned primary: the old primary was enabled too.
       if (!appPrimary) return
       onChange({ backend, fallbacks: [appPrimary, ...images.fallbacks.slice(1).filter((b) => b !== appPrimary)] })
       return
@@ -282,22 +374,22 @@ export function ImageFields({ images, tutor, disabled, onChange }: {
           Основной провайдер берётся из настроек tutor. Запасные провайдеры ниже задаются здесь.
         </p>
       )}
-      <Field label="Основной провайдер">
-        <select
-          className={inputClass}
-          value={images.backend}
-          disabled={disabled}
-          onChange={(e) => {
-            const backend = e.target.value as Backend
-            // Changing the primary removes it from the fallbacks; the old primary is not enabled by itself.
-            onChange({ backend, fallbacks: images.fallbacks.filter((b) => b !== backend) })
-          }}
-        >
-          {IMAGE_BACKENDS.map(([id, label]) => (
-            <option key={id} value={id}>{label}</option>
-          ))}
-        </select>
-      </Field>
+      <Select
+        label="Основной провайдер"
+        variant="outlined"
+        value={images.backend}
+        disabled={disabled}
+        onChange={(e) => {
+          const backend = e.target.value as Backend
+          onChange({ backend, fallbacks: images.fallbacks.filter((b) => b !== backend) })
+        }}
+      >
+        {IMAGE_BACKENDS.map(([id, label]) => (
+          <option key={id} value={id}>
+            {label}
+          </option>
+        ))}
+      </Select>
 
       {images.backend !== 'none' && (
         <div className="flex flex-col gap-3 rounded-[var(--md-sys-shape-corner-medium)] border border-[var(--md-sys-color-outline-variant)] p-3">
@@ -307,7 +399,6 @@ export function ImageFields({ images, tutor, disabled, onChange }: {
               {disabled ? 'не используется' : 'основной'}
             </span>
           </div>
-          {/* Ownership locks the primary fields only; app-owned fallbacks stay editable. */}
           <ProviderFields backend={images.backend} images={images} onChange={onChange} disabled={disabled} />
         </div>
       )}
@@ -324,7 +415,9 @@ export function ImageFields({ images, tutor, disabled, onChange }: {
           return (
             <div
               key={backend}
-              className={`flex flex-col gap-3 rounded-[var(--md-sys-shape-corner-medium)] border border-[var(--md-sys-color-outline-variant)] p-3 ${enabled ? '' : 'bg-[var(--md-sys-color-surface-container)]'}`}
+              className={`flex flex-col gap-3 rounded-[var(--md-sys-shape-corner-medium)] border border-[var(--md-sys-color-outline-variant)] p-3 ${
+                enabled ? '' : 'bg-[var(--md-sys-color-surface-container)]'
+              }`}
             >
               <div className="flex items-center gap-2">
                 <span className="type-label-small w-4 shrink-0 text-center text-[var(--md-sys-color-on-surface-variant)]">
@@ -351,26 +444,29 @@ export function ImageFields({ images, tutor, disabled, onChange }: {
         })}
       </div>
 
-      <Field label="Стиль" hint="Добавляется к каждому промпту как «. Style: …»">
-        <textarea
-          rows={2}
-          value={images.style}
-          onChange={(e) => onChange({ style: e.target.value })}
-          className={`${inputClass} resize-y`}
-          placeholder="photorealistic, warm light"
-        />
-      </Field>
+      <TextField
+        multiline
+        rows={2}
+        label="Стиль"
+        hint="Добавляется к каждому промпту как «. Style: …»"
+        variant="outlined"
+        value={images.style}
+        placeholder="photorealistic, warm light"
+        onChange={(e) => onChange({ style: e.target.value })}
+      />
 
-      <div className="flex flex-col gap-2 rounded-[var(--md-sys-shape-corner-medium)] bg-[var(--md-sys-color-surface-container)] p-3">
+      <div className="flex flex-col gap-2 rounded-[var(--md-sys-shape-corner-medium)] bg-[var(--md-sys-color-surface-container-low)] p-3">
         <span className="type-label-large">Порядок попыток</span>
         {route.isLoading && <span className="type-body-small">Проверяю…</span>}
         {route.error && <span className="type-body-small text-[var(--md-sys-color-error)]">{errorText(route.error)}</span>}
         {route.data?.disabled && <span className="type-body-small">Генерация выключена.</span>}
         {route.data?.providers.map((p, i) => (
           <div key={`${p.backend}-${i}`} className="flex flex-wrap items-baseline gap-x-2">
-            <span className="type-body-medium">{i + 1}. {IMAGE_LABEL[p.backend] ?? p.backend} · {p.model}</span>
+            <span className="type-body-medium">
+              {i + 1}. {IMAGE_LABEL[p.backend] ?? p.backend} · {p.model}
+            </span>
             {p.inherited && <span className="type-label-small text-[var(--md-sys-color-on-surface-variant)]">из tutor</span>}
-            <span className={`type-label-small ${p.ready ? 'text-[var(--md-sys-color-primary)]' : 'text-[var(--md-sys-color-error)]'}`}>
+            <span className={`type-label-small ${p.ready ? 'text-[var(--app-success)]' : 'text-[var(--md-sys-color-error)]'}`}>
               {p.ready ? 'готов' : (p.reason ?? 'не настроен')}
             </span>
           </div>
@@ -378,19 +474,18 @@ export function ImageFields({ images, tutor, disabled, onChange }: {
       </div>
 
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          disabled={test.pending || !canCheck}
-          onClick={() => void check()}
-          className="state-layer type-label-large relative rounded-full bg-[var(--md-sys-color-secondary-container)] px-4 py-1.5 text-[var(--md-sys-color-on-secondary-container)] disabled:opacity-40"
-        >
+        <Button variant="tonal" size="xs" disabled={test.pending || !canCheck} onClick={() => void check()}>
           {test.pending ? 'Генерирую…' : 'Проверить'}
-        </button>
+        </Button>
         {test.error && <span className="type-body-small text-[var(--md-sys-color-error)]">{test.error}</span>}
       </div>
       {test.image && (
         <div className="flex flex-col gap-1">
-          <img src={test.image.dataUrl} alt="Проверочная картинка" className="max-w-48 rounded-[var(--md-sys-shape-corner-small)]" />
+          <img
+            src={test.image.dataUrl}
+            alt="Проверочная картинка"
+            className="max-w-48 rounded-[var(--md-sys-shape-corner-small)]"
+          />
           <span className="type-label-small text-[var(--md-sys-color-on-surface-variant)]">
             {IMAGE_LABEL[test.image.provider as Backend] ?? test.image.provider} · {test.image.model}
           </span>

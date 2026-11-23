@@ -462,6 +462,12 @@ async fn fail(st: &Arc<AppState>, s: &Arc<Session>, state: &mut EmbeddedState, e
     state.message = Some(format!("загрузка прервана: {e}"));
     set_state(st, s, Some(state.clone()));
     acquire::warn(st, s, format!("загрузка встроенных субтитров: {e}"));
+    let status = if state.loaded_cues > 0 {
+        acquire::ready_status(&s.media_id, "embedded", true)
+    } else {
+        SubsStatus::new(&s.media_id, "none")
+    };
+    acquire::status(st, status);
     // Nothing more will arrive: let the scheduler re-read the counters instead of waiting forever.
     s.cues_grew.notify_one();
 }

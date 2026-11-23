@@ -6,23 +6,21 @@ import { overlayTopOffset, WARNING_STACK_EVENT, type OverlayRect } from '@/modul
 import { useSessionStore } from '@/modules/Session'
 
 /**
- * The kit's one snackbar, placed with what is actually on screen: a top toast goes under the top bar
- * and under any warning popup that shares its horizontal band; the player's warning stack reads the
- * same measured inset instead of the old fixed 72 px.
+ * The kit's one snackbar, placed with what is actually on screen: a top toast on `/player` goes
+ * under the top bar and under any warning popup that shares its horizontal band, while bottom
+ * toasts on `/settings` dynamically clear `[data-app-savebar]` when unsaved changes are shown.
  *
- * The host subscribes only to placement data: the route and player session (the bar mounts per
- * screen), the warning stack's lifecycle event (it mounts, moves and collapses) and its bottom
- * offset. It never watches the document body, so a progress line updating every frame does not
- * schedule layout reads.
+ * The host watches DOM mutations only on `/settings` (never on `/player`, so a progress line
+ * updating every frame does not schedule layout reads).
  */
 export function SnackbarHost({ bottomClearance }: { bottomClearance?: number }) {
  const pathname = useRouterState({ select: (s) => s.location.pathname })
  // The player bar mounts with the session, which can arrive after the route is already `/player`.
  const sessionId = useSessionStore((s) => s.session?.sessionId ?? '')
- // The bottom-left warning stack publishes its height; only this host re-renders with it.
  const stackBottom = useNotifications((s) => s.stackBottomPx)
  const [anchors, setAnchors] = useState(0)
  const [topOffset, setTopOffset] = useState(72)
+ const [saveBarOffset, setSaveBarOffset] = useState(0)
  /** Last value written to the player's CSS variable; avoid rewriting an unchanged inset. */
  const inset = useRef<string | null>(null)
 
@@ -78,5 +76,73 @@ export function SnackbarHost({ bottomClearance }: { bottomClearance?: number }) 
   }
  }, [pathname, sessionId, anchors])
 
- return <Snackbar placement={pathname === '/player' ? 'top' : 'bottom'} topOffset={topOffset} bottomOffset={Math.max(96, bottomClearance ?? 0, stackBottom + 8)} />
+ // On `/settings`, watch for SaveBar mounting/resizing so bottom snackbars lift cleanly above it.
+ useLayoutEffect(() => {
+  if (pathname !== '/settings') {
+   setSaveBarOffset(0)
+   return
+  }
+  let frame = 0
+  let alive = true
+  let observedEl: HTMLElement | null = null
+  const schedule = () => {
+   if (alive && !frame) frame = requestAnimationFrame(measure)
+  }
+  const resizeObserver = new ResizeObserver(schedule)
+  const findSaveBar = () =>
+   document.querySelector<HTMLElement>('[data-app-savebar], [role="region"][aria-label="Несохранённые изменения"]')
+
+  const measure = () => {
+   frame = 0
+   if (!alive) return
+   const el = findSaveBar()
+   if (el !== observedEl) {
+    resizeObserver.disconnect()
+    observedEl = el
+    if (el) resizeObserver.observe(el)
+   }
+   let next = 0
+   if (el && !el.closest('[data-closing]')) {
+    const rect = el.getBoundingClientRect()
+    if (rect.height > 0) {
+     const fixedEl = getComputedStyle(el).position === 'fixed'
+      ? el
+      : el.closest<HTMLElement>('.m3e-motion-rise')
+     const fixedBottom = fixedEl && getComputedStyle(fixedEl).position === 'fixed'
+      ? parseFloat(getComputedStyle(fixedEl).bottom) || 0
+      : 0
+     const settled = fixedEl ? Math.ceil(fixedBottom + el.offsetHeight) + 8 : 0
+     const fromRect = Math.ceil(window.innerHeight - rect.top) + 8
+     next = Math.max(0, fromRect, settled)
+    }
+   }
+   setSaveBarOffset((previous) => (previous === next ? previous : next))
+  }
+
+  const mutationObserver = new MutationObserver(schedule)
+  const root = document.getElementById('root') ?? document.body
+  mutationObserver.observe(root, {
+   childList: true,
+   subtree: true,
+   attributes: true,
+   attributeFilter: ['data-closing', 'data-app-savebar'],
+  })
+  window.addEventListener('resize', schedule)
+  measure()
+  return () => {
+   alive = false
+   if (frame) cancelAnimationFrame(frame)
+   mutationObserver.disconnect()
+   resizeObserver.disconnect()
+   window.removeEventListener('resize', schedule)
+  }
+ }, [pathname])
+
+ return (
+  <Snackbar
+   placement={pathname === '/player' ? 'top' : 'bottom'}
+   topOffset={topOffset}
+   bottomOffset={Math.max(24, bottomClearance ?? 0, saveBarOffset, stackBottom + 8)}
+  />
+ )
 }

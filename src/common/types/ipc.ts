@@ -462,6 +462,65 @@ export type CardPreview = {
 /** Automatic subtitle sources, in the order `subtitles.sources` lists them. */
 export type SubtitleSource = 'torrserver' | 'sidecar' | 'embedded' | 'opensubtitles'
 
+export type SessionLoading = {
+ title: string
+ originalTitle: string | null
+ season: number | null
+ episode: number | null
+ posterUrl: string | null
+ kind: 'lampa' | 'file'
+}
+
+export type AnkiConnectionStatus = {
+ ok: boolean
+ checkedAt: number
+ error: string | null
+ indexCount: number
+ indexUpdatedAt: number | null
+ queuedCards: number
+}
+
+export type SystemInfo = {
+ version: string
+ configDir: string
+ logsDir: string
+ vaapiOk: boolean
+ listenPort: number
+ lampaLastSeen: Record<string, number>
+}
+
+export type TaskUsageRow = {
+ task: string
+ requests: number
+ inputTokens: number
+ cachedTokens: number
+ outputTokens: number
+ usd: number
+ partial: boolean
+}
+
+export type ModelUsageRow = {
+ model: string
+ requests: number
+ inputTokens: number
+ cachedTokens: number
+ outputTokens: number
+ usd: number
+ partial: boolean
+}
+
+export type MonthlyUsage = {
+ days: number
+ requests: number
+ inputTokens: number
+ cachedTokens: number
+ outputTokens: number
+ totalUsd: number
+ partial: boolean
+ byTask: TaskUsageRow[]
+ byModel: ModelUsageRow[]
+}
+
 /** `~/.config/smart-subtitle/config.json` (Rust `config::Config`). */
 export type AppConfig = {
  server: { port: number }
@@ -469,7 +528,7 @@ export type AppConfig = {
  llm: { source: string; provider: string; model: string; baseUrl: string; apiKey: string; api: LlmApi }
  llmTasks: Record<TaskKey, TaskLlm>
  opensubtitles: { apiKey: string; username: string; password: string }
- subtitles: { sources: SubtitleSource[] }
+ subtitles: { sources: SubtitleSource[]; idleOpacity: number }
  /** Consent of the dialog analysis: `auto` = do not ask for `rememberedModel`. */
  annot: { auto: boolean; rememberedModel: string }
  tutor: { enabled: boolean; root: string; apiUrl: string; useImageSettings: boolean }

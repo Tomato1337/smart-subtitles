@@ -44,6 +44,29 @@ body {
     --m3e-icon-button-radius: var(--md-sys-shape-corner-medium);
     --m3e-icon-button-press-radius: var(--md-sys-shape-corner-medium);
   }
+  /* Dialogs sidebar focus mode: dim header and inactive rows when player chrome hides on idle. */
+  aside[data-tour='sidebar'] [data-sidebar-header],
+  aside[data-tour='sidebar'] [data-cue-row] {
+    opacity: 1;
+    transition-property: color, background-color, border-color;
+    transition-duration: 300ms;
+    transition-timing-function: ease-out;
+  }
+  aside[data-sidebar-idle='true']:not(:hover):not(:focus-within) [data-sidebar-header],
+  aside[data-sidebar-idle='true']:not(:hover):not(:focus-within) [data-cue-row]:not([data-active='true']):not(:hover):not(:focus-within) {
+    opacity: var(--sidebar-idle-opacity, 0.36);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    aside[data-tour='sidebar'] [data-sidebar-header],
+    aside[data-tour='sidebar'] [data-cue-row] {
+      transition-property: opacity, color, background-color, border-color;
+      transition-duration: 150ms, 300ms, 300ms, 300ms;
+    }
+    aside[data-sidebar-idle='true']:not(:hover):not(:focus-within) [data-sidebar-header],
+    aside[data-sidebar-idle='true']:not(:hover):not(:focus-within) [data-cue-row]:not([data-active='true']):not(:hover):not(:focus-within) {
+      transition-duration: 450ms, 300ms, 300ms, 300ms;
+    }
+  }
 }
 
 /*

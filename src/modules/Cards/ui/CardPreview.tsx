@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { Segmented, Switch } from '@tomato1337/m3e-react'
 import type { CardPreview as CardPreviewData } from '@/common/types/ipc'
 import { renderCard } from '../lib/ankiTemplate'
@@ -9,8 +9,8 @@ export const CARD_PREVIEW_HEIGHT = 520
 const CARD_BG = { light: '#f8f9fa', night: '#1a1a2e' }
 
 const EXTRA_CSS = `
-html, body { margin: 0; min-height: 100%; }
-.card { min-height: 100vh; box-sizing: border-box; }
+html, body { margin: 0; }
+.card { padding: 16px; box-sizing: border-box; }
 .ss-ph {
   margin: 12px auto;
   max-width: 320px;
@@ -25,29 +25,54 @@ html, body { margin: 0; min-height: 100%; }
 img { max-width: 100%; height: auto; }
 `
 
-const SIDES = [
-  { value: 'front', label: 'Лицо' },
-  { value: 'back', label: 'Обратная сторона' },
-] as const
+export type CardPreviewProps = {
+  preview: CardPreviewData
+  night?: boolean
+  onNightChange?: (v: boolean) => void
+  toolbarEnd?: ReactNode
+  segmentedSize?: 'xs' | 'sm'
+}
 
 /** One card as Anki will show it: the note type's template and CSS, the draft's values. */
-export function CardPreview({ preview }: { preview: CardPreviewData }) {
+export function CardPreview({
+  preview,
+  night: controlledNight,
+  onNightChange,
+  toolbarEnd,
+  segmentedSize = 'sm',
+}: CardPreviewProps) {
   const [side, setSide] = useState<'front' | 'back'>('front')
-  const [night, setNight] = useState(false)
+  const [internalNight, setInternalNight] = useState(false)
+  const isControlled = onNightChange !== undefined
+  const night = controlledNight ?? internalNight
+  const setNight = onNightChange ?? setInternalNight
   const front = useMemo(() => renderCard(preview.noteType.front, preview.values, 'front'), [preview])
   const back = useMemo(() => renderCard(preview.noteType.back, preview.values, 'back', front), [preview, front])
+  const sideOptions = useMemo(
+    () => [
+      { value: 'front' as const, label: 'Лицо', icon: side === 'front' ? 'check' : undefined },
+      { value: 'back' as const, label: 'Обратная сторона', icon: side === 'back' ? 'check' : undefined },
+    ],
+    [side],
+  )
   const srcDoc =
     `<!doctype html><html><head><meta charset="utf-8">` +
     `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'">` +
     `<style>${preview.noteType.css}${EXTRA_CSS}</style></head>` +
-    `<body style="background:${night ? CARD_BG.night : CARD_BG.light}">` +
+    `<body style="background:${night ? CARD_BG.night : CARD_BG.light};color:${night ? '#e6e1e5' : '#1a1a2e'};color-scheme:${night ? 'dark' : 'light'}">` +
     `<div class="card${night ? ' night_mode' : ''}">${side === 'front' ? front : back}</div></body></html>`
 
   return (
     <div className="flex min-h-0 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Segmented value={side} options={SIDES} onChange={setSide} label="Сторона карточки" />
-        <Switch label="Ночной режим" checked={night} onChange={setNight} />
+        <Segmented
+          size={segmentedSize}
+          value={side}
+          options={sideOptions}
+          onChange={setSide}
+          label="Сторона карточки"
+        />
+        {isControlled ? toolbarEnd : <Switch label="Ночной режим" checked={night} onChange={setNight} />}
       </div>
       <iframe
         title="Предпросмотр карточки"

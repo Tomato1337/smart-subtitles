@@ -27,6 +27,8 @@ pub struct AppState {
     pub asr: tokio::sync::Mutex<()>,
     /// models.dev index and when it was loaded; one download a day, shared by every call.
     pub models_dev: tokio::sync::Mutex<Option<(std::time::Instant, Arc<crate::llm::catalog::DevIndex>)>>,
+    /// Latest timestamp each allowed Lampa origin posted `/api/session`.
+    pub lampa_last_seen: Mutex<std::collections::HashMap<String, i64>>,
 }
 
 impl AppState {

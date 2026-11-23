@@ -8,6 +8,8 @@ const kinds: [name: string, hex: string][] = [
 const ANKI = '#FFB74D'
 /** Warnings: kept unblended so the orange stays orange on any wallpaper. */
 const WARNING = '#FF9800'
+/** Success: kept unblended so the green reads clearly across themes. */
+const SUCCESS = '#2E9E6E'
 
 export type ThemeInput = { seed: string; mode: string; colors: Record<string, string> }
 
@@ -35,6 +37,10 @@ export function themeVars(t: ThemeInput): Record<string, string> {
  out['--app-warning'] = warn.color
  out['--app-warning-container'] = warn.container
  out['--app-on-warning-container'] = warn.onContainer
+ const ok = customColorTones(SUCCESS, t.seed, dark, false)
+ out['--app-success'] = ok.color
+ out['--app-success-container'] = ok.container
+ out['--app-on-success-container'] = ok.onContainer
  // Dialog list text: pure white / black, the tinted on-surface roles read worse over tonal rows.
  out['--app-dialog-text'] = dark ? '#ffffff' : '#000000'
  return out

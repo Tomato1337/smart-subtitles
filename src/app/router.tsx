@@ -9,6 +9,7 @@ import { useInirTheme } from '@/modules/Theme'
 import { SnackbarHost } from './SnackbarHost'
 import { HomePage } from '@/pages/home'
 import { PlayerPage } from '@/pages/player'
+import { SettingsPage } from '@/pages/settings'
 
 function Root() {
   const navigate = useNavigate()
@@ -31,11 +32,25 @@ function Root() {
   )
 }
 
+export type SettingsSearch = {
+  section?: string
+  focus?: string
+}
+
 const rootRoute = createRootRoute({ component: Root })
 const homeRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: HomePage })
 const playerRoute = createRoute({ getParentRoute: () => rootRoute, path: '/player', component: PlayerPage })
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/settings',
+  validateSearch: (search: Record<string, unknown>): SettingsSearch => ({
+    section: typeof search.section === 'string' && search.section ? search.section : undefined,
+    focus: typeof search.focus === 'string' && search.focus ? search.focus : undefined,
+  }),
+  component: SettingsPage,
+})
 
-export const router = createRouter({ routeTree: rootRoute.addChildren([homeRoute, playerRoute]) })
+export const router = createRouter({ routeTree: rootRoute.addChildren([homeRoute, playerRoute, settingsRoute]) })
 router.subscribe('onResolved', (e) => logEvent(`route ${e.toLocation.pathname}`))
 
 declare module '@tanstack/react-router' {

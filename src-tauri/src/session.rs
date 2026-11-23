@@ -15,6 +15,7 @@ pub struct Session {
     pub id: String,
     pub media_id: String,
     pub req: SessionRequest,
+    pub from_start: bool,
     /// req.url with credentials applied; used for every ffmpeg/ffprobe/HTTP read.
     pub src: String,
     pub probe: OnceLock<Probe>,
@@ -99,26 +100,32 @@ pub(crate) fn resume_position(last: f64, from_req: Option<f64>, duration: f64) -
     if duration > 0.0 && t > duration - 60.0 { 0.0 } else { t }
 }
 
+fn display_title(req: &SessionRequest) -> String {
+    req.card.as_ref().map(|c| c.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| req.title.clone())
+}
+
+fn poster_url_for(port: u16, media_id: &str, card: Option<&Card>) -> Option<String> {
+    let has_poster = card.and_then(|c| c.poster.as_ref()).is_some()
+        || crate::poster::poster_path(media_id).exists();
+    has_poster.then(|| crate::poster::url(port, media_id))
+}
+
 pub fn state_of(st: &AppState, s: &Session, p: &Probe, resume_at: f64, sub_offset: f64) -> SessionState {
     let (season, episode) = season_episode_of(&s.req);
     let episode_title = episode.and_then(|e| {
         s.req.episodes.iter().find(|x| x.episode == e).and_then(|x| x.name_en.clone().or_else(|| x.name_ru.clone()))
     });
     let url = &s.req.url;
-    let has_poster = s.req.card.as_ref().and_then(|c| c.poster.as_ref()).is_some()
-        || crate::poster::poster_path(&s.media_id).exists();
-    let poster_url = has_poster
-        .then(|| crate::poster::url(st.listen_port, &s.media_id));
     SessionState {
         session_id: s.id.clone(),
         media_id: s.media_id.clone(),
-        title: s.req.card.as_ref().map(|c| c.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| s.req.title.clone()),
+        title: display_title(&s.req),
         original_title: s.req.card.as_ref().and_then(|c| c.original_title.clone()),
         year: s.req.card.as_ref().and_then(|c| c.year),
         season,
         episode,
         episode_title,
-        poster_url,
+        poster_url: poster_url_for(st.listen_port, &s.media_id, s.req.card.as_ref()),
         duration: p.duration,
         audio_tracks: p.audio.clone(),
         audio_index: *s.audio_index.lock().unwrap(),
@@ -152,6 +159,15 @@ pub fn show_main_window(app: &tauri::AppHandle) {
 fn bad(msg: &str) -> String { msg.to_string() }
 
 pub async fn open(st: &Arc<AppState>, req: SessionRequest, file_size: Option<u64>) -> Result<String, String> {
+    open_with_start(st, req, file_size, false).await
+}
+
+pub async fn open_with_start(
+    st: &Arc<AppState>,
+    req: SessionRequest,
+    file_size: Option<u64>,
+    from_start: bool,
+) -> Result<String, String> {
     if !(req.url.starts_with("http://") || req.url.starts_with("https://") || req.url.starts_with("file://")) {
         return Err(bad("url должен быть http(s)"));
     }
@@ -163,9 +179,12 @@ pub async fn open(st: &Arc<AppState>, req: SessionRequest, file_size: Option<u64
     let media_id = media_id_for(&req.url, file_size);
     let kind = if req.url.starts_with("file://") { "file" } else { "lampa" };
     let (season, episode) = season_episode_of(&req);
+    let title = display_title(&req);
+    let original_title = req.card.as_ref().and_then(|c| c.original_title.clone());
+    let poster_url = poster_url_for(st.listen_port, &media_id, req.card.as_ref());
     let ep_title = episode.and_then(|e| req.episodes.iter().find(|x| x.episode == e).and_then(|x| x.name_en.clone().or_else(|| x.name_ru.clone())));
     {
-        let (mid, r) = (media_id.clone(), req.clone());
+        let (mid, r, title, original_title) = (media_id.clone(), req.clone(), title.clone(), original_title.clone());
         st.db(move |c| {
             let card = r.card.as_ref();
             c.execute(
@@ -176,8 +195,8 @@ pub async fn open(st: &Arc<AppState>, req: SessionRequest, file_size: Option<u64
                    season=excluded.season,episode=excluded.episode,episode_title=excluded.episode_title,updated_at=excluded.updated_at,hidden=0",
                 rusqlite::params![
                     mid, kind, r.url,
-                    card.map(|c| c.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| r.title.clone()),
-                    card.and_then(|c| c.original_title.clone()), card.and_then(|c| c.year),
+                    title,
+                    original_title, card.and_then(|c| c.year),
                     card.map(|c| c.tmdb_id).filter(|i| *i != 0), card.map(|c| c.kind.clone()), card.and_then(|c| c.imdb_id.clone()),
                     season, episode, ep_title, now()
                 ],
@@ -191,6 +210,7 @@ pub async fn open(st: &Arc<AppState>, req: SessionRequest, file_size: Option<u64
         id: uuid::Uuid::new_v4().to_string(),
         media_id: media_id.clone(),
         req: req.clone(),
+        from_start,
         src: st.cfg().with_auth(&req.url),
         probe: OnceLock::new(),
         audio_index: Mutex::new(0),
@@ -208,7 +228,14 @@ pub async fn open(st: &Arc<AppState>, req: SessionRequest, file_size: Option<u64
         cues_grew: Default::default(),
     });
     st.sessions.replace(Some(session.clone()));
-    let _ = st.app.emit("session:loading", serde_json::json!({ "title": req.title }));
+    let _ = st.app.emit("session:loading", serde_json::json!({
+        "title": title,
+        "originalTitle": original_title,
+        "season": season,
+        "episode": episode,
+        "posterUrl": poster_url,
+        "kind": kind,
+    }));
     show_main_window(&st.app);
 
     let st2 = st.clone();
@@ -222,14 +249,36 @@ pub async fn open(st: &Arc<AppState>, req: SessionRequest, file_size: Option<u64
     Ok(session.id.clone())
 }
 
+async fn commit_probed_media(
+    db: &Arc<Mutex<rusqlite::Connection>>,
+    media_id: &str,
+    cancel: &CancellationToken,
+    duration: f64,
+    from_start: bool,
+) -> Result<bool, String> {
+    if cancel.is_cancelled() {
+        return Ok(false);
+    }
+    let mid = media_id.to_string();
+    crate::state::db_task(db, move |c| {
+        if from_start {
+            c.execute("UPDATE media SET duration=?1, last_position=0 WHERE id=?2", rusqlite::params![duration, mid])?;
+        } else {
+            c.execute("UPDATE media SET duration=?1 WHERE id=?2", rusqlite::params![duration, mid])?;
+        }
+        Ok(())
+    })
+    .await?;
+    Ok(true)
+}
+
 async fn finish_open(st: &Arc<AppState>, s: &Arc<Session>) -> Result<(), String> {
     let p = tokio::select! {
         r = probe::probe(&s.src) => r.map_err(|e| e.to_string())?,
         _ = s.cancel.cancelled() => return Ok(()),
     };
-    {
-        let (mid, dur) = (s.media_id.clone(), p.duration);
-        st.db(move |c| { c.execute("UPDATE media SET duration=?1 WHERE id=?2", rusqlite::params![dur, mid])?; Ok(()) }).await?;
+    if !commit_probed_media(&st.db, &s.media_id, &s.cancel, p.duration, s.from_start).await? {
+        return Ok(());
     }
     let saved = st.db({ let m = s.media_id.clone(); move |c| c.query_row("SELECT audio_index FROM media WHERE id=?1", [&m], |r| r.get::<_, Option<u32>>(0)) }).await?;
     let audio = saved.filter(|i| p.audio.iter().any(|a| a.index == *i)).or_else(|| probe::default_audio(&p.audio)).unwrap_or(0);
@@ -313,5 +362,46 @@ mod tests {
         assert_eq!(resume_position(100.0, Some(300.0), 3600.0), 300.0);
         assert_eq!(resume_position(3590.0, None, 3600.0), 0.0);
         assert_eq!(resume_position(0.0, None, 0.0), 0.0);
+    }
+
+    #[tokio::test]
+    async fn from_start_resets_position_only_after_probe_without_cancellation() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO media(id,kind,source_url,title,last_position,updated_at) VALUES('m1','lampa','http://x','Film',425.5,100)",
+            [],
+        )
+        .unwrap();
+        let db = Arc::new(Mutex::new(conn));
+
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert!(!commit_probed_media(&db, "m1", &cancelled, 5000.0, true).await.unwrap());
+        let (pos, dur): (f64, Option<f64>) = db
+            .lock()
+            .unwrap()
+            .query_row("SELECT last_position, duration FROM media WHERE id='m1'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(pos, 425.5);
+        assert_eq!(dur, None);
+
+        let active = CancellationToken::new();
+        assert!(commit_probed_media(&db, "m1", &active, 5000.0, false).await.unwrap());
+        let (pos, dur): (f64, Option<f64>) = db
+            .lock()
+            .unwrap()
+            .query_row("SELECT last_position, duration FROM media WHERE id='m1'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(pos, 425.5);
+        assert_eq!(dur, Some(5000.0));
+
+        assert!(commit_probed_media(&db, "m1", &active, 5000.0, true).await.unwrap());
+        let pos: f64 = db
+            .lock()
+            .unwrap()
+            .query_row("SELECT last_position FROM media WHERE id='m1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(pos, 0.0);
     }
 }

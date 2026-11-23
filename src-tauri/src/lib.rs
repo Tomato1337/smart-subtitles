@@ -83,6 +83,7 @@ pub fn run() {
                 card_jobs: Default::default(),
                 asr: Default::default(),
                 models_dev: Default::default(),
+                lampa_last_seen: Default::default(),
             });
             app.manage(st.clone());
 
@@ -173,6 +174,7 @@ pub fn run() {
             commands::agent_send,
             commands::agent_history,
             commands::agent_usage,
+            commands::llm_monthly_usage,
             commands::cards_add,
             commands::cards_dismiss,
             commands::cards_job_create,
@@ -187,9 +189,11 @@ pub fn run() {
             commands::cards_job_delete,
             commands::cards_job_retry,
             commands::anki_refresh,
+            commands::anki_status,
             commands::anki_catalog,
             commands::anki_index_models,
             commands::anki_note_type,
+            commands::tts_preview,
             commands::cards_preview,
             commands::images_generate,
             commands::images_route,
@@ -203,6 +207,9 @@ pub fn run() {
             commands::llm_ping,
             commands::setup_status,
             commands::deps_check,
+            commands::system_info,
+            commands::open_dir,
+            commands::open_url,
             commands::patterns_exposure,
             commands::patterns_stats,
             commands::patterns_set_status,

@@ -1,10 +1,49 @@
 use super::{embedded, local, opensubtitles as os, parse, sidecar, store, torrserver};
 use crate::{notify::{self, Level}, session::Session, state::AppState, types::SubsStatus};
+use rusqlite::{params, Connection, OptionalExtension};
 use sha1::{Digest, Sha1};
 use std::{path::PathBuf, sync::Arc};
 use tauri::Emitter;
 
 pub(super) fn status(st: &AppState, e: SubsStatus) { let _ = st.app.emit("subs:status", e); }
+
+pub(super) fn ready_status(media_id: &str, kind: &str, exact: bool) -> SubsStatus {
+    let mut e = SubsStatus::new(media_id, "ready");
+    e.source = Some(match kind {
+        "sidecar" => "sidecar",
+        "embedded" => "embedded",
+        _ => "opensubtitles",
+    });
+    e.exact = Some(exact);
+    e
+}
+
+/// Previously stored subtitle source `(kind, exact)` when cues exist, counting a completed
+/// audio auto-sync on the same `file_path` as exact so reopening does not show the sync hint again.
+pub(super) fn cached_source(c: &Connection, media_id: &str) -> rusqlite::Result<Option<(String, bool)>> {
+    let n: i64 = c.query_row("SELECT count(*) FROM cue WHERE media_id=?1", [media_id], |r| r.get(0))?;
+    if n <= 0 {
+        return Ok(None);
+    }
+    let src: Option<(String, bool, String)> = c
+        .query_row(
+            "SELECT kind,exact,file_path FROM subtitle_source WHERE media_id=?1",
+            [media_id],
+            |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0, r.get(2)?)),
+        )
+        .optional()?;
+    let Some((kind, exact, file_path)) = src else { return Ok(None) };
+    let synced: bool = if exact {
+        false
+    } else {
+        c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sub_sync WHERE media_id=?1 AND source_path=?2 AND status='done')",
+            params![media_id, file_path],
+            |r| r.get(0),
+        )?
+    };
+    Ok(Some((kind, exact || synced)))
+}
 
 /// A source in the chain gave nothing: a persistent warning naming the film, unless the film was closed.
 pub(super) fn warn(st: &AppState, s: &Session, why: impl std::fmt::Display) {
@@ -49,11 +88,11 @@ pub async fn install(
     .await?;
     // `replace_cues` just dropped the embedded_load row, so nothing is being loaded any more.
     crate::types::set_state(st, s, None);
+    let _ = st.app.emit("subs:offset", serde_json::json!({ "mediaId": s.media_id, "offset": 0.0 }));
     let mut e = SubsStatus::new(&s.media_id, "ready");
     e.source = Some(kind);
     e.exact = Some(exact);
     status(st, e);
-    let _ = st.app.emit("subs:offset", serde_json::json!({ "mediaId": s.media_id, "offset": 0.0 }));
     let _ = st.app.emit("subs:updated", serde_json::json!({ "mediaId": s.media_id }));
     crate::llm::annotate::restart(st, s);
     // A track of the video file itself is already in time with it.
@@ -189,21 +228,12 @@ async fn try_opensubtitles(st: &Arc<AppState>, s: &Arc<Session>) -> Option<()> {
 pub async fn run(st: Arc<AppState>, s: Arc<Session>) {
     let mid = s.media_id.clone();
     let cached = st
-        .db(move |c| {
-            let n: i64 = c.query_row("SELECT count(*) FROM cue WHERE media_id=?1", [&mid], |r| r.get(0))?;
-            let src: Option<(String, bool)> = c
-                .query_row("SELECT kind,exact FROM subtitle_source WHERE media_id=?1", [&mid], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)))
-                .ok();
-            Ok(if n > 0 { src } else { None })
-        })
+        .db(move |c| cached_source(c, &mid))
         .await
         .ok()
         .flatten();
     if let Some((kind, exact)) = cached {
-        let mut e = SubsStatus::new(&s.media_id, "ready");
-        e.source = Some(match kind.as_str() { "sidecar" => "sidecar", "embedded" => "embedded", _ => "opensubtitles" });
-        e.exact = Some(exact);
-        status(&st, e);
+        status(&st, ready_status(&s.media_id, &kind, exact));
         let _ = st.app.emit("subs:updated", serde_json::json!({ "mediaId": s.media_id }));
         crate::llm::annotate::restart(&st, &s);
         if kind == "embedded" {
@@ -258,5 +288,49 @@ mod tests {
         assert_eq!(a, cache_file("ts:abc:1", "torrserver:2", "srt"));
         assert_eq!(a.extension().and_then(|e| e.to_str()), Some("srt"));
         assert_ne!(a, cache_file("ts:other:1", "torrserver:2", "srt"));
+    }
+
+    #[test]
+    fn cached_source_treats_done_sub_sync_for_same_file_as_exact() {
+        let c = Connection::open_in_memory().unwrap();
+        crate::db::init(&c).unwrap();
+        c.execute(
+            "INSERT INTO media(id,kind,source_url,title,updated_at) VALUES('m1','file','file:///m1.mkv','M1',0)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(cached_source(&c, "m1").unwrap(), None);
+
+        c.execute("INSERT INTO cue(media_id,idx,start,end,text) VALUES('m1',0,1.0,2.0,'Hi')", []).unwrap();
+        c.execute(
+            "INSERT INTO subtitle_source(media_id,kind,label,exact,file_path,fetched_at) VALUES('m1','opensubtitles','rel',0,'/cache/a.srt',0)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(cached_source(&c, "m1").unwrap(), Some(("opensubtitles".into(), false)));
+
+        // Failed sync leaves exact=false.
+        c.execute(
+            "INSERT INTO sub_sync(media_id,source_path,status,offset,support,detail,created_at) VALUES('m1','/cache/a.srt','failed',NULL,2,'weak',0)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(cached_source(&c, "m1").unwrap(), Some(("opensubtitles".into(), false)));
+
+        // Done sync for a different file still leaves exact=false.
+        c.execute(
+            "INSERT OR REPLACE INTO sub_sync(media_id,source_path,status,offset,support,detail,created_at) VALUES('m1','/cache/other.srt','done',1.2,8,NULL,0)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(cached_source(&c, "m1").unwrap(), Some(("opensubtitles".into(), false)));
+
+        // Done sync for the active file suppresses the non-exact hint on reopen.
+        c.execute(
+            "INSERT OR REPLACE INTO sub_sync(media_id,source_path,status,offset,support,detail,created_at) VALUES('m1','/cache/a.srt','done',1.2,8,NULL,0)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(cached_source(&c, "m1").unwrap(), Some(("opensubtitles".into(), true)));
     }
 }

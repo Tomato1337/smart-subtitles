@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
-import { Dialog, Icon, IconButton, Presence } from '@tomato1337/m3e-react'
+import { Chip, Dialog, Icon, IconButton, Kbd, Presence } from '@tomato1337/m3e-react'
 import type { AnkiCard, AnkiLabelMode, Chunk, ChunkKind, Cue } from '@/common/types/ipc'
 import { ankiTokenDecor, isLabelVisible, labelText, STATUS_RU } from '@/modules/Anki'
 import { keyLabel, useHotkeysStore } from '@/modules/Hotkeys'
@@ -128,22 +128,6 @@ const ANKI_MODES: { mode: AnkiLabelMode; label: string }[] = [
 ]
 
 type Pick = { sample: number; range: Range; text: string }
-
-function Kbd({ children }: { children: ReactNode }) {
-  return <kbd className="type-label-medium rounded-[var(--md-sys-shape-corner-extra-small)] bg-[var(--md-sys-color-surface-container-highest)] px-1.5 py-0.5">{children}</kbd>
-}
-
-function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`state-layer state-on-surface type-label-large relative rounded-full px-3 py-1 ${active ? 'bg-[var(--md-sys-color-secondary-container)] text-[var(--md-sys-color-on-secondary-container)]' : 'border border-[var(--md-sys-color-outline)]'}`}
-    >
-      {children}
-    </button>
-  )
-}
 
 /** Interactive legend for subtitle highlighting: live sample cues, a layer inspector and the reading rules. */
 export function HighlightGuide({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -300,11 +284,11 @@ function GuideDialog({ onClose }: { onClose: () => void }) {
           <div className="flex flex-col gap-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className="type-label-large w-32">Конструкции <Kbd>{keyLabel(hotkey.patterns)}</Kbd></span>
-              <Chip active={showPatterns} onClick={() => setShowPatterns((v) => !v)}>{showPatterns ? 'Вкл' : 'Выкл'}</Chip>
+              <Chip selected={showPatterns} label={showPatterns ? 'Вкл' : 'Выкл'} onClick={() => setShowPatterns((v) => !v)} />
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="type-label-large w-32">Подписи Anki</span>
-              {ANKI_MODES.map((m) => <Chip key={m.mode} active={ankiMode === m.mode} onClick={() => setAnkiMode(m.mode)}>{m.label}</Chip>)}
+              {ANKI_MODES.map((m) => <Chip key={m.mode} selected={ankiMode === m.mode} label={m.label} onClick={() => setAnkiMode(m.mode)} />)}
             </div>
             <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">«Только новые» подписывает карточки new и learning, «Все невыученные» добавляет young, трудные и пиявки. В примере bailed on имеет статус «молодое», поэтому в режиме «Только новые» подпись пропадает.</p>
           </div>

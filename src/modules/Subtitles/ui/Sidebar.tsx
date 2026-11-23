@@ -52,6 +52,12 @@ type Props = {
  renderEn: (cue: Cue, ann: CueAnnotation | undefined, active: boolean) => ReactNode
  /** The panel root, for the player screen's enter/exit presence. */
  ref?: Ref<HTMLElement>
+ /** Player chrome/timeline visibility; while visible the dialog list stays at full opacity. */
+ chromeVisible?: boolean
+ /** Target opacity (`0..1`) of header and inactive cues when idle; `>= 0.999` disables dimming. */
+ idleOpacity?: number
+ /** Any player-level menu, popover or modal dialog is open: keeps the dialog list at full opacity. */
+ keepAwake?: boolean
 }
 
 const FONT = { S: 'type-title-small', M: 'type-title-medium', L: 'type-title-large' } as const
@@ -131,9 +137,11 @@ const CueRow = memo(function CueRow({ cue, ann, active, focusFrom, focusTo, font
  const tail = active || needsRetry
  return (
   <div
+   data-cue-row=""
+   data-active={active ? 'true' : undefined}
    style={active ? ACTIVE_VARS : undefined}
-   className={`group relative overflow-hidden transition-colors duration-300 ease-out ${active
-    ? 'my-1 rounded-[var(--md-sys-shape-corner-extra-large)] bg-[var(--active-bg)] pb-3 text-[var(--md-sys-color-on-secondary-container)]'
+   className={`group relative overflow-hidden ${active
+    ? 'my-1 rounded-[var(--md-sys-shape-corner-extra-large)] border border-[var(--md-sys-color-secondary-container)]/75 bg-[var(--active-bg)] pb-3 text-[var(--md-sys-color-on-secondary-container)]'
     : 'mx-2 my-0.5 rounded-[var(--md-sys-shape-corner-large)] hover:bg-[color-mix(in_srgb,var(--md-sys-color-on-surface)_6%,transparent)]'}`}
   >
    <button
@@ -174,7 +182,18 @@ const CueRow = memo(function CueRow({ cue, ann, active, focusFrom, focusTo, font
 })
 
 /** Memoized: with stable callbacks from the player screen, its re-renders do not reach the list. */
-export const Sidebar = memo(function Sidebar({ mediaId, onReplay, onSlowReplay, onCard, onExplain, renderEn, ref }: Props) {
+export const Sidebar = memo(function Sidebar({
+ mediaId,
+ onReplay,
+ onSlowReplay,
+ onCard,
+ onExplain,
+ renderEn,
+ ref,
+ chromeVisible = true,
+ idleOpacity = 0.36,
+ keepAwake = false,
+}: Props) {
  const player = usePlayer()
  // Only the fields the list shows: the whole store also changes on analysis progress, reveal, status…
  const { cues, annotations, offset, showSidebarTranslation, sidebarFont, failedBatches, set } = useSubsStore(useShallow((s) => ({
@@ -186,8 +205,21 @@ export const Sidebar = memo(function Sidebar({ mediaId, onReplay, onSlowReplay, 
  const [query, setQuery] = useState('')
  const [searching, setSearching] = useState(false)
  const [gear, setGear] = useState(false)
+ const [scrollAwake, setScrollAwake] = useState(false)
  const list = useRef<VirtuosoHandle>(null)
  const lastScroll = useRef(0)
+ const scrollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+ const noteScroll = useCallback(() => {
+  lastScroll.current = Date.now()
+  setScrollAwake(true)
+  clearTimeout(scrollTimer.current)
+  scrollTimer.current = setTimeout(() => setScrollAwake(false), 5000)
+ }, [])
+ useEffect(() => () => clearTimeout(scrollTimer.current), [])
+
+ const clampedOpacity = Math.min(1, Math.max(0, idleOpacity))
+ const idle = !chromeVisible && !keepAwake && !scrollAwake && !searching && !gear && clampedOpacity < 0.999
 
  const rows = useMemo(() => {
   const q = query.trim().toLowerCase()
@@ -220,8 +252,15 @@ export const Sidebar = memo(function Sidebar({ mediaId, onReplay, onSlowReplay, 
  }), [player])
 
  return (
-  <aside ref={ref} data-tour="sidebar" className="m3e-motion-from-left flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--md-sys-shape-corner-extra-large)] bg-[var(--md-sys-color-surface-container-low)]" aria-label="Диалоги">
-   <div className="flex items-center justify-between pl-6 pr-2 pt-4 pb-2">
+  <aside
+   ref={ref}
+   data-tour="sidebar"
+   data-sidebar-idle={idle ? 'true' : undefined}
+   style={{ '--sidebar-idle-opacity': String(clampedOpacity) } as CSSProperties}
+   className="m3e-motion-from-left flex h-full min-h-0 flex-col overflow-hidden rounded-l-none rounded-r-[var(--md-sys-shape-corner-extra-large)] bg-[var(--md-sys-color-surface-container-low)]"
+   aria-label="Диалоги"
+  >
+   <div data-sidebar-header className="flex items-center justify-between pl-6 pr-2 pt-4 pb-2">
     <h2 className="type-title-large type-emph">Диалоги</h2>
     <div className="flex">
      {/* The menu anchors to the wrapper of its own trigger. */}
@@ -251,7 +290,7 @@ export const Sidebar = memo(function Sidebar({ mediaId, onReplay, onSlowReplay, 
      />
     </div>
    )}
-   <div className="min-h-0 flex-1 overflow-x-hidden" onWheel={() => { lastScroll.current = Date.now() }} onTouchMove={() => { lastScroll.current = Date.now() }}>
+   <div className="min-h-0 flex-1 overflow-x-hidden" onWheel={noteScroll} onTouchMove={noteScroll}>
     {rows.length === 0 ? (
      <p className="type-body-medium p-4 text-[var(--md-sys-color-on-surface-variant)]">{cues.length === 0 ? 'Реплик пока нет' : 'Ничего не найдено'}</p>
     ) : (

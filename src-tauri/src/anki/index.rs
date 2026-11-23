@@ -50,6 +50,8 @@ pub struct AnkiState {
     pub exact: HashSet<String>,
     /// Note types met in those decks, for the settings dialog's field pickers.
     pub models: Vec<IndexModel>,
+    pub updated_at: Option<i64>,
+    pub last_error: Option<String>,
     warned: Option<IndexFailure>,
 }
 
@@ -282,6 +284,8 @@ pub async fn refresh(st: &AppState) {
             s.cards = cards.clone();
             s.models = models;
             s.warned = None;
+            s.updated_at = Some(crate::db::now());
+            s.last_error = None;
             drop(s);
             let _ = st.app.emit("anki:index", &cards);
         }
@@ -290,6 +294,7 @@ pub async fn refresh(st: &AppState) {
             let failure = IndexFailure::of(&e);
             let (first, has_snapshot) = {
                 let mut s = st.anki.lock().unwrap();
+                s.last_error = Some(failure.message().to_owned());
                 (s.warned.replace(failure) != Some(failure), !s.cards.is_empty())
             };
             if first {

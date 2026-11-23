@@ -1,6 +1,18 @@
 import { useMutation } from '@tanstack/react-query'
+import { useEffect, useRef, useState } from 'react'
+import { IconButton, Presence } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
+import { keyLabel, useHotkeysStore } from '@/modules/Hotkeys'
+import {
+  createExactHintTimer,
+  dismissExactHint,
+  EXACT_HINT_MS,
+  formatSyncHint,
+  syncExactHint,
+  type ExactHintState,
+  type ExactHintTimer,
+} from '../lib/exactHint'
 import { useSubsStore } from '../store/subsStore'
 
 const LABEL = {
@@ -8,12 +20,53 @@ const LABEL = {
   downloading: 'Скачиваю субтитры…',
 } as const
 
-/** Subtitle acquisition state: progress, "not found" with the chooser, and the sync hint for non-exact matches. */
+/** Subtitle acquisition state: progress, "not found" with the chooser, and auto-hiding sync hint for non-exact matches. */
 export function SubsStatusBanner({ mediaId, llmEnabled, onChoose }: { mediaId: string; llmEnabled: boolean; onChoose: () => void }) {
   const status = useSubsStore((s) => s.status)
   const cueCount = useSubsStore((s) => s.cues.length)
+  const offset = useSubsStore((s) => s.offset)
   const annot = useSubsStore((s) => s.annot)
   const embedded = useSubsStore((s) => s.embedded)
+  const offsetMinus = useHotkeysStore((s) => s.bindings.offsetMinus)
+  const offsetPlus = useHotkeysStore((s) => s.bindings.offsetPlus)
+
+  const [exactHint, setExactHint] = useState<ExactHintState | null>(null)
+  const [hintPaused, setHintPaused] = useState(false)
+  const hintTimerRef = useRef<ExactHintTimer | null>(null)
+
+  const nextHint = syncExactHint(exactHint, status, offset)
+  if (nextHint !== exactHint) {
+    setExactHint(nextHint)
+    if (!nextHint || nextHint.dismissed) setHintPaused(false)
+  }
+
+  const showExactHint = exactHint !== null && !exactHint.dismissed
+  const hintStatus = exactHint?.status ?? null
+
+  useEffect(() => {
+    if (!showExactHint) {
+      hintTimerRef.current = null
+      return
+    }
+    const timer = createExactHintTimer(EXACT_HINT_MS, () => {
+      setExactHint((cur) => dismissExactHint(cur))
+      setHintPaused(false)
+    })
+    hintTimerRef.current = timer
+    return () => {
+      timer.dispose()
+      if (hintTimerRef.current === timer) hintTimerRef.current = null
+    }
+  }, [showExactHint, hintStatus])
+
+  useEffect(() => {
+    if (!showExactHint) return
+    const timer = hintTimerRef.current
+    if (!timer) return
+    if (hintPaused) timer.pause()
+    else timer.resume()
+  }, [showExactHint, hintStatus, hintPaused])
+
   const retry = useMutation({
     mutationFn: () => api.annotSet(mediaId, true),
     onError: (e) => notify('error', errorText(e)),
@@ -23,7 +76,7 @@ export function SubsStatusBanner({ mediaId, llmEnabled, onChoose }: { mediaId: s
   const growing = embedded?.phase === 'loading' || embedded?.phase === 'confirm'
   const items: React.ReactNode[] = []
   if (!llmEnabled) {
-    items.push(<div key="llm" className={chip}>LLM не настроен: Настройки → «Перевод и разбор»</div>)
+    items.push(<div key="llm" className={chip}>LLM не настроен: Настройки → «Модели ИИ»</div>)
   }
   if (status && status.state !== 'ready' && status.state !== 'none') {
     const pct = status.progress !== undefined ? ` ${Math.round(status.progress * 100)}%` : ''
@@ -42,9 +95,6 @@ export function SubsStatusBanner({ mediaId, llmEnabled, onChoose }: { mediaId: s
         </button>
       </div>,
     )
-  }
-  if (status?.state === 'ready' && status.exact === false) {
-    items.push(<div key="exact" className={chip}>Подобраны по названию — если рассинхрон, сдвиньте: Z / X</div>)
   }
   // Background analysis: progress while it runs, a retry when some batches were written off.
   if (llmEnabled && annot?.consent === 'on') {
@@ -77,7 +127,7 @@ export function SubsStatusBanner({ mediaId, llmEnabled, onChoose }: { mediaId: s
             <p>Не разобрано частей: {annot.total - annot.done}</p>
             {failure && <p className="type-body-medium">{failure.message}</p>}
             {failure?.blocked && (
-              <p className="type-body-small">Проверьте провайдера в «Настройки → Перевод и разбор», затем откройте фильм заново.</p>
+              <p className="type-body-small">Проверьте провайдера в «Настройки → Модели ИИ», затем откройте фильм заново.</p>
             )}
           </div>
           {!failure?.blocked && (
@@ -93,6 +143,40 @@ export function SubsStatusBanner({ mediaId, llmEnabled, onChoose }: { mediaId: s
       )
     }
   }
-  if (items.length === 0) return null
-  return <div className="pointer-events-none absolute inset-x-0 top-24 flex flex-col items-center gap-2">{items}</div>
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-24 z-10 flex flex-col items-center gap-2">
+      {items}
+      <Presence>
+        {showExactHint && (
+          <div
+            role="status"
+            className={`${chip} m3e-motion-pop flex items-center gap-2 py-1.5 pr-1.5 pl-4`}
+            onPointerEnter={() => setHintPaused(true)}
+            onPointerLeave={() => setHintPaused(false)}
+            onFocus={() => setHintPaused(true)}
+            onBlur={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHintPaused(false)
+            }}
+          >
+            <span>
+              {formatSyncHint(
+                offsetMinus ? keyLabel(offsetMinus) : null,
+                offsetPlus ? keyLabel(offsetPlus) : null,
+              )}
+            </span>
+            <IconButton
+              icon="close"
+              size="sm"
+              label="Скрыть подсказку"
+              noTip
+              onClick={() => {
+                setExactHint((cur) => dismissExactHint(cur))
+                setHintPaused(false)
+              }}
+            />
+          </div>
+        )}
+      </Presence>
+    </div>
+  )
 }

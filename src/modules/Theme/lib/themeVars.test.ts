@@ -24,4 +24,13 @@ describe('themeVars', () => {
     expect(dark).toMatch(/^#[0-9a-f]{6}$/)
     expect(light).not.toBe(dark)
   })
+
+  test('emits success roles in both modes', () => {
+    const dark = themeVars(input)
+    const light = themeVars({ ...input, mode: 'light' })
+    expect(dark['--app-success']).toMatch(/^#[0-9a-f]{6}$/)
+    expect(dark['--app-success-container']).toMatch(/^#[0-9a-f]{6}$/)
+    expect(dark['--app-on-success-container']).toMatch(/^#[0-9a-f]{6}$/)
+    expect(light['--app-success']).not.toBe(dark['--app-success'])
+  })
 })

@@ -72,6 +72,130 @@ pub fn setup_status(st: St<'_>) -> crate::setup::SetupStatus { crate::setup::sta
 #[tauri::command]
 pub fn deps_check() -> crate::deps::DepsStatus { crate::deps::status() }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemInfo {
+    pub version: String,
+    pub config_dir: String,
+    pub logs_dir: String,
+    pub vaapi_ok: bool,
+    pub listen_port: u16,
+    pub lampa_last_seen: std::collections::HashMap<String, i64>,
+}
+
+#[tauri::command]
+pub fn system_info(st: St<'_>) -> SystemInfo {
+    let cfg_dir = crate::config::config_dir();
+    let logs_dir = cfg_dir.join("logs");
+    SystemInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        config_dir: crate::setup::tilde(&cfg_dir),
+        logs_dir: crate::setup::tilde(&logs_dir),
+        vaapi_ok: st.vaapi_ok.load(Ordering::Relaxed),
+        listen_port: st.listen_port,
+        lampa_last_seen: st.lampa_last_seen.lock().unwrap().clone(),
+    }
+}
+
+fn resolve_allowed_dir(kind: &str) -> Res<std::path::PathBuf> {
+    match kind {
+        "config" => Ok(crate::config::config_dir()),
+        "logs" => Ok(crate::config::config_dir().join("logs")),
+        _ => Err(format!("неизвестный каталог: {kind}")),
+    }
+}
+
+#[tauri::command]
+pub fn open_dir(kind: String) -> Res<()> {
+    let dir = resolve_allowed_dir(&kind)?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("не удалось создать каталог: {e}"))?;
+    #[cfg(target_os = "linux")]
+    let mut cmd = crate::proc::command("xdg-open").into_std();
+    #[cfg(target_os = "macos")]
+    let mut cmd = crate::proc::command("open").into_std();
+    #[cfg(windows)]
+    let mut cmd = crate::proc::command("explorer").into_std();
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    return Err("открытие каталога не поддерживается на этой платформе".into());
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    {
+        cmd.arg(&dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("не удалось открыть каталог: {e}"))?;
+        Ok(())
+    }
+}
+
+fn validate_external_url(raw: &str) -> Res<url::Url> {
+    let u = url::Url::parse(raw).map_err(|e| format!("некорректный URL: {e}"))?;
+    if u.scheme() != "https" || u.host_str().is_none() {
+        return Err("разрешены только https-ссылки".into());
+    }
+    if !u.username().is_empty() || u.password().is_some() {
+        return Err("ссылка не должна содержать логин или пароль".into());
+    }
+    Ok(u)
+}
+
+#[cfg(windows)]
+fn open_url_windows(url: &str) -> Res<()> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr::{null, null_mut};
+
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ShellExecuteW(
+            hwnd: *mut std::ffi::c_void,
+            lp_operation: *const u16,
+            lp_file: *const u16,
+            lp_parameters: *const u16,
+            lp_directory: *const u16,
+            n_show_cmd: i32,
+        ) -> *mut std::ffi::c_void;
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    let op = wide("open");
+    let file = wide(url);
+    // Bypass cmd.exe so URL query separators like `&` cannot break or inject commands;
+    // ShellExecuteW returns an HINSTANCE <= 32 on error.
+    let rc = unsafe { ShellExecuteW(null_mut(), op.as_ptr(), file.as_ptr(), null(), null(), 1) } as isize;
+    if rc <= 32 {
+        return Err(format!("не удалось открыть ссылку (код {rc})"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn open_url(url: String) -> Res<()> {
+    let u = validate_external_url(&url)?;
+    #[cfg(windows)]
+    return open_url_windows(u.as_str());
+    #[cfg(target_os = "linux")]
+    let mut cmd = crate::proc::command("xdg-open").into_std();
+    #[cfg(target_os = "macos")]
+    let mut cmd = crate::proc::command("open").into_std();
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        cmd.arg(u.as_str())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("не удалось открыть ссылку: {e}"))?;
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    Err("открытие ссылок не поддерживается на этой платформе".into())
+}
+
 /// Saves and applies the config at once. Returns true when the change needs an app restart (server port).
 #[tauri::command]
 pub async fn config_save(st: St<'_>, cfg: crate::config::Config) -> Res<bool> {
@@ -158,6 +282,7 @@ pub struct RecentMedia {
     pub media_id: String,
     pub title: String,
     pub original_title: Option<String>,
+    pub year: Option<i32>,
     pub season: Option<u32>,
     pub episode: Option<u32>,
     pub duration: Option<f64>,
@@ -169,6 +294,9 @@ pub struct RecentMedia {
     pub annot_done: u32,
     pub annot_total: u32,
     pub poster_url: Option<String>,
+    pub sub_source: Option<String>,
+    pub cards_count: u32,
+    pub updated_at: i64,
 }
 
 /// Badge of a film's dialog analysis on the home screen.
@@ -182,35 +310,53 @@ fn annot_badge(cues: u32, consent: Option<&str>, done: u32, failed: u32) -> &'st
     "partial"
 }
 
+fn query_recent_media(c: &rusqlite::Connection, port: u16) -> rusqlite::Result<Vec<RecentMedia>> {
+    let mut q = c.prepare(
+        "SELECT media.id,media.title,media.original_title,media.year,media.season,media.episode,media.duration,media.last_position,media.source_url,media.kind,\
+                (SELECT count(*) FROM cue WHERE media_id=media.id),\
+                media.annot,\
+                (SELECT count(*) FROM annot_batch WHERE media_id=media.id AND status='done'),\
+                (SELECT count(*) FROM annot_batch WHERE media_id=media.id AND status='failed'),\
+                CASE WHEN (SELECT count(*) FROM cue WHERE media_id=media.id) = 0 THEN NULL WHEN ss.ref LIKE 'torrserver:%' THEN 'torrserver' ELSE ss.kind END,\
+                (SELECT count(*) FROM card_job WHERE media_id=media.id AND state NOT IN ('cancelled','deleted')),\
+                media.updated_at \
+         FROM media \
+         LEFT JOIN subtitle_source ss ON ss.media_id=media.id \
+         WHERE media.hidden=0 ORDER BY media.updated_at DESC LIMIT 20",
+    )?;
+    let rows = q.query_map([], |r| {
+        let media_id: String = r.get(0)?;
+        let cues: u32 = r.get(10)?;
+        let consent: Option<String> = r.get(11)?;
+        let done: u32 = r.get(12)?;
+        let failed: u32 = r.get(13)?;
+        Ok(RecentMedia {
+            poster_url: crate::poster::poster_path(&media_id).exists().then(|| crate::poster::url(port, &media_id)),
+            media_id,
+            title: r.get(1)?,
+            original_title: r.get(2)?,
+            year: r.get(3)?,
+            season: r.get(4)?,
+            episode: r.get(5)?,
+            duration: r.get(6)?,
+            last_position: r.get(7)?,
+            source_url: r.get(8)?,
+            kind: r.get(9)?,
+            annot: annot_badge(cues, consent.as_deref(), done, failed).into(),
+            annot_done: done,
+            annot_total: cues.div_ceil(crate::llm::annotate::BATCH),
+            sub_source: r.get(14)?,
+            cards_count: r.get(15)?,
+            updated_at: r.get(16)?,
+        })
+    })?;
+    rows.collect()
+}
+
 #[tauri::command]
 pub async fn media_recent(st: St<'_>) -> Res<Vec<RecentMedia>> {
     let port = st.listen_port;
-    st.db(move |c| {
-        let mut q = c.prepare(
-            "SELECT id,title,original_title,season,episode,duration,last_position,source_url,kind,\
-                    (SELECT count(*) FROM cue WHERE media_id=media.id),\
-                    annot,\
-                    (SELECT count(*) FROM annot_batch WHERE media_id=media.id AND status='done'),\
-                    (SELECT count(*) FROM annot_batch WHERE media_id=media.id AND status='failed')\
-             FROM media WHERE hidden=0 ORDER BY updated_at DESC LIMIT 20",
-        )?;
-        let rows = q.query_map([], |r| {
-            let media_id: String = r.get(0)?;
-            let cues: u32 = r.get(9)?;
-            let consent: Option<String> = r.get(10)?;
-            let done: u32 = r.get(11)?;
-            let failed: u32 = r.get(12)?;
-            Ok(RecentMedia {
-                poster_url: crate::poster::poster_path(&media_id).exists().then(|| crate::poster::url(port, &media_id)),
-                media_id, title: r.get(1)?, original_title: r.get(2)?, season: r.get(3)?, episode: r.get(4)?,
-                duration: r.get(5)?, last_position: r.get(6)?, source_url: r.get(7)?, kind: r.get(8)?,
-                annot: annot_badge(cues, consent.as_deref(), done, failed).into(),
-                annot_done: done,
-                annot_total: cues.div_ceil(crate::llm::annotate::BATCH),
-            })
-        })?;
-        rows.collect()
-    }).await
+    st.db(move |c| query_recent_media(c, port)).await
 }
 
 /// Forgets the consent of one film, so reopening it asks again (`block` badge in «Недавних»).
@@ -228,30 +374,35 @@ pub async fn media_set_hidden(st: St<'_>, media_id: String, hidden: bool) -> Res
 }
 
 #[tauri::command]
-pub async fn session_reopen(st: St<'_>, media_id: String) -> Res<String> {
+pub async fn session_reopen(st: St<'_>, media_id: String, from_start: Option<bool>) -> Res<String> {
     type Row = (String, String, String, Option<String>, Option<i32>, Option<i64>, Option<String>, Option<String>, Option<u32>, Option<u32>);
+    let mid = media_id.clone();
     let row: Row = st.db(move |c| c.query_row(
         "SELECT kind,source_url,title,original_title,year,tmdb_id,tmdb_type,imdb_id,season,episode FROM media WHERE id=?1",
-        [&media_id],
+        [&mid],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?)),
     )).await?;
     let (kind, url, title, original_title, year, tmdb_id, tmdb_type, imdb_id, season, episode) = row;
-    if kind == "file" {
+    let (req, size) = if kind == "file" {
         let path = url::Url::parse(&url).ok().and_then(|u| u.to_file_path().ok()).ok_or("битый путь")?;
         let (req, size) = file_request(&path.to_string_lossy())?;
-        return session::open(&st, req, Some(size)).await;
-    }
-    let card = (original_title.is_some() || tmdb_id.is_some()).then(|| Card {
-        tmdb_id: tmdb_id.unwrap_or(0),
-        kind: tmdb_type.unwrap_or_else(|| "movie".into()),
-        title: title.clone(),
-        original_title,
-        year,
-        imdb_id,
-        poster: None,
-    });
-    let req = SessionRequest { url, title, path: None, subtitles: vec![], resume_at: None, card, season, episode, episodes: vec![], playlist: vec![] };
-    session::open(&st, req, None).await
+        (req, Some(size))
+    } else {
+        let card = (original_title.is_some() || tmdb_id.is_some()).then(|| Card {
+            tmdb_id: tmdb_id.unwrap_or(0),
+            kind: tmdb_type.unwrap_or_else(|| "movie".into()),
+            title: title.clone(),
+            original_title,
+            year,
+            imdb_id,
+            poster: None,
+        });
+        (
+            SessionRequest { url, title, path: None, subtitles: vec![], resume_at: None, card, season, episode, episodes: vec![], playlist: vec![] },
+            None,
+        )
+    };
+    session::open_with_start(&st, req, size, from_start == Some(true)).await
 }
 
 fn current_for(st: &AppState, media_id: &str) -> Res<Arc<session::Session>> {
@@ -413,6 +564,12 @@ pub async fn agent_usage(st: St<'_>, media_id: String) -> Res<crate::llm::agent:
     crate::llm::agent::usage(&st, &media_id).await
 }
 
+#[tauri::command]
+pub async fn llm_monthly_usage(st: St<'_>, days: Option<u32>) -> Res<crate::llm::usage::MonthlyUsage> {
+    let days = days.unwrap_or(30);
+    st.db(move |c| crate::llm::usage::query_monthly(c, days)).await
+}
+
 /// Queues the chosen words of a proposal for Anki; jobs own their cards from here on.
 #[tauri::command]
 pub async fn cards_add(st: St<'_>, proposal_id: i64, indices: Vec<usize>) -> Res<()> {
@@ -505,6 +662,55 @@ pub async fn cards_job_retry(st: St<'_>, job_id: String) -> Res<crate::anki::job
 pub async fn anki_refresh(st: St<'_>) -> Res<()> {
     crate::anki::index::refresh(&st).await;
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnkiStatus {
+    pub ok: bool,
+    pub checked_at: i64,
+    pub error: Option<String>,
+    pub index_count: usize,
+    pub index_updated_at: Option<i64>,
+    pub queued_cards: u32,
+}
+
+fn count_queued_cards(c: &rusqlite::Connection) -> rusqlite::Result<u32> {
+    c.query_row(
+        "SELECT count(*) FROM card_job WHERE state IN ('grace','queued','drafting','generating','committing','resolving','failed','interrupted')",
+        [],
+        |r| r.get(0),
+    )
+}
+
+fn parse_anki_version(probe: Result<serde_json::Value, crate::anki::connect::AnkiError>) -> (bool, Option<String>) {
+    match probe {
+        Ok(v) if v.as_i64().is_some() => (true, None),
+        Ok(_) => (false, Some("AnkiConnect version: ответ не число".into())),
+        Err(e) => (false, Some(e.to_string())),
+    }
+}
+
+#[tauri::command]
+pub async fn anki_status(st: St<'_>) -> Res<AnkiStatus> {
+    let url = st.cfg().anki.url.clone();
+    let probe = crate::anki::connect::Client::new(&st.http, &url)
+        .call("version", serde_json::json!({}), std::time::Duration::from_secs(3))
+        .await;
+    let checked_at = now();
+    let (ok, error) = parse_anki_version(probe);
+    let (index_count, index_updated_at) = {
+        let s = st.anki.lock().unwrap_or_else(|e| e.into_inner());
+        (s.cards.len(), s.updated_at)
+    };
+    let queued_cards = st.db(count_queued_cards).await?;
+    Ok(AnkiStatus { ok, checked_at, error, index_count, index_updated_at, queued_cards })
+}
+
+#[tauri::command]
+pub async fn tts_preview(voice: String, text: Option<String>) -> Res<String> {
+    let text = text.unwrap_or_else(|| "It'll bring him joy.".into());
+    crate::anki::tts::preview(&voice, &text).await
 }
 
 /// Decks with card counts and note types with their fields, for the settings dialog's lists.
@@ -710,7 +916,7 @@ pub fn log_events(lines: Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::annot_badge;
+    use super::{annot_badge, count_queued_cards, parse_anki_version, query_recent_media, resolve_allowed_dir, validate_external_url};
 
     #[test]
     fn annot_badge_rules() {
@@ -720,5 +926,103 @@ mod tests {
         assert_eq!(annot_badge(100, None, 0, 0), "new");
         assert_eq!(annot_badge(100, Some("on"), 2, 1), "failed");
         assert_eq!(annot_badge(100, Some("on"), 1, 0), "partial");
+    }
+
+    #[test]
+    fn resolve_allowed_dir_accepts_only_config_and_logs() {
+        let cfg = crate::config::config_dir();
+        assert_eq!(resolve_allowed_dir("config").unwrap(), cfg);
+        assert_eq!(resolve_allowed_dir("logs").unwrap(), cfg.join("logs"));
+        for bad in ["", "cache", "tmp", "../", "/etc", "Config"] {
+            assert!(resolve_allowed_dir(bad).is_err(), "expected {bad:?} to be rejected");
+        }
+    }
+
+    #[test]
+    fn validate_external_url_allows_only_https() {
+        assert_eq!(validate_external_url("https://example.com/a?b=1").unwrap().as_str(), "https://example.com/a?b=1");
+        assert_eq!(validate_external_url("https://example.com/?a=1&b=2").unwrap().as_str(), "https://example.com/?a=1&b=2");
+        for bad in [
+            "",
+            "not a url",
+            "http://example.com",
+            "http://127.0.0.1:47800",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "https://",
+            "https://user:pass@example.com",
+            "https://user@example.com",
+            "https://:pass@example.com",
+        ] {
+            assert!(validate_external_url(bad).is_err(), "expected {bad:?} to be rejected");
+        }
+    }
+
+    #[test]
+    fn anki_status_version_validation() {
+        assert_eq!(parse_anki_version(Ok(serde_json::json!(6))), (true, None));
+        let (ok, err) = parse_anki_version(Ok(serde_json::json!("6")));
+        assert!(!ok);
+        assert!(err.unwrap().contains("не число"));
+        let (ok, err) = parse_anki_version(Ok(serde_json::Value::Null));
+        assert!(!ok);
+        assert!(err.is_some());
+        let (ok, err) = parse_anki_version(Err(crate::anki::connect::AnkiError::Refused("refused".into())));
+        assert!(!ok);
+        assert_eq!(err.as_deref(), Some("refused"));
+    }
+
+    #[test]
+    fn recent_media_includes_year_sub_source_cards_count_and_updated_at() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init(&c).unwrap();
+        c.execute(
+            "INSERT INTO media(id,kind,source_url,title,original_title,year,updated_at) VALUES
+             ('m1','lampa','http://x','Фильм 1','Film 1',2024,300),
+             ('m2','lampa','http://y','Фильм 2','Film 2',2023,200),
+             ('m3','lampa','http://z','Фильм 3','Film 3',2022,100)",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO cue(media_id,idx,start,end,text) VALUES
+             ('m1',0,0.0,1.0,'Hi'),
+             ('m2',0,0.0,1.0,'Hey')",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO subtitle_source(media_id,kind,label,exact,file_path,fetched_at,ref) VALUES
+             ('m1','opensubtitles','en.srt',1,'/tmp/en1.srt',100,'opensubtitles:1'),
+             ('m2','sidecar','tor.srt',1,'/tmp/en2.srt',100,'torrserver:2'),
+             ('m3','opensubtitles','empty.srt',1,'/tmp/en3.srt',100,'opensubtitles:3')",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO card_job(id,origin,media_id,cue_idx,state,context_json,created_at,updated_at) VALUES
+             ('j1','quick','m1',0,'added','{}',1,1),
+             ('j2','quick','m1',1,'queued','{}',2,2),
+             ('j3','quick','m1',2,'cancelled','{}',3,3),
+             ('j4','quick','m1',3,'deleted','{}',4,4)",
+            [],
+        )
+        .unwrap();
+
+        let items = query_recent_media(&c, 47800).unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].media_id, "m1");
+        assert_eq!(items[0].year, Some(2024));
+        assert_eq!(items[0].sub_source.as_deref(), Some("opensubtitles"));
+        assert_eq!(items[0].cards_count, 2);
+        assert_eq!(items[0].updated_at, 300);
+
+        assert_eq!(items[1].media_id, "m2");
+        assert_eq!(items[1].sub_source.as_deref(), Some("torrserver"));
+
+        assert_eq!(items[2].media_id, "m3");
+        assert_eq!(items[2].sub_source, None);
+
+        assert_eq!(count_queued_cards(&c).unwrap(), 1);
     }
 }

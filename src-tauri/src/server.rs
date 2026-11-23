@@ -90,6 +90,7 @@ async fn post_session(State(st): State<Arc<AppState>>, headers: HeaderMap, body:
         if !st.cfg().lampa.origins.contains(&o) {
             return err(StatusCode::FORBIDDEN, "origin не разрешён");
         }
+        st.lampa_last_seen.lock().unwrap().insert(o, crate::db::now());
     }
     let req: SessionRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,

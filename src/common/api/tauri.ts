@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
- AnkiCard, AnnotCost, AnnotEstimate, AnnotModel, AnnotStatus, AppConfig, AppNotification, CardJob, CardJobEditor, CardJobPage, CardPreview, CardsResult, Catalog, ChatMessage, ChatUsage, DepsStatus, EmbeddedState, Explanation, GeneratedImage, ImageRouteView, IndexModel, InirTheme, JobCursor, JobGrace, LlmPing, LlmProvider, ModelInfo, NoteTypeView, NotifyLevel, OpenStream, PatternOccurrence, PatternStat, SessionState, SetupStatus, SubCandidate, SubsCandidates, SubsList, TorrentHealth, WordDraft,
+ AnkiCard, AnkiConnectionStatus, AnnotCost, AnnotEstimate, AnnotModel, AnnotStatus, AppConfig, AppNotification, CardJob, CardJobEditor, CardJobPage, CardPreview, CardsResult, Catalog, ChatMessage, ChatUsage, DepsStatus, EmbeddedState, Explanation, GeneratedImage, ImageRouteView, IndexModel, InirTheme, JobCursor, JobGrace, LlmPing, LlmProvider, ModelInfo, MonthlyUsage, NoteTypeView, NotifyLevel, OpenStream, PatternOccurrence, PatternStat, SessionLoading, SessionState, SetupStatus, SubCandidate, SubsCandidates, SubsList, SystemInfo, TorrentHealth, WordDraft,
 } from '@/common/types/ipc'
 import { logEvent } from './eventLog'
 
@@ -35,6 +35,7 @@ export type RecentMedia = {
  mediaId: string
  title: string
  originalTitle: string | null
+ year: number | null
  season: number | null
  episode: number | null
  duration: number | null
@@ -47,6 +48,9 @@ export type RecentMedia = {
  annotTotal: number
  /** Cached poster on the local media server; null when none is cached yet. */
  posterUrl: string | null
+ subSource: 'torrserver' | 'sidecar' | 'opensubtitles' | 'embedded' | null
+ cardsCount: number
+ updatedAt: number
 }
 
 export const api = {
@@ -54,7 +58,7 @@ export const api = {
  sessionClose: () => call<void>('session_close'),
  sessionOpenFile: (path: string) => call<string>('session_open_file', { path }),
  sessionOpenPlaylistItem: (index: number) => call<string>('session_open_playlist_item', { index }),
- sessionReopen: (mediaId: string) => call<string>('session_reopen', { mediaId }),
+ sessionReopen: (mediaId: string, fromStart?: boolean) => call<string>('session_reopen', { mediaId, fromStart }),
  mediaRecent: () => call<RecentMedia[]>('media_recent'),
  /** Forgets the analysis consent of a film, so reopening it asks again. */
  mediaResetAnnot: (mediaId: string) => call<void>('media_reset_annot', { mediaId }),
@@ -117,6 +121,10 @@ export const api = {
  cardsJobDelete: (jobId: string) => call<CardJob>('cards_job_delete', { jobId }),
  cardsJobRetry: (jobId: string) => call<CardJob>('cards_job_retry', { jobId }),
  ankiRefresh: () => call<void>('anki_refresh'),
+ /** Quick ping + index stats + queued card count for Home & Settings banners. */
+ ankiStatus: () => call<AnkiConnectionStatus>('anki_status'),
+ /** Synthesizes and caches a short preview sample for an edge-tts voice, returning base64 MP3. */
+ ttsPreview: (voice: string, text?: string) => call<string>('tts_preview', { voice, text }),
  /** Decks with card counts and note types with their fields; fails when Anki is not running. */
  ankiCatalog: () => call<Catalog>('anki_catalog'),
  /** Note types the known-words index reads (re-read after every `anki:index`). */
@@ -159,6 +167,14 @@ export const api = {
  setupStatus: () => call<SetupStatus>('setup_status'),
  /** Installed system tools; a missing required one gets a toast on start. */
  depsCheck: () => call<DepsStatus>('deps_check'),
+ /** App version, paths, VAAPI status and Lampa last-seen timestamps. */
+ systemInfo: () => call<SystemInfo>('system_info'),
+ /** Opens config or logs directory in the OS file manager. */
+ openDir: (kind: 'config' | 'logs') => call<void>('open_dir', { kind }),
+ /** Opens an external https URL in the default browser. */
+ openUrl: (url: string) => call<void>('open_url', { url }),
+ /** Aggregated LLM token and USD usage for the recent window. */
+ llmMonthlyUsage: (days?: number) => call<MonthlyUsage>('llm_monthly_usage', { days }),
 
  /** Warn/error notifications kept until the user deletes them. */
  notificationsList: () => call<AppNotification[]>('notifications_list'),
@@ -168,7 +184,7 @@ export const api = {
 }
 
 export type AppEvents = {
- 'session:loading': { title: string }
+ 'session:loading': SessionLoading
  'session:opened': SessionState
  'subs:status': import('@/common/types/ipc').SubsStatus
  'subs:updated': { mediaId: string }

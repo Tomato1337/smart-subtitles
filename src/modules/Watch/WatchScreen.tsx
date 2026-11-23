@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useShallow } from 'zustand/react/shallow'
 import { ButtonGroup, IconButton, Presence, ToggleButton, toast, usePresence } from '@tomato1337/m3e-react'
@@ -57,6 +57,42 @@ function PatternExposure({ mediaId }: { mediaId: string }) {
  return null
 }
 
+/** Tracks any modal dialog, notification panel, or open menu outside Sidebar without polling. */
+function useDomOverlayOpen() {
+ const [open, setOpen] = useState(false)
+ useEffect(() => {
+  let raf = 0
+  const check = () => {
+   raf = 0
+   setOpen(Boolean(document.querySelector('dialog[open], [role="dialog"], [role="menu"]:not([data-closing])')))
+  }
+  const schedule = () => {
+   if (!raf) raf = requestAnimationFrame(check)
+  }
+  check()
+  const observer = new MutationObserver(schedule)
+  observer.observe(document.body, {
+   childList: true,
+   subtree: true,
+   attributes: true,
+   attributeFilter: ['open', 'role', 'data-closing'],
+  })
+  return () => {
+   if (raf) cancelAnimationFrame(raf)
+   observer.disconnect()
+  }
+ }, [])
+ return open
+}
+
+/** Isolates popover/modal/menu wake subscriptions from WatchLayout so hover popovers never re-render the video stage. */
+function SidebarDock({ modalOpen, ...props }: ComponentProps<typeof Sidebar> & { modalOpen: boolean }) {
+ const explainOpen = useExplainStore((s) => s.target !== null)
+ const cardsModalOpen = useCardsStore((s) => s.activityOpen || s.editor !== null)
+ const domOverlayOpen = useDomOverlayOpen()
+ return <Sidebar {...props} keepAwake={modalOpen || explainOpen || cardsModalOpen || domOverlayOpen} />
+}
+
 function WatchLayout({ session, onBack }: { session: SessionState; onBack: () => void }) {
  const p = usePlayer()
  const playing = usePlaybackStore((s) => s.playing)
@@ -98,6 +134,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
  const [guide, setGuide] = useState(false)
  const [hotkeysOpen, setHotkeysOpen] = useState(false)
  const [subsOpen, setSubsOpen] = useState(false)
+ const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
  const openGuide = useCallback(() => { p.pause(); setGuide(true) }, [p])
 
  // Consent dialog: asked once per mount, as soon as the cues and the analysis state are known.
@@ -355,6 +392,8 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
  useMediaSession(session, p, openEpisode)
 
  const showSidebar = subs.sidebarOpen && !subs.hideMode
+ const idleOpacity = config.data?.subtitles.idleOpacity ?? 0.36
+ const modalOpen = settingsMenuOpen || guide || hotkeysOpen || subsOpen || gate !== null || hold !== null || tourShown
  // The side panels slide out before their grid column goes away.
  const sidebarRef = useRef<HTMLElement>(null)
  const chatRef = useRef<HTMLElement>(null)
@@ -366,7 +405,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
    style={{ gridTemplateColumns: [sidebar.mounted && '360px', 'minmax(0,1fr)', chat.mounted && '400px'].filter(Boolean).join(' ') }}
   >
    {sidebar.mounted && (
-    <Sidebar
+    <SidebarDock
      ref={sidebarRef}
      mediaId={session.mediaId}
      onReplay={replay}
@@ -374,6 +413,9 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
      onCard={cardForCue}
      onExplain={explainCue}
      renderEn={sidebarEn}
+     chromeVisible={visible}
+     idleOpacity={idleOpacity}
+     modalOpen={modalOpen}
     />
    )}
    {/* Flush against the dialog list (no gutter, square corners on that side); rounded only on the side
@@ -439,6 +481,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
          onHotkeys={() => setHotkeysOpen(true)}
          onAnnotate={() => { setResumeOnClose(usePlaybackStore.getState().playing); setGate('ask') }}
          onChooseSubs={() => setSubsOpen(true)}
+         onOpenChange={setSettingsMenuOpen}
         />
         <IconButton icon="fullscreen" label={withKey('Полный экран', hotkey.fullscreen)} data-tour="fullscreen" onClick={() => void toggleFullscreen()} />
        </>

@@ -104,6 +104,9 @@ pub fn validate(cfg: &Config) -> Result<(), String> {
         }
         seen.push(s.as_str());
     }
+    if !cfg.subtitles.idle_opacity.is_finite() || !(0.0..=1.0).contains(&cfg.subtitles.idle_opacity) {
+        return Err(format!("subtitles.idleOpacity: ожидается число от 0 до 1, получено {}", cfg.subtitles.idle_opacity));
+    }
     Ok(())
 }
 
@@ -225,7 +228,7 @@ pub struct SetupStatus {
 }
 
 /// `$HOME` replaced by `~`, so the path fits in a hint and in the agent guide.
-fn tilde(path: &std::path::Path) -> String {
+pub(crate) fn tilde(path: &std::path::Path) -> String {
     match dirs::home_dir().and_then(|h| path.strip_prefix(h).ok().map(|p| p.to_path_buf())) {
         Some(rel) => format!("~/{}", rel.display()),
         None => path.display().to_string(),
@@ -576,6 +579,24 @@ mod tests {
         assert_eq!(Config::default().subtitles.sources, crate::config::SUBTITLE_SOURCES);
         let c = merge_patch(&Config::default(), serde_json::json!({"subtitles":{"sources":["opensubtitles","sidecar"]}})).unwrap();
         assert_eq!(c.subtitles.sources, vec!["opensubtitles", "sidecar"]);
+    }
+
+    #[test]
+    fn subtitles_idle_opacity_is_bounded() {
+        for ok in [0.0, 0.36, 1.0] {
+            let mut c = Config::default();
+            c.subtitles.idle_opacity = ok;
+            assert!(validate(&c).is_ok(), "expected {ok} to be valid");
+        }
+        for bad in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
+            let mut c = Config::default();
+            c.subtitles.idle_opacity = bad;
+            let err = validate(&c).unwrap_err();
+            assert!(err.starts_with("subtitles.idleOpacity:"), "unexpected error for {bad}: {err}");
+        }
+        let custom = cfg(r#"{"subtitles":{"idleOpacity":0.5}}"#);
+        let reset = merge_patch(&custom, serde_json::json!({"subtitles":{"idleOpacity":null}})).unwrap();
+        assert_eq!(reset.subtitles.idle_opacity, 0.36);
     }
 
     #[test]

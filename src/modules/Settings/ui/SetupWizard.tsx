@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Dialog, Icon, IconButton, Spinner, Switch, toast } from '@tomato1337/m3e-react'
+import { Button, Dialog, Icon, IconButton, Select, Spinner, Switch, TextField, toast } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { AppConfig, LlmProvider, SetupStatus, SetupStep } from '@/common/types/ipc'
 import { IMAGE_BACKENDS, imageRouteLabel, tutorOwnsImages } from './ImageFields'
 import { LlmFields } from './LlmFields'
-import { CEFR, Field, Secret, Text, inputClass } from './SettingsPanel'
+import { CEFR, SecretField, type ApplyConfig } from './SettingsPrimitives'
 
 const STEPS = ['welcome', 'llm', 'opensubtitles', 'lampa', 'anki', 'done'] as const
 type Step = (typeof STEPS)[number]
@@ -26,14 +26,9 @@ const IMPORTANCE_RU: Record<SetupStep['importance'], string> = {
   optional: 'необязательно',
 }
 
-const PRIMARY =
-  'state-layer state-on-primary type-label-large relative flex items-center gap-2 rounded-full bg-[var(--md-sys-color-primary)] px-5 py-2 text-[var(--md-sys-color-on-primary)] disabled:opacity-40'
-const TONAL =
-  'state-layer type-label-large relative rounded-full bg-[var(--md-sys-color-secondary-container)] px-5 py-2 text-[var(--md-sys-color-on-secondary-container)]'
-const TEXT_BUTTON = 'state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-primary)]'
 const HINT = 'type-body-small text-[var(--md-sys-color-on-surface-variant)]'
 
-/** First-run wizard: the same fields as the settings panel, one topic per step, plus an agent hand-off. */
+/** First-run wizard: one topic per step using m3e kit controls, plus an agent hand-off. */
 export function SetupWizard({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState<Step>('welcome')
   const [agentMode, setAgentMode] = useState(false)
@@ -65,7 +60,9 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
           onClose={onClose}
         />
       ) : (
-        <div className="px-6 pb-6"><Spinner label="Загрузка" className="m-6" /></div>
+        <div className="px-6 pb-6">
+          <Spinner label="Загрузка" className="m-6" />
+        </div>
       )}
     </Dialog>
   )
@@ -83,8 +80,6 @@ function Progress({ step }: { step: Step }) {
     </div>
   )
 }
-
-type Apply = <S extends keyof AppConfig>(section: S, patch: Partial<AppConfig[S]>) => void
 
 type BodyProps = {
   saved: AppConfig
@@ -114,9 +109,12 @@ function Body({ saved, providers, setup, step, agentMode, onAgentMode, onGo, onC
     onError: (e) => notify('error', errorText(e)),
   })
 
-  const set: Apply = (section, patch) => setCfg((c) => ({ ...c, [section]: { ...c[section], ...patch } }))
+  const set: ApplyConfig = (section, patch) => setCfg((c) => ({ ...c, [section]: { ...c[section], ...patch } }))
   const go = (delta: number) => onGo(STEPS[STEPS.indexOf(step) + delta])
-  const next = () => { if (dirty) save.mutate(undefined, { onSuccess: () => go(1) }); else go(1) }
+  const next = () => {
+    if (dirty) save.mutate(undefined, { onSuccess: () => go(1) })
+    else go(1)
+  }
 
   return (
     <>
@@ -152,7 +150,14 @@ function Body({ saved, providers, setup, step, agentMode, onAgentMode, onGo, onC
   )
 }
 
-function Footer({ step, dirty, pending, onBack, onSkip, onNext }: {
+function Footer({
+  step,
+  dirty,
+  pending,
+  onBack,
+  onSkip,
+  onNext,
+}: {
   step: Step
   dirty: boolean
   pending: boolean
@@ -164,13 +169,13 @@ function Footer({ step, dirty, pending, onBack, onSkip, onNext }: {
   const editable = step !== 'done'
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-[var(--md-sys-color-outline-variant)] px-6 py-4">
-      <button type="button" className={TEXT_BUTTON} onClick={onBack}>Назад</button>
+      <Button variant="text" onClick={onBack}>Назад</Button>
       <span className="flex-1" />
-      {editable && <button type="button" className={TEXT_BUTTON} onClick={onSkip}>Пропустить</button>}
+      {editable && <Button variant="text" onClick={onSkip}>Пропустить</Button>}
       {editable && (
-        <button type="button" className={PRIMARY} disabled={pending} onClick={onNext}>
+        <Button variant="filled" disabled={pending} onClick={onNext}>
           {dirty ? 'Сохранить и далее' : 'Далее'}
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -184,7 +189,14 @@ function promptFor(guideUrl: string): string {
   ].join('\n')
 }
 
-function Welcome({ prompt, steps, agentMode, onAgentMode, onStart, onFinish }: {
+function Welcome({
+  prompt,
+  steps,
+  agentMode,
+  onAgentMode,
+  onStart,
+  onFinish,
+}: {
   prompt: string
   steps: SetupStep[]
   agentMode: boolean
@@ -208,24 +220,24 @@ function Welcome({ prompt, steps, agentMode, onAgentMode, onStart, onFinish }: {
       )}
       <p className="type-body-large">
         Плеер показывает английские субтитры с переводом, подсвечивает идиомы и грамматику и добавляет фразы в Anki.
-        Настройка займёт пару минут, любой шаг можно пропустить и вернуться к нему позже через ⚙ → «Мастер настройки».
+        Настройка займёт пару минут, любой шаг можно пропустить и вернуться к нему позже через Настройки → «Мастер настройки».
       </p>
       <div className="flex flex-wrap gap-2">
-        <button type="button" className={PRIMARY} onClick={onStart}>Настроить по шагам</button>
-        <button type="button" className={TONAL} onClick={onAgentMode}>Настроить с агентом</button>
+        <Button variant="filled" onClick={onStart}>Настроить по шагам</Button>
+        <Button variant="tonal" onClick={onAgentMode}>Настроить с агентом</Button>
       </div>
       {agentMode && (
         <>
           <p className="type-body-medium">
             Вставьте этот текст своему агенту (Claude Code, Codex, omp…): он прочитает инструкцию и настроит плеер через локальный API.
           </p>
-          <textarea readOnly rows={5} value={prompt} className={`${inputClass} resize-y`} />
+          <TextField multiline readOnly rows={5} aria-label="Промпт для ИИ-агента" variant="outlined" value={prompt} />
           <div>
-            <button type="button" className={TONAL} onClick={copy}>Скопировать</button>
+            <Button variant="tonal" icon="content_copy" onClick={copy}>Скопировать</Button>
           </div>
           <StatusList steps={steps} />
           <div>
-            <button type="button" className={PRIMARY} onClick={onFinish}>К итогам</button>
+            <Button variant="filled" onClick={onFinish}>К итогам</Button>
           </div>
         </>
       )}
@@ -233,43 +245,65 @@ function Welcome({ prompt, steps, agentMode, onAgentMode, onStart, onFinish }: {
   )
 }
 
-function StepLlm({ cfg, providers, set }: { cfg: AppConfig; providers: LlmProvider[] | undefined; set: Apply }) {
+function StepLlm({ cfg, providers, set }: { cfg: AppConfig; providers: LlmProvider[] | undefined; set: ApplyConfig }) {
   return (
     <>
       <p className="type-body-medium">
         Без LLM плеер покажет только субтитры. Подойдёт ключ DeepSeek или провайдер, уже настроенный в ваших агентах.
       </p>
       <LlmFields llm={cfg.llm} providers={providers} onChange={(p) => set('llm', p)} />
-      <Field label="Мой уровень" hint="Если Tutor запущен, уровень берётся из него">
-        <select value={cfg.learner.cefr} onChange={(e) => set('learner', { cefr: e.target.value })} className={inputClass}>
-          {CEFR.map((l) => <option key={l} value={l}>{l}</option>)}
-        </select>
-      </Field>
+      <Select
+        label="Мой уровень"
+        hint="Если Tutor запущен, уровень берётся из него"
+        variant="outlined"
+        value={cfg.learner.cefr}
+        onChange={(e) => set('learner', { cefr: e.target.value })}
+      >
+        {CEFR.map((l) => (
+          <option key={l} value={l}>
+            {l}
+          </option>
+        ))}
+      </Select>
     </>
   )
 }
 
-function StepSubs({ cfg, set }: { cfg: AppConfig; set: Apply }) {
+function StepSubs({ cfg, set }: { cfg: AppConfig; set: ApplyConfig }) {
   return (
     <>
       <p className="type-body-medium">
         Ключ OpenSubtitles нужен, чтобы находить субтитры, даже если их нет в раздаче. Получить:{' '}
         <span className="select-all">https://www.opensubtitles.com/consumers</span>.
       </p>
-      <Field label="API-ключ">
-        <Secret value={cfg.opensubtitles.apiKey} onChange={(apiKey) => set('opensubtitles', { apiKey })} />
-      </Field>
-      <Field label="Логин">
-        <Text value={cfg.opensubtitles.username} onChange={(username) => set('opensubtitles', { username })} />
-      </Field>
-      <Field label="Пароль">
-        <Secret value={cfg.opensubtitles.password} onChange={(password) => set('opensubtitles', { password })} />
-      </Field>
+      <SecretField
+        label="API-ключ"
+        variant="outlined"
+        value={cfg.opensubtitles.apiKey}
+        onValueChange={(apiKey) => set('opensubtitles', { apiKey })}
+      />
+      <TextField
+        label="Логин"
+        variant="outlined"
+        value={cfg.opensubtitles.username}
+        spellCheck={false}
+        onChange={(e) => set('opensubtitles', { username: e.target.value })}
+      />
+      <SecretField
+        label="Пароль"
+        variant="outlined"
+        value={cfg.opensubtitles.password}
+        onValueChange={(password) => set('opensubtitles', { password })}
+      />
     </>
   )
 }
 
-function StepLampa({ origins, setOrigins, port }: {
+function StepLampa({
+  origins,
+  setOrigins,
+  port,
+}: {
   origins: string
   setOrigins: (v: string) => void
   port: number
@@ -280,40 +314,51 @@ function StepLampa({ origins, setOrigins, port }: {
         Чтобы открывать фильмы из Lampa, добавьте в Lampa плагин и впишите сюда её адрес. Плагин для Lampa по http:{' '}
         <span className="select-all">http://127.0.0.1:{port}/lampa/smartsubs.js</span>
       </p>
-      <Field label="Разрешённые адреса Lampa" hint="По одному на строку, например https://lampa.example.com">
-        <textarea value={origins} rows={3} onChange={(e) => setOrigins(e.target.value)} className={`${inputClass} resize-y`} />
-      </Field>
+      <TextField
+        multiline
+        rows={3}
+        label="Разрешённые адреса Lampa"
+        hint="По одному на строку, например https://lampa.example.com"
+        variant="outlined"
+        value={origins}
+        onChange={(e) => setOrigins(e.target.value)}
+      />
     </>
   )
 }
 
-function StepAnki({ cfg, hint, set }: { cfg: AppConfig; hint: string; set: Apply }) {
+function StepAnki({ cfg, hint, set }: { cfg: AppConfig; hint: string; set: ApplyConfig }) {
   const ownsImages = tutorOwnsImages(cfg.tutor)
   return (
     <>
       <p className="type-body-medium">
         Карточки создаются прямо в Anki через AnkiConnect (Anki должен быть запущен с дополнением AnkiConnect).
       </p>
-      <Field label="Колода">
-        <Text value={cfg.anki.deck} onChange={(deck) => set('anki', { deck })} />
-      </Field>
-      <Field
+      <TextField
+        label="Колода"
+        variant="outlined"
+        value={cfg.anki.deck}
+        spellCheck={false}
+        onChange={(e) => set('anki', { deck: e.target.value })}
+      />
+      <Select
         label="Основной провайдер картинок"
-        hint={ownsImages
-          ? 'Основной провайдер берётся из tutor; запасные задаются в панели настроек → Anki и карточки.'
-          : 'Запасные провайдеры и стиль задаются в панели настроек → Anki и карточки.'}
+        hint={
+          ownsImages
+            ? 'Основной провайдер берётся из tutor; запасные задаются в Настройки → Картинки.'
+            : 'Запасные провайдеры и стиль задаются в Настройки → Картинки.'
+        }
+        variant="outlined"
+        value={cfg.images.backend}
+        disabled={ownsImages}
+        onChange={(e) => set('images', { backend: e.target.value as AppConfig['images']['backend'] })}
       >
-        <select
-          className={inputClass}
-          value={cfg.images.backend}
-          disabled={ownsImages}
-          onChange={(e) => set('images', { backend: e.target.value as AppConfig['images']['backend'] })}
-        >
-          {IMAGE_BACKENDS.map(([id, label]) => (
-            <option key={id} value={id}>{label}</option>
-          ))}
-        </select>
-      </Field>
+        {IMAGE_BACKENDS.map(([id, label]) => (
+          <option key={id} value={id}>
+            {label}
+          </option>
+        ))}
+      </Select>
       <p className={HINT}>Порядок попыток: {imageRouteLabel(cfg.images, cfg.tutor)}</p>
       <Switch
         label="Быстрое добавление без предпросмотра"
@@ -334,7 +379,7 @@ function StepAnki({ cfg, hint, set }: { cfg: AppConfig; hint: string; set: Apply
         }}
       />
       <p className={HINT}>{hint}</p>
-      <p className={HINT}>Подробные настройки — в панели настроек → Anki и карточки.</p>
+      <p className={HINT}>Подробные настройки — в разделе «Anki» и «Картинки».</p>
     </>
   )
 }
@@ -344,7 +389,7 @@ function Finished({ steps, onFinish }: { steps: SetupStep[]; onFinish: () => voi
     <>
       <StatusList steps={steps} />
       <div>
-        <button type="button" className={PRIMARY} onClick={onFinish}>Начать</button>
+        <Button variant="filled" onClick={onFinish}>Начать</Button>
       </div>
     </>
   )
@@ -366,8 +411,7 @@ function StatusList({ steps }: { steps: SetupStep[] }) {
             <span className={HINT}>{s.hint}</span>
           </div>
         </li>
-      ))
-      }
-    </ul >
+      ))}
+    </ul>
   )
 }

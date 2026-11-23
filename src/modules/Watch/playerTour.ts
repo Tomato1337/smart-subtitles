@@ -8,6 +8,9 @@ export const tourUnseen = () => !localStorage.getItem(TOUR_SEEN_KEY)
 
 export const markTourSeen = () => localStorage.setItem(TOUR_SEEN_KEY, '1')
 
+/** Clears the seen flag so the player tour opens automatically on the next visit. */
+export const resetTour = () => localStorage.removeItem(TOUR_SEEN_KEY)
+
 /** Every page of the player tour, in order: the first target on screen is the one it points at. */
 export function playerTourSteps(keys: Bindings, openGuide: () => void): TourStep[] {
   // Keys are read from the bindings, so a rebind (or an unassigned action) shows up in the text.

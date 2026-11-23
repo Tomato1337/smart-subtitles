@@ -168,9 +168,19 @@ pub async fn start(st: &Arc<AppState>, s: &Arc<Session>, file: &Path) -> Option<
     }
 }
 
-/// The chooser's pick of one track.
+/// The chooser's pick of one track. Restores `subs:status` if loading fails after emitting `downloading`.
 pub async fn select(st: &Arc<AppState>, s: &Arc<Session>, file: &Path, track: u64) -> Result<(), String> {
-    load(st, s, file, Some(track)).await
+    let res = load(st, s, file, Some(track)).await;
+    if res.is_err() && !s.cancel.is_cancelled() {
+        let mid = s.media_id.clone();
+        let cached = st.db(move |c| acquire::cached_source(c, &mid)).await.ok().flatten();
+        let status = match cached {
+            Some((kind, exact)) => acquire::ready_status(&s.media_id, &kind, exact),
+            None => SubsStatus::new(&s.media_id, "none"),
+        };
+        acquire::status(st, status);
+    }
+    res
 }
 
 #[cfg(test)]

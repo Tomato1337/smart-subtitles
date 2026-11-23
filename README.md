@@ -214,7 +214,7 @@ sudo dnf install ./src-tauri/target/release/bundle/rpm/smart-subtitle-0.1.0-1.x8
   "llm": { "source": "", "baseUrl": "https://api.deepseek.com", "apiKey": "sk-…", "api": "openai", "model": "deepseek-flash" },
   "llmTasks": { "chat": { "source": "claude", "provider": "anthropic", "model": "claude-sonnet-4-5", "effort": "medium" } },
   "opensubtitles": { "apiKey": "…", "username": "", "password": "" },
-  "subtitles": { "sources": ["torrserver", "sidecar", "embedded", "opensubtitles"] },
+  "subtitles": { "sources": ["torrserver", "sidecar", "embedded", "opensubtitles"], "idleOpacity": 0.36 },
   "lampa": { "origins": ["https://lampa.example.com"] },
   "torrserver": { "baseUrl": "https://example.com/tor", "username": "", "password": "" },
   "anki": { "url": "http://127.0.0.1:8765", "deck": "Learning English", "noteType": "Smart Subtitles — Vocab", "quickAdd": false },
@@ -233,6 +233,7 @@ sudo dnf install ./src-tauri/target/release/bundle/rpm/smart-subtitle-0.1.0-1.x8
 | `annot.auto` | разбирать диалоги без вопроса, пока модель разбора совпадает с запомненной (`annot.rememberedModel`) |
 | `opensubtitles.apiKey` | достаточно ключа; логин и пароль повышают дневную квоту скачиваний |
 | `subtitles.sources` | порядок автоматического поиска субтитров; `[]` выключает его |
+| `subtitles.idleOpacity` | прозрачность (0–1) неактивных реплик и шапки в «Диалогах», когда скрыты панели плеера; `1` отключает затемнение |
 | `lampa.origins` | адреса Lampa, которым можно открывать фильмы в плеере. **Без этого поля плагин получит 403** |
 | `torrserver.*` | Basic-auth, если TorrServer стоит за прокси. Логин и пароль подставляются только в URL под `baseUrl` |
 | `anki.*`, `images.*` | карточки и картинки, см. [Карточки Anki](#карточки-anki) |

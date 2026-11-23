@@ -58,7 +58,7 @@ Setup steps, in wizard order: `deps` and `llm` are required; `opensubtitles` and
 
 JSON Merge Patch (RFC 7386): objects merge key by key, arrays are replaced as a whole, `null` resets a field to its default value. An unknown field is rejected with 400 and its dotted path. The string `***` in a secret field means "keep the stored value", so a config object from GET can be sent back. `restartRequired: true` appears only when `server.port` changed. Every change applies immediately and the app's UI updates itself.
 
-The patch is validated as a whole; a rejected patch changes nothing. Checked: `server.port` 1–65535; `learner.cefr` one of A1–C2; `lampa.origins` entries are bare origins; `anki.url` is http(s); `anki.deck` and `anki.noteType` are not empty; `anki.fields` values are known sources; `anki.sentenceAudio` and `images.backend` are known values; `images.fallbacks` entries are known, unique and not the app-owned primary; `subtitles.sources` entries are known and unique; a task with its own `source` names a `model`.
+The patch is validated as a whole; a rejected patch changes nothing. Checked: `server.port` 1–65535; `learner.cefr` one of A1–C2; `lampa.origins` entries are bare origins; `anki.url` is http(s); `anki.deck` and `anki.noteType` are not empty; `anki.fields` values are known sources; `anki.sentenceAudio` and `images.backend` are known values; `images.fallbacks` entries are known, unique and not the app-owned primary; `subtitles.sources` entries are known and unique; `subtitles.idleOpacity` is 0–1; a task with its own `source` names a `model`.
 
 Examples:
 
@@ -101,6 +101,7 @@ Take provider ids and model names from `GET /api/setup/llm/providers`; the ones 
 | `opensubtitles.username` | string | `""` | Optional; a login raises the daily download quota. |
 | `opensubtitles.password` | string | `""` | Optional; used together with the login. |
 | `subtitles.sources` | string[] | `["torrserver","sidecar","embedded","opensubtitles"]` | Order of automatic subtitle sources (see «How the app works»); `[]` turns the automatic search off. |
+| `subtitles.idleOpacity` | number | `0.36` | Opacity (0–1) of inactive lines and the header in «Диалоги» while player controls are hidden on idle; `1` disables dimming. |
 | `torrserver.baseUrl` | string | `""` | TorrServer address when it sits behind a Basic-auth proxy. |
 | `torrserver.username` | string | `""` | Basic-auth login; injected only into URLs under `baseUrl`. |
 | `torrserver.password` | string | `""` | Basic-auth password. |

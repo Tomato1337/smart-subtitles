@@ -2,3 +2,4 @@ export { HOTKEY_ACTIONS, DEFAULT_BINDINGS, ACTION_LABEL, RESERVED_CODES, type Bi
 export { actionFor, rebind, parseOverrides, overridesOf, keyLabel, withKey } from './lib/bindings'
 export { useHotkeysStore } from './store/hotkeysStore'
 export { HotkeysDialog } from './ui/HotkeysDialog'
+export { comboParts, useHotkeyCapture } from './useHotkeyCapture'

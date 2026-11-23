@@ -3,6 +3,6 @@ export { ACTIVE_STATES, graceRemaining, useCardsStore } from './store/cardsStore
 export { phaseLabel } from './lib/task'
 export { CardDraftModal } from './ui/CardDraftModal'
 export { CardIsland, useCardIslandDock } from './ui/CardIsland'
-export { CardsActivityButton, CardsActivityPanel } from './ui/CardsActivity'
+export { CardsActivityButton, CardsActivityPanel, type CardsActivityButtonProps } from './ui/CardsActivity'
 export { CardPreview } from './ui/CardPreview'
 export { useCardEvents } from './useCardEvents'

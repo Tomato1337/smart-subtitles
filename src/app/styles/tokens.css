@@ -46,5 +46,8 @@
   --app-warning: #ffb870;
   --app-warning-container: #693c00;
   --app-on-warning-container: #ffdcbe;
+  --app-success: #71dba7;
+  --app-success-container: #00513a;
+  --app-on-success-container: #b4f1cf;
   --app-dialog-text: #ffffff;
 }

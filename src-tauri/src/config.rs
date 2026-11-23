@@ -104,12 +104,23 @@ impl Default for Annot {
 /// Ids accepted in `subtitles.sources`, in the default order.
 pub const SUBTITLE_SOURCES: [&str; 4] = ["torrserver", "sidecar", "embedded", "opensubtitles"];
 
+fn default_idle_opacity() -> f64 { 0.36 }
+
 /// Sources the automatic subtitle search tries, in order; `[]` turns the automatic search off.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct Subtitles { pub sources: Vec<String> }
+pub struct Subtitles {
+    pub sources: Vec<String>,
+    #[serde(default = "default_idle_opacity")]
+    pub idle_opacity: f64,
+}
 impl Default for Subtitles {
-    fn default() -> Self { Self { sources: SUBTITLE_SOURCES.iter().map(|s| s.to_string()).collect() } }
+    fn default() -> Self {
+        Self {
+            sources: SUBTITLE_SOURCES.iter().map(|s| s.to_string()).collect(),
+            idle_opacity: default_idle_opacity(),
+        }
+    }
 }
 
 /// Optional companion service: CEFR level, its own image settings, script import.
@@ -460,6 +471,15 @@ mod tests {
         assert_eq!(percent_decode(p.password().unwrap()), "p$%w");
         assert_eq!(c.with_auth("https://other.example/tor/x"), "https://other.example/tor/x");
         assert_eq!(c.with_auth("http://127.0.0.1:8095/stream/x"), "http://127.0.0.1:8095/stream/x");
+    }
+
+    #[test]
+    fn subtitles_idle_opacity_defaults_for_partial_old_json() {
+        let c: Config = serde_json::from_str(r#"{"subtitles":{"sources":["sidecar"]}}"#).unwrap();
+        assert_eq!(c.subtitles.sources, vec!["sidecar"]);
+        assert_eq!(c.subtitles.idle_opacity, 0.36);
+        let v = serde_json::to_value(&c).unwrap();
+        assert_eq!(v["subtitles"]["idleOpacity"], 0.36);
     }
 
     fn percent_decode(s: &str) -> String {

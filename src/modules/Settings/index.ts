@@ -1,4 +1,5 @@
-export { SettingsPanel } from './ui/SettingsPanel'
+export { SettingsHub } from './ui/SettingsHub'
+export type { SettingsSection } from './lib/sections'
 export { SetupWizard } from './ui/SetupWizard'
 export { useConfigEvents } from './useConfigEvents'
 export { useDepsCheck } from './useDepsCheck'
