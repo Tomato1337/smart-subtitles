@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
-import { Button, IconButton, Segmented, Select, TextField } from '@tomato1337/m3e-react'
+import { Button, Combobox, IconButton, Segmented, Select, TextField, type ComboboxOption } from '@tomato1337/m3e-react'
 import { api, errorText } from '@/common/api/tauri'
 import type { AppConfig, LlmProvider } from '@/common/types/ipc'
 import { useDebounced } from '@/common/utilities/useDebounced'
@@ -11,6 +11,9 @@ type Llm = AppConfig['llm']
 
 /** Option value for «Другая модель…». */
 const CUSTOM = '__custom__'
+
+/** Lists with at least this many choices switch from native `<Select>` to searchable `<Combobox>`. */
+export const SEARCH_SELECT_THRESHOLD = 8
 
 /** A key of its own, or an imported provider whose config still has one. */
 export function llmReady(llm: Llm, providers: LlmProvider[] | undefined): boolean {
@@ -28,6 +31,36 @@ export function groupProviders(providers: LlmProvider[] | undefined): { label: s
     const g = out.find((g) => g.label === p.sourceLabel)
     if (g) g.items.push(p)
     else out.push({ label: p.sourceLabel, items: [p] })
+  }
+  return out
+}
+
+/** Builds grouped Combobox options for imported LLM providers, keeping a top default option first. */
+export function buildProviderOptions(
+  providers: LlmProvider[] | undefined,
+  topOption: { value: string; label: string; keywords?: string },
+  current?: { source: string; provider: string },
+): ComboboxOption[] {
+  const out: ComboboxOption[] = [topOption]
+  if (
+    current?.source &&
+    !providers?.some((p) => p.source === current.source && p.id === current.provider)
+  ) {
+    out.push({
+      value: `${current.source}\n${current.provider}`,
+      label: `${current.source}/${current.provider} (не найден)`,
+    })
+  }
+  for (const g of groupProviders(providers)) {
+    for (const p of g.items) {
+      out.push({
+        value: `${p.source}\n${p.id}`,
+        label: p.label,
+        group: g.label,
+        hint: p.hasKey ? undefined : 'нет ключа',
+        keywords: `${p.source} ${p.id} ${p.baseUrl}`,
+      })
+    }
   }
   return out
 }
@@ -120,28 +153,56 @@ export function ModelPicker({
         ? `${errorText(query.error)}. Модель можно вписать вручную`
         : modelMetaHint || `Моделей: ${list.length}`
 
+  const modelOptions = useMemo<ComboboxOption[]>(
+    () => [
+      ...(inherit !== undefined
+        ? [{ value: '', label: inherit ? `Как основная (${inherit})` : 'Как основная', keywords: 'default основная' }]
+        : []),
+      ...list.map((m) => ({ value: m, label: m })),
+    ],
+    [inherit, list],
+  )
+
   const picker =
     list.length > 0 && !custom ? (
-      <Select
-        label={compact ? undefined : 'Модель'}
-        aria-label={compact ? 'Модель' : undefined}
-        hint={compact ? undefined : statusHint}
-        variant={variant}
-        value={model}
-        onChange={(e) => {
-          if (e.target.value === CUSTOM) setCustom(true)
-          else onModel(e.target.value)
-        }}
-      >
-        {inherit !== undefined && <option value="">{inherit ? `Как основная (${inherit})` : 'Как основная'}</option>}
-        {!!model && !list.includes(model) && <option value={model}>{`${model} (нет в списке)`}</option>}
-        {list.map((m) => (
-          <option key={m} value={m}>
-            {m}
-          </option>
-        ))}
-        <option value={CUSTOM}>Другая модель…</option>
-      </Select>
+      list.length >= SEARCH_SELECT_THRESHOLD ? (
+        <Combobox
+          label={compact ? undefined : 'Модель'}
+          aria-label={compact ? 'Модель' : undefined}
+          hint={compact ? undefined : statusHint}
+          variant={variant}
+          value={model}
+          options={modelOptions}
+          searchable
+          allowCustom
+          searchPlaceholder="Поиск модели…"
+          customLabel={(q) => `Использовать «${q}»`}
+          formatMissing={(v) => `${v} (нет в списке)`}
+          action={{ label: 'Ввести вручную…', icon: 'edit', onSelect: () => setCustom(true) }}
+          onChange={onModel}
+        />
+      ) : (
+        <Select
+          label={compact ? undefined : 'Модель'}
+          aria-label={compact ? 'Модель' : undefined}
+          hint={compact ? undefined : statusHint}
+          variant={variant}
+          value={model}
+          onChange={(e) => {
+            if (e.target.value === CUSTOM) setCustom(true)
+            else onModel(e.target.value)
+          }}
+        >
+          {inherit !== undefined && <option value="">{inherit ? `Как основная (${inherit})` : 'Как основная'}</option>}
+          {!!model && !list.includes(model) && <option value={model}>{`${model} (нет в списке)`}</option>}
+          {list.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+          <option value={CUSTOM}>Другая модель…</option>
+        </Select>
+      )
     ) : (
       <TextField
         label={compact ? undefined : 'Модель'}
@@ -159,7 +220,7 @@ export function ModelPicker({
     <div className="flex flex-col gap-2">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">{picker}</div>
-        <div className={`flex shrink-0 items-center gap-1 ${compact ? '' : 'pt-6'}`}>
+        <div className={`flex shrink-0 items-center gap-1 ${compact ? '' : 'pt-5'}`}>
           <IconButton
             icon="refresh"
             label="Обновить список моделей"
@@ -237,7 +298,15 @@ export function LlmFields({
   onChange: (patch: Partial<Llm>) => void
 }) {
   const selected = providers?.find((p) => p.source === llm.source && p.id === llm.provider)
-  const groups = useMemo(() => groupProviders(providers), [providers])
+  const providerOptions = useMemo(
+    () =>
+      buildProviderOptions(
+        providers,
+        { value: '', label: 'Вручную', keywords: 'manual' },
+        { source: llm.source, provider: llm.provider },
+      ),
+    [providers, llm.source, llm.provider],
+  )
   const value = llm.source ? `${llm.source}\n${llm.provider}` : ''
 
   return (
@@ -264,17 +333,19 @@ export function LlmFields({
       </div>
 
       {llm.source ? (
-        <Select
+        <Combobox
           label="Провайдер"
           variant="outlined"
           value={value}
+          options={providerOptions}
+          searchable={6}
+          searchPlaceholder="Поиск провайдера…"
           hint={
             selected?.hasKey
               ? `${selected.baseUrl} · ${selected.api === 'anthropic' ? 'Anthropic' : 'OpenAI-совместимый'} · ключ из ${selected.file}`
               : undefined
           }
-          onChange={(e) => {
-            const v = e.target.value
+          onChange={(v) => {
             if (!v) {
               onChange({ source: '', provider: '' })
               return
@@ -285,19 +356,7 @@ export function LlmFields({
             if (p && p.models.length > 0 && !p.models.includes(llm.model)) patch.model = p.models[0]
             onChange(patch)
           }}
-        >
-          <option value="">Вручную</option>
-          {llm.source && !selected && <option value={value}>{`${llm.source}/${llm.provider} (не найден)`}</option>}
-          {groups.map((g) => (
-            <optgroup key={g.label} label={g.label}>
-              {g.items.map((p) => (
-                <option key={`${p.source}\n${p.id}`} value={`${p.source}\n${p.id}`}>
-                  {p.hasKey ? p.label : `${p.label} — нет ключа`}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </Select>
+        />
       ) : (
         <>
           <SecretField

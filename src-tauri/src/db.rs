@@ -77,6 +77,38 @@ CREATE INDEX card_job_page ON card_job(created_at DESC, id DESC);
 CREATE INDEX card_job_state ON card_job(state);
 ";
 
+/// v10: real active watch-time per local day, listener friction events (lookup/replay/slow_replay),
+/// and user-marked known words excluded from unadded suggestions and reflected in comprehension %.
+const MIGRATION_10: &str = "
+CREATE TABLE watch_log(
+  day TEXT NOT NULL,
+  media_id TEXT NOT NULL,
+  watched_sec INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(day, media_id)
+);
+CREATE INDEX watch_log_media ON watch_log(media_id);
+
+CREATE TABLE friction_event(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  media_id TEXT NOT NULL,
+  cue_idx INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN('lookup','replay','slow_replay')),
+  span TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX friction_event_media_kind ON friction_event(media_id, kind, created_at);
+CREATE INDEX friction_event_created ON friction_event(created_at);
+
+CREATE TABLE known_word(
+  lemma TEXT PRIMARY KEY,
+  display TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'app',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX known_word_created ON known_word(created_at DESC);
+";
+
 pub fn open(path: &std::path::Path) -> anyhow::Result<Connection> {
     let conn = Connection::open(path)?;
     init(&conn)?;
@@ -141,6 +173,12 @@ pub fn init(conn: &Connection) -> anyhow::Result<()> {
         tx.pragma_update(None, "user_version", 9)?;
         tx.commit()?;
     }
+    if v < 10 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_10)?;
+        tx.pragma_update(None, "user_version", 10)?;
+        tx.commit()?;
+    }
     // Proposals that already own job rows are reconciled by `anki::jobs::start`; only a legacy
     // `adding` proposal with no job behind it was interrupted by the restart.
     conn.execute(
@@ -175,11 +213,11 @@ mod tests {
         c.pragma_update(None, "user_version", 1).unwrap();
         init(&c).unwrap();
         let v: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-        assert_eq!(v, 9);
+        assert_eq!(v, 10);
         c.execute("INSERT INTO sub_sync(media_id,source_path,status,offset,support,detail,created_at) VALUES('m','/s.srt','done',0.5,7,NULL,0)", []).unwrap();
         init(&c).unwrap();
         let v: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-        assert_eq!(v, 9);
+        assert_eq!(v, 10);
         let n: i64 = c.query_row("SELECT count(*) FROM sub_sync", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
     }
@@ -223,5 +261,19 @@ mod tests {
         let ids: Vec<String> = c.prepare("SELECT id FROM card_job ORDER BY id").unwrap()
             .query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
         assert_eq!(ids, vec!["explicit-new", "first", "word"]);
+    }
+
+    #[test]
+    fn stats_tables_enforce_keys_and_checks() {
+        let c = Connection::open_in_memory().unwrap();
+        init(&c).unwrap();
+        c.execute("INSERT INTO watch_log(day,media_id,watched_sec,updated_at) VALUES('2026-11-24','m1',120,100)", []).unwrap();
+        assert!(c.execute("INSERT INTO watch_log(day,media_id,watched_sec,updated_at) VALUES('2026-11-24','m1',10,101)", []).is_err());
+
+        c.execute("INSERT INTO friction_event(media_id,cue_idx,kind,span,created_at) VALUES('m1',2,'lookup','reluctant',100)", []).unwrap();
+        assert!(c.execute("INSERT INTO friction_event(media_id,cue_idx,kind,span,created_at) VALUES('m1',2,'bogus',NULL,100)", []).is_err());
+
+        c.execute("INSERT INTO known_word(lemma,display,source,created_at) VALUES('reluctant','reluctant','app',100)", []).unwrap();
+        assert!(c.execute("INSERT INTO known_word(lemma,display,source,created_at) VALUES('reluctant','reluctant','app',101)", []).is_err());
     }
 }

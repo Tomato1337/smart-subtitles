@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
-import { Button, IconButton, Select, Switch, TextField } from '@tomato1337/m3e-react'
+import { useMemo, useState } from 'react'
+import { Button, Combobox, IconButton, Select, Switch, TextField, type ComboboxOption } from '@tomato1337/m3e-react'
 import { api, errorText } from '@/common/api/tauri'
 import type { AppConfig, ImageBackend, ImagesConfig } from '@/common/types/ipc'
 import { useDebounced } from '@/common/utilities/useDebounced'
+import { SEARCH_SELECT_THRESHOLD } from './LlmFields'
 import { SecretField } from './SettingsPrimitives'
 
 type Backend = ImagesConfig['backend']
@@ -162,14 +163,10 @@ export function ProviderFields({
       )}
       {backend === 'omp' && (
         <>
-          <TextField
-            label="Модель картинки"
-            hint="Пусто — модель роли image в omp; omp не сможет уйти в свою цепочку"
-            variant="outlined"
+          <OmpImageModel
             value={images.omp.model}
-            placeholder="роль image"
-            spellCheck={false}
-            onChange={(e) => onChange({ omp: { ...images.omp, model: e.target.value } })}
+            disabled={disabled}
+            onChange={(model) => onChange({ omp: { ...images.omp, model } })}
           />
           <OmpAgentModel
             value={images.omp.agentModel}
@@ -182,6 +179,156 @@ export function ProviderFields({
   )
 }
 
+function OmpCatalogPicker({
+  label,
+  value,
+  disabled,
+  placeholder,
+  searchPlaceholder,
+  hint,
+  defaultOption,
+  groups,
+  onChange,
+}: {
+  label: string
+  value: string
+  disabled?: boolean
+  placeholder: string
+  searchPlaceholder: string
+  hint?: string
+  defaultOption?: { label: string; keywords?: string }
+  groups: [string, string[]][]
+  onChange: (value: string) => void
+}) {
+  const [custom, setCustom] = useState(false)
+  const options = useMemo<ComboboxOption[]>(() => {
+    const out: ComboboxOption[] = []
+    if (defaultOption) out.push({ value: '', label: defaultOption.label, keywords: defaultOption.keywords })
+    for (const [provider, models] of groups) {
+      for (const model of models) {
+        out.push({ value: model, label: model, group: provider })
+      }
+    }
+    return out
+  }, [defaultOption, groups])
+  const listed = options.some((o) => o.value === value)
+  const hasCatalog = groups.length > 0
+
+  return (
+    <div className="flex flex-col gap-2">
+      {hasCatalog && !custom ? (
+        options.length >= SEARCH_SELECT_THRESHOLD ? (
+          <Combobox
+            label={label}
+            hint={hint}
+            variant="outlined"
+            value={value}
+            disabled={disabled}
+            placeholder={defaultOption ? defaultOption.label : 'Выберите модель'}
+            searchPlaceholder={searchPlaceholder}
+            options={options}
+            searchable
+            allowCustom
+            customLabel={(q) => `Использовать «${q}»`}
+            formatMissing={(v) => `${v} (нет в списке)`}
+            action={{ label: 'Ввести вручную…', icon: 'edit', onSelect: () => setCustom(true) }}
+            onChange={onChange}
+          />
+        ) : (
+          <Select
+            label={label}
+            hint={hint}
+            variant="outlined"
+            value={value}
+            disabled={disabled}
+            onChange={(e) => {
+              if (e.target.value === CUSTOM) setCustom(true)
+              else onChange(e.target.value)
+            }}
+          >
+            {defaultOption ? (
+              <option value="">{defaultOption.label}</option>
+            ) : (
+              !value && (
+                <option value="" disabled>
+                  Выберите модель
+                </option>
+              )
+            )}
+            {value && !listed && <option value={value}>{`${value} (нет в списке)`}</option>}
+            {groups.map(([provider, models]) => (
+              <optgroup key={provider} label={provider}>
+                {models.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+            <option value={CUSTOM}>Другая модель…</option>
+          </Select>
+        )
+      ) : (
+        <TextField
+          label={label}
+          hint={hint}
+          variant="outlined"
+          value={value}
+          disabled={disabled}
+          placeholder={placeholder}
+          spellCheck={false}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )}
+      {!disabled && custom && hasCatalog && (
+        <Button variant="text" size="xs" className="self-start" onClick={() => setCustom(false)}>
+          Выбрать из списка
+        </Button>
+      )}
+    </div>
+  )
+}
+
+export function OmpImageModel({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: string
+  disabled?: boolean
+  onChange: (value: string) => void
+}) {
+  const catalog = useQuery({
+    queryKey: ['images-omp-image-models'],
+    queryFn: api.imagesOmpImageModels,
+    enabled: !disabled,
+    staleTime: 300_000,
+    retry: false,
+  })
+  const groups = useMemo(() => Object.entries(catalog.data ?? {}), [catalog.data])
+  const hint = disabled
+    ? undefined
+    : catalog.isFetching
+      ? 'Загружаю модели картинок из omp…'
+      : catalog.error
+        ? 'Пусто — модель роли image в omp; модель можно вписать вручную'
+        : 'Пусто — модель роли image в omp; omp не сможет уйти в свою цепочку'
+
+  return (
+    <OmpCatalogPicker
+      label="Модель картинки"
+      value={value}
+      disabled={disabled}
+      placeholder="роль image"
+      searchPlaceholder="Поиск модели картинки…"
+      hint={hint}
+      defaultOption={{ label: 'Роль image в omp (по умолчанию)', keywords: 'default role роль по умолчанию' }}
+      groups={groups}
+      onChange={onChange}
+    />
+  )
+}
+
 export function OmpAgentModel({
   value,
   disabled,
@@ -191,7 +338,6 @@ export function OmpAgentModel({
   disabled?: boolean
   onChange: (value: string) => void
 }) {
-  const [custom, setCustom] = useState(false)
   const catalog = useQuery({
     queryKey: ['images-omp-agent-models'],
     queryFn: api.imagesOmpAgentModels,
@@ -199,8 +345,7 @@ export function OmpAgentModel({
     staleTime: 300_000,
     retry: false,
   })
-  const groups = Object.entries(catalog.data ?? {})
-  const listed = groups.some(([, models]) => models.includes(value))
+  const groups = useMemo(() => Object.entries(catalog.data ?? {}), [catalog.data])
   const hint = disabled
     ? undefined
     : catalog.isFetching
@@ -212,50 +357,16 @@ export function OmpAgentModel({
           : 'Агент, через которого omp вызывает generate_image'
 
   return (
-    <div className="flex flex-col gap-2">
-      {groups.length > 0 && !custom ? (
-        <Select
-          label="Модель агента"
-          hint={hint}
-          variant="outlined"
-          value={value}
-          disabled={disabled}
-          onChange={(e) => {
-            if (e.target.value === CUSTOM) setCustom(true)
-            else onChange(e.target.value)
-          }}
-        >
-          {!value && <option value="" disabled>Выберите модель</option>}
-          {value && !listed && <option value={value}>{value} (нет в списке)</option>}
-          {groups.map(([provider, models]) => (
-            <optgroup key={provider} label={provider}>
-              {models.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-          <option value={CUSTOM}>Другая модель…</option>
-        </Select>
-      ) : (
-        <TextField
-          label="Модель агента"
-          hint={hint}
-          variant="outlined"
-          value={value}
-          disabled={disabled}
-          placeholder="anthropic/claude-haiku-5-5"
-          spellCheck={false}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      )}
-      {!disabled && custom && groups.length > 0 && (
-        <Button variant="text" size="xs" className="self-start" onClick={() => setCustom(false)}>
-          Выбрать из списка
-        </Button>
-      )}
-    </div>
+    <OmpCatalogPicker
+      label="Модель агента"
+      value={value}
+      disabled={disabled}
+      placeholder="anthropic/claude-haiku-5-5"
+      searchPlaceholder="Поиск модели агента…"
+      hint={hint}
+      groups={groups}
+      onChange={onChange}
+    />
   )
 }
 

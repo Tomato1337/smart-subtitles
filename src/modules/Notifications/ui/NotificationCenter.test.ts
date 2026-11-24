@@ -98,13 +98,12 @@ it('anchors the home panel below the top-right header trigger with safe viewport
   })
 })
 
-it('places notification center and fallback top-right on every route without bottom-left anchors', () => {
-  for (const route of ['/', '/settings']) {
+it('places notification center top-right on every route without floating fallback or bottom-left anchors', () => {
+  for (const route of ['/', '/settings', '/stats']) {
     for (const hasHeader of [false, true]) {
       const layout = notificationRouteLayout(route, hasHeader)
       expect(layout.player).toBe(false)
       expect(layout.anchorToHeader).toBe(true)
-      expect(layout.showFloatingFallback).toBe(false)
       expect(layout.panelPositionClass).toBe('origin-top-right')
       expect(layout.toastRightClass).toBe('right-4')
     }
@@ -113,22 +112,19 @@ it('places notification center and fallback top-right on every route without bot
   const playerLayout = notificationRouteLayout('/player', false)
   expect(playerLayout.player).toBe(true)
   expect(playerLayout.anchorToHeader).toBe(false)
-  expect(playerLayout.showFloatingFallback).toBe(false)
   expect(playerLayout.panelPositionClass).toBe('top-18 right-3 origin-top-right max-h-[60vh]')
   expect(playerLayout.toastRightClass).toBe('right-3')
 
-  const unknownFallback = notificationRouteLayout('/unknown', false)
-  expect(unknownFallback.showFloatingFallback).toBe(true)
-  expect(unknownFallback.fallbackButtonClass).toContain('top-4 right-4')
-  expect(unknownFallback.fallbackButtonClass).not.toContain('bottom-')
-  expect(unknownFallback.fallbackButtonClass).not.toContain('left-')
-  expect(unknownFallback.panelPositionClass).toBe('top-18 right-4 origin-top-right max-h-[60vh]')
-  expect(unknownFallback.panelPositionClass).not.toContain('bottom-')
-  expect(unknownFallback.panelPositionClass).not.toContain('left-')
+  const noHeaderLayout = notificationRouteLayout('/unknown', false)
+  expect(noHeaderLayout.player).toBe(false)
+  expect(noHeaderLayout.anchorToHeader).toBe(false)
+  expect(noHeaderLayout.toastRightClass).toBe('right-4')
+  expect(noHeaderLayout.panelPositionClass).toBe('top-18 right-4 origin-top-right max-h-[60vh]')
+  expect(noHeaderLayout.panelPositionClass).not.toContain('bottom-')
+  expect(noHeaderLayout.panelPositionClass).not.toContain('left-')
 
   expect(notificationRouteLayout('/unknown', true)).toMatchObject({
     anchorToHeader: true,
-    showFloatingFallback: false,
     panelPositionClass: 'origin-top-right',
   })
 })

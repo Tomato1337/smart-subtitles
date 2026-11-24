@@ -1,12 +1,20 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
- AnkiCard, AnkiConnectionStatus, AnnotCost, AnnotEstimate, AnnotModel, AnnotStatus, AppConfig, AppNotification, CardJob, CardJobEditor, CardJobPage, CardPreview, CardsResult, Catalog, ChatMessage, ChatUsage, DepsStatus, EmbeddedState, Explanation, GeneratedImage, ImageRouteView, IndexModel, InirTheme, JobCursor, JobGrace, LlmPing, LlmProvider, ModelInfo, MonthlyUsage, NoteTypeView, NotifyLevel, OpenStream, PatternOccurrence, PatternStat, SessionLoading, SessionState, SetupStatus, SubCandidate, SubsCandidates, SubsList, SystemInfo, TorrentHealth, WordDraft,
+ AnkiCard, AnkiConnectionStatus, AnnotCost, AnnotEstimate, AnnotModel, AnnotStatus, AppConfig, AppNotification, CardJob, CardJobEditor, CardJobPage, CardPreview, CardsResult, Catalog, ChatMessage, ChatUsage, DepsStatus, EmbeddedState, Explanation, GeneratedImage, ImageRouteView, IndexModel, InirTheme, JobCursor, JobGrace, KnownWord, KnownWordResult, LlmPing, LlmProvider, ModelInfo, MonthlyUsage, NoteTypeView, NotifyLevel, OpenStream, PatternFilmExample, PatternOccurrence, PatternStat, SessionLoading, SessionState, SetupStatus, StatsOverview, StatsPeriod, SubCandidate, SubsCandidates, SubsList, SystemInfo, TorrentHealth, VocabInfo, WordDraft,
 } from '@/common/types/ipc'
 import { logEvent } from './eventLog'
 
 /** Commands whose calls are too frequent to be worth a log line. */
-const QUIET: Record<string, true> = { media_save_position: true, media_torrent_health: true, patterns_exposure: true, annot_prioritize: true }
+const QUIET: Record<string, true> = {
+  media_save_position: true,
+  media_torrent_health: true,
+  patterns_exposure: true,
+  annot_prioritize: true,
+  vocab_lookup: true,
+  watch_tick: true,
+  friction_record: true,
+}
 /** Commands whose arguments carry credentials: the shape is logged, never the values. */
 const SECRET_ARGS: Record<string, true> = {
  config_save: true, llm_models: true, llm_ping: true,
@@ -58,7 +66,7 @@ export const api = {
  sessionClose: () => call<void>('session_close'),
  sessionOpenFile: (path: string) => call<string>('session_open_file', { path }),
  sessionOpenPlaylistItem: (index: number) => call<string>('session_open_playlist_item', { index }),
- sessionReopen: (mediaId: string, fromStart?: boolean) => call<string>('session_reopen', { mediaId, fromStart }),
+ sessionReopen: (mediaId: string, fromStart?: boolean, at?: number) => call<string>('session_reopen', { mediaId, fromStart, at }),
  mediaRecent: () => call<RecentMedia[]>('media_recent'),
  /** Forgets the analysis consent of a film, so reopening it asks again. */
  mediaResetAnnot: (mediaId: string) => call<void>('media_reset_annot', { mediaId }),
@@ -97,6 +105,8 @@ export const api = {
 
  llmExplain: (mediaId: string, cueIdx: number, span: string) =>
   call<Explanation>('llm_explain', { mediaId, cueIdx, span }),
+ vocabLookup: (spans: string[], mediaId?: string | null) =>
+  call<VocabInfo[]>('vocab_lookup', { spans, mediaId: mediaId ?? null }),
  agentSend: (mediaId: string, cueIdx: number | null, at: number, text: string) => call<void>('agent_send', { mediaId, cueIdx, at, text }),
  agentHistory: (mediaId: string) => call<ChatMessage[]>('agent_history', { mediaId }),
  /** Model, effort and the film chat's running totals for the footer under the input. */
@@ -139,12 +149,21 @@ export const api = {
  imagesRoute: (images: AppConfig['images'] | null = null, tutor: AppConfig['tutor'] | null = null) =>
   call<ImageRouteView>('images_route', { images, tutor }),
  imagesOmpAgentModels: () => call<Record<string, string[]>>('images_omp_agent_models'),
+ imagesOmpImageModels: () => call<Record<string, string[]>>('images_omp_image_models'),
 
  patternsExposure: (mediaId: string, cueIdx: number) => call<void>('patterns_exposure', { mediaId, cueIdx }),
  patternsStats: () => call<PatternStat[]>('patterns_stats'),
- patternsSetStatus: (id: string, status: 'learning' | 'known') => call<void>('patterns_set_status', { id, status }),
+ patternsSetStatus: (id: string, status: 'learning' | 'known' | 'none') => call<void>('patterns_set_status', { id, status }),
  patternsOccurrences: (mediaId: string, patternId: string) =>
   call<PatternOccurrence[]>('patterns_occurrences', { mediaId, patternId }),
+
+ watchTick: (mediaId: string, deltaSec: number) => call<void>('watch_tick', { mediaId, deltaSec }),
+ frictionRecord: (mediaId: string, cueIdx: number, kind: 'lookup' | 'replay' | 'slow_replay', span: string | null = null) =>
+  call<void>('friction_record', { mediaId, cueIdx, kind, span }),
+ knownWordsList: () => call<KnownWord[]>('known_words_list'),
+ knownWordSet: (word: string, known: boolean) => call<KnownWordResult>('known_word_set', { word, known }),
+ statsOverview: (period: StatsPeriod = '30d') => call<StatsOverview>('stats_overview', { period }),
+ statsPatternExamples: (patternId: string, limit?: number) => call<PatternFilmExample[]>('stats_pattern_examples', { patternId, limit }),
 
  tutorImportScript: (mediaId: string) => call<{ id: number }>('tutor_import_script', { mediaId }),
 

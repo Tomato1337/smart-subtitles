@@ -16,6 +16,7 @@ pub struct Session {
     pub media_id: String,
     pub req: SessionRequest,
     pub from_start: bool,
+    pub seek_at: Option<f64>,
     /// req.url with credentials applied; used for every ffmpeg/ffprobe/HTTP read.
     pub src: String,
     pub probe: OnceLock<Probe>,
@@ -159,14 +160,15 @@ pub fn show_main_window(app: &tauri::AppHandle) {
 fn bad(msg: &str) -> String { msg.to_string() }
 
 pub async fn open(st: &Arc<AppState>, req: SessionRequest, file_size: Option<u64>) -> Result<String, String> {
-    open_with_start(st, req, file_size, false).await
+    open_with_options(st, req, file_size, false, None).await
 }
 
-pub async fn open_with_start(
+pub async fn open_with_options(
     st: &Arc<AppState>,
     req: SessionRequest,
     file_size: Option<u64>,
     from_start: bool,
+    seek_at: Option<f64>,
 ) -> Result<String, String> {
     if !(req.url.starts_with("http://") || req.url.starts_with("https://") || req.url.starts_with("file://")) {
         return Err(bad("url должен быть http(s)"));
@@ -211,6 +213,7 @@ pub async fn open_with_start(
         media_id: media_id.clone(),
         req: req.clone(),
         from_start,
+        seek_at: seek_at.filter(|t| t.is_finite() && *t >= 0.0),
         src: st.cfg().with_auth(&req.url),
         probe: OnceLock::new(),
         audio_index: Mutex::new(0),
@@ -298,7 +301,11 @@ pub async fn build_state(st: &Arc<AppState>, s: &Arc<Session>) -> Result<Option<
     let Some(p) = s.probe.get() else { return Ok(None) };
     let mid = s.media_id.clone();
     let (last, off): (f64, f64) = st.db(move |c| c.query_row("SELECT last_position, sub_offset FROM media WHERE id=?1", [&mid], |r| Ok((r.get(0)?, r.get(1)?)))).await?;
-    let resume = resume_position(last, s.req.resume_at, p.duration);
+    let resume = match s.seek_at.filter(|t| t.is_finite() && *t >= 0.0) {
+        Some(t) if p.duration > 0.0 => t.clamp(0.0, (p.duration - 0.5).max(0.0)),
+        Some(t) => t.max(0.0),
+        None => resume_position(last, s.req.resume_at, p.duration),
+    };
     Ok(Some(state_of(st, s, p, resume, off)))
 }
 

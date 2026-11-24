@@ -1228,21 +1228,31 @@ fn parse_omp_agent_models(bytes: &[u8]) -> Result<std::collections::BTreeMap<Str
     Ok(groups)
 }
 
-/// Ask omp for the chat selectors it accepts, including built-in providers absent from models.yml.
-pub async fn omp_agent_models() -> Result<std::collections::BTreeMap<String, Vec<String>>, String> {
+/// Ask omp for selectors of a catalog kind (`chat` or `image`), including built-in providers absent from models.yml.
+async fn omp_models(kind: &str) -> Result<std::collections::BTreeMap<String, Vec<String>>, String> {
     let omp = omp_bin().ok_or_else(|| "omp не найден в PATH".to_string())?;
     let mut cmd = crate::proc::command(omp);
-    cmd.args(["models", "--kind", "chat", "--json", "--no-extensions"])
+    cmd.args(["models", "--kind", kind, "--json", "--no-extensions"])
         .env("PATH", crate::proc::without_npm_bins(&std::env::var_os("PATH").unwrap_or_default()));
     let out = crate::proc::output_cancellable(cmd, Duration::from_secs(30), &CancellationToken::new())
         .await
         .map_err(|e| format!("Не удалось прочитать каталог omp: {e}"))?;
     if !out.status.success() {
         let err = crate::logs::redact(&String::from_utf8_lossy(&out.stderr));
-        logs::log("app", &format!("images: omp models failed ({}): {}", out.status, err.trim()));
+        logs::log("app", &format!("images: omp models --kind {kind} failed ({}): {}", out.status, err.trim()));
         return Err(format!("Не удалось прочитать каталог omp ({})", out.status));
     }
     parse_omp_agent_models(&out.stdout)
+}
+
+/// Ask omp for the chat selectors it accepts, including built-in providers absent from models.yml.
+pub async fn omp_agent_models() -> Result<std::collections::BTreeMap<String, Vec<String>>, String> {
+    omp_models("chat").await
+}
+
+/// Ask omp for the image model selectors it accepts, grouped by provider.
+pub async fn omp_image_models() -> Result<std::collections::BTreeMap<String, Vec<String>>, String> {
+    omp_models("image").await
 }
 
 /// The image-role primary from `omp config get modelRoles --json`, pinned so omp cannot delegate to

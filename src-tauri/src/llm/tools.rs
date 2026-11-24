@@ -61,6 +61,13 @@ pub fn definitions() -> Vec<Value> {
             "parameters": { "type": "object", "properties": { "id": s("Pattern id, e.g. PRESENT_PERFECT") }, "required": ["id"], "additionalProperties": false },
         }),
         json!({
+            "name": "vocab_lookup", "label": "Vocab frequency",
+            "description": "Check word/phrase frequency (NGSL, NGSL-Spoken, BSL, OpenSubtitles 50k), CEFR level, whether it exceeds the learner's level, and how many times it appears in this film.",
+            "parameters": { "type": "object", "properties": {
+                "words": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "type": "string" } }
+            }, "required": ["words"], "additionalProperties": false },
+        }),
+        json!({
             "name": "propose_cards", "label": "Propose cards",
             "description": "Propose 1-10 Anki cards. The learner decides; you cannot add cards yourself. Use for words and phrases worth learning.",
             "parameters": { "type": "object", "properties": { "words": { "type": "array", "minItems": 1, "maxItems": 10, "items": word_schema() } }, "required": ["words"], "additionalProperties": false },
@@ -78,6 +85,7 @@ pub async fn call_tool(ctx: &ToolCtx, name: &str, args: Value) -> String {
         "media_transcript" => transcript(ctx, &args).await,
         "anki_words" => anki_words(ctx, &args).await,
         "pattern_ref" => pattern_ref(ctx, &args).await,
+        "vocab_lookup" => vocab_lookup(ctx, &args).await,
         "propose_cards" => propose_cards(ctx, &args).await,
         _ => format!("Unknown tool {name}"),
     }
@@ -142,6 +150,50 @@ async fn pattern_ref(ctx: &ToolCtx, a: &Value) -> String {
     format!("{} ({}) — {}\nLevel {}. {}\nLearner has met it {n} times in total.\nIn this film:\n{}", p.id, p.formula, p.label, p.level, p.about, if lines.is_empty() { "(none)".into() } else { lines.join("\n") })
 }
 
+async fn vocab_lookup(ctx: &ToolCtx, a: &Value) -> String {
+    let Some(arr) = a["words"].as_array() else { return "words must be an array".into() };
+    let words: Vec<String> = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
+    if words.is_empty() || words.len() > 20 {
+        return "Provide 1-20 words".into();
+    }
+    let items = match crate::vocab::lookup_batch(&ctx.st, words, Some(ctx.session.media_id.clone())).await {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    items
+        .into_iter()
+        .map(|v| {
+            let mut tags = Vec::new();
+            if let Some(n) = v.ranks.ngsl { tags.push(format!("NGSL #{n}")); }
+            if let Some(n) = v.ranks.ngsl_spoken { tags.push(format!("NGSL-S #{n}")); }
+            if let Some(n) = v.ranks.bsl { tags.push(format!("BSL #{n}")); }
+            if let Some(n) = v.ranks.subtitles { tags.push(format!("Subs #{n}")); }
+            let summary = if v.is_phrase && !v.found {
+                let parts: Vec<String> = v.parts.iter().filter(|p| !p.function_word).map(|p| {
+                    format!("{}={}", p.word, p.tier.unwrap_or("unknown"))
+                }).collect();
+                if parts.is_empty() {
+                    "phrase (not in single-word list)".to_string()
+                } else {
+                    format!("phrase (not in single-word list; parts: {})", parts.join(", "))
+                }
+            } else {
+                let tier = v.tier.unwrap_or("unknown");
+                if tags.is_empty() {
+                    format!("{tier} (not in top-50k)")
+                } else {
+                    format!("{tier} ({})", tags.join(", "))
+                }
+            };
+            let cefr = v.cefr.map(|c| {
+                if v.above_level { format!("CEFR {c} [above learner level]") } else { format!("CEFR {c}") }
+            }).unwrap_or_else(|| "CEFR —".into());
+            format!("{} | {} | {} | ×{} in film", v.query, summary, cefr, v.film_count)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 async fn propose_cards(ctx: &ToolCtx, a: &Value) -> String {
     let Some(list) = a["words"].as_array() else { return "words must be an array".into() };
     if list.is_empty() || list.len() > 10 { return "Propose between 1 and 10 words".into(); }
@@ -172,9 +224,9 @@ mod tests {
     #[test]
     fn definitions_have_tutor_shape() {
         let d = definitions();
-        assert_eq!(d.iter().map(|t| t["name"].as_str().unwrap()).collect::<Vec<_>>(), ["media_transcript", "anki_words", "pattern_ref", "propose_cards"]);
+        assert_eq!(d.iter().map(|t| t["name"].as_str().unwrap()).collect::<Vec<_>>(), ["media_transcript", "anki_words", "pattern_ref", "vocab_lookup", "propose_cards"]);
         for t in &d { assert!(t["label"].is_string() && t["description"].is_string() && t["parameters"]["type"] == "object"); }
-        let w = &d[3]["parameters"]["properties"]["words"]["items"];
+        let w = &d[4]["parameters"]["properties"]["words"]["items"];
         assert_eq!(w["required"].as_array().unwrap().len(), 7);
         assert_eq!(w["additionalProperties"], false);
     }

@@ -90,22 +90,19 @@ export function headerAnchorStyle(
   return { top, right, maxHeight }
 }
 
-/** Resolves top-right panel and fallback bell placement for the active route. */
+/** Resolves top-right notification panel and toast placement for the active route. */
 export function notificationRouteLayout(
   pathname: string,
   hasHeaderTrigger: boolean,
 ): {
   player: boolean
   anchorToHeader: boolean
-  showFloatingFallback: boolean
   panelPositionClass: string
   toastRightClass: 'right-3' | 'right-4'
-  fallbackButtonClass: string
 } {
   const player = pathname === '/player'
-  const knownHeaderRoute = pathname === '/' || pathname === '/settings'
+  const knownHeaderRoute = pathname === '/' || pathname === '/settings' || pathname === '/stats'
   const anchorToHeader = !player && (knownHeaderRoute || hasHeaderTrigger)
-  const showFloatingFallback = !player && !knownHeaderRoute && !hasHeaderTrigger
   const panelPositionClass = player
     ? 'top-18 right-3 origin-top-right max-h-[60vh]'
     : anchorToHeader
@@ -114,10 +111,8 @@ export function notificationRouteLayout(
   return {
     player,
     anchorToHeader,
-    showFloatingFallback,
     panelPositionClass,
     toastRightClass: player ? 'right-3' : 'right-4',
-    fallbackButtonClass: 'fixed top-4 right-4 z-[200] size-12',
   }
 }
 
@@ -135,9 +130,19 @@ export function liveToastTopOffset(
   return 76
 }
 
-const LEVEL: Record<NotifyLevel, { icon: string; stripe: string }> = {
-  error: { icon: 'error', stripe: 'var(--md-sys-color-error)' },
-  warn: { icon: 'warning', stripe: 'var(--app-warning)' },
+const LEVEL: Record<NotifyLevel, { icon: string; stripe: string; tileBg: string; tileFg: string }> = {
+  error: {
+    icon: 'error',
+    stripe: 'var(--md-sys-color-error)',
+    tileBg: 'var(--md-sys-color-error-container)',
+    tileFg: 'var(--md-sys-color-on-error-container)',
+  },
+  warn: {
+    icon: 'warning',
+    stripe: 'var(--app-warning)',
+    tileBg: 'var(--app-warning-container)',
+    tileFg: 'var(--app-on-warning-container)',
+  },
 }
 
 function stamp(createdAt: number): string {
@@ -163,16 +168,31 @@ function Card({ n, action, onClose, closeIcon, closeLabel, floating = false }: C
     : 'bg-[var(--md-sys-color-surface-container-highest)]'
   return (
     <div
-      className={`relative flex items-start gap-2 ${floating ? 'pr-1' : 'py-2 pr-1 pl-5'} ${surface}`}
+      className={`relative flex items-start ${floating ? 'gap-2.5' : 'gap-2 py-2 pr-1 pl-5'} ${surface}`}
       style={floating ? undefined : { borderRadius: 'var(--md-sys-shape-corner-medium)' }}
     >
-      {/* An inset pill rather than a border-left: it stays inside the rounded corners of the card.
-          The floating recipe's 8 px padding leaves room at the edge; the denser row keeps its inset. */}
-      <span aria-hidden className={`absolute top-2 bottom-2 w-1 rounded-full ${floating ? 'left-0.5' : 'left-1.5'}`} style={{ background: style.stripe }} />
-      <span className="shrink-0" data-part={floating ? 'icon' : undefined} style={floating ? undefined : { color: style.stripe }}>
-        <Icon name={style.icon} />
-      </span>
-      <div className="min-w-0 grow">
+      {/* Only the denser center rows carry an inset stripe; the 28px-corner floating popup uses a circular semantic icon tile. */}
+      {!floating && (
+        <span aria-hidden className="absolute top-2 bottom-2 left-1.5 w-1 rounded-full" style={{ background: style.stripe }} />
+      )}
+      {floating ? (
+        <span
+          className="shrink-0"
+          data-part="icon"
+          style={{
+            borderRadius: 'var(--md-sys-shape-corner-full)',
+            background: style.tileBg,
+            color: style.tileFg,
+          }}
+        >
+          <Icon name={style.icon} fill />
+        </span>
+      ) : (
+        <span className="shrink-0" style={{ color: style.stripe }}>
+          <Icon name={style.icon} />
+        </span>
+      )}
+      <div className={floating ? 'flex min-w-0 grow flex-col gap-0.5 py-1' : 'min-w-0 grow'}>
         <div className="type-body-medium select-text whitespace-pre-wrap break-words">{n.message}</div>
         <div className="type-label-small text-[var(--md-sys-color-on-surface-variant)]">{stamp(n.createdAt)}</div>
       </div>
@@ -552,7 +572,7 @@ export function NotificationCenter() {
   const prevCount = useRef(items.length)
   const [headerPos, setHeaderPos] = useState<{ top: number; right: number; maxHeight: number } | null>(null)
 
-  const { player, anchorToHeader, showFloatingFallback, panelPositionClass, fallbackButtonClass } =
+  const { player, anchorToHeader, panelPositionClass } =
     notificationRouteLayout(pathname, headerTrigger !== null)
 
   // Never keep a panel opened on one route lingering over another route.
@@ -611,7 +631,6 @@ export function NotificationCenter() {
   return (
     <>
       <LiveToasts player={player} pathname={pathname} headerTrigger={headerTrigger} />
-      {showFloatingFallback && <NotificationButton className={fallbackButtonClass} />}
       <Presence>
         {open && (
           <div

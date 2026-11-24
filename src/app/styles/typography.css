@@ -1,16 +1,37 @@
-@import '@fontsource-variable/roboto-flex/wdth.css';
+@import '@fontsource-variable/roboto-flex/standard.css';
 
 /*
- * The type scale and the .type-* classes come from @tomato1337/m3e-tokens. This app only tunes the M3 Expressive
- * emphasis for Roboto Flex (heavier and wider than the kit's portable default) and adds its hero title.
+ * The type scale and the .type-* classes come from @tomato1337/m3e-tokens (in rem + unitless
+ * line-height). Using the standard variable bundle enables Roboto Flex's optical sizing (`opsz`)
+ * and true slant (`slnt`). Keep width at 100% — stretching Cyrillic glyphs to 118-128% hurts
+ * readability at UI sizes — and dial back emphasis weight slightly on small titles and labels.
  */
 :root {
-  --m3e-type-emph-weight: 720;
-  --m3e-type-emph-width: 118%;
-  --app-display-weight: 820;
-  --app-display-width: 128%;
+  --m3e-type-emph-weight: 700;
+  --m3e-type-emph-width: 100%;
+  --app-display-weight: 800;
+  --app-display-width: 100%;
 }
 
 @layer components {
-  .type-hero { font-family: var(--md-ref-typeface-brand); font-size: 3.5rem; line-height: 1; font-weight: var(--app-display-weight); font-stretch: var(--app-display-width); letter-spacing: -0.01em; }
+  .type-hero {
+    font-family: var(--md-ref-typeface-brand);
+    font-size: 3.5rem;
+    line-height: 1;
+    font-weight: var(--app-display-weight);
+    font-stretch: var(--app-display-width);
+    letter-spacing: -0.015em;
+  }
+
+  :is(
+    .type-title-medium,
+    .type-title-small,
+    .type-label-large,
+    .type-label-medium,
+    .type-label-small,
+    .type-body-medium,
+    .type-body-small
+  ).type-emph {
+    font-weight: 640;
+  }
 }

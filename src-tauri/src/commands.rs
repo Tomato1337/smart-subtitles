@@ -374,7 +374,7 @@ pub async fn media_set_hidden(st: St<'_>, media_id: String, hidden: bool) -> Res
 }
 
 #[tauri::command]
-pub async fn session_reopen(st: St<'_>, media_id: String, from_start: Option<bool>) -> Res<String> {
+pub async fn session_reopen(st: St<'_>, media_id: String, from_start: Option<bool>, at: Option<f64>) -> Res<String> {
     type Row = (String, String, String, Option<String>, Option<i32>, Option<i64>, Option<String>, Option<String>, Option<u32>, Option<u32>);
     let mid = media_id.clone();
     let row: Row = st.db(move |c| c.query_row(
@@ -402,7 +402,7 @@ pub async fn session_reopen(st: St<'_>, media_id: String, from_start: Option<boo
             None,
         )
     };
-    session::open_with_start(&st, req, size, from_start == Some(true)).await
+    session::open_with_options(&st, req, size, from_start == Some(true), at).await
 }
 
 fn current_for(st: &AppState, media_id: &str) -> Res<Arc<session::Session>> {
@@ -545,6 +545,11 @@ pub async fn annot_retry(st: St<'_>, media_id: String, first_idx: u32) -> Res<()
 pub async fn llm_explain(st: St<'_>, media_id: String, cue_idx: u32, span: String) -> Res<crate::llm::explain::Explanation> {
     let s = current_for(&st, &media_id)?;
     crate::llm::explain::explain(&st, &s, cue_idx, span).await
+}
+
+#[tauri::command]
+pub async fn vocab_lookup(st: St<'_>, spans: Vec<String>, media_id: Option<String>) -> Res<Vec<crate::vocab::VocabInfo>> {
+    crate::vocab::lookup_batch(&st, spans, media_id).await
 }
 
 #[tauri::command]
@@ -807,6 +812,11 @@ pub async fn images_omp_agent_models() -> Res<std::collections::BTreeMap<String,
     crate::anki::images::omp_agent_models().await
 }
 
+#[tauri::command]
+pub async fn images_omp_image_models() -> Res<std::collections::BTreeMap<String, Vec<String>>> {
+    crate::anki::images::omp_image_models().await
+}
+
 /// Generates one picture through the whole unsaved route; it lands in the same cache the add uses.
 #[tauri::command]
 pub async fn images_generate(
@@ -866,8 +876,18 @@ pub async fn patterns_stats(st: St<'_>) -> Res<Vec<PatternStat>> {
 
 #[tauri::command]
 pub async fn patterns_set_status(st: St<'_>, id: String, status: String) -> Res<()> {
-    if status != "learning" && status != "known" { return Err("status: learning|known".into()); }
-    st.db(move |c| { c.execute("INSERT OR REPLACE INTO pattern_state VALUES(?1,?2,?3)", rusqlite::params![id, status, now()])?; Ok(()) }).await
+    if !matches!(status.as_str(), "learning" | "known" | "none") {
+        return Err("status: learning|known|none".into());
+    }
+    st.db(move |c| {
+        if status == "none" {
+            c.execute("DELETE FROM pattern_state WHERE pattern_id=?1", [&id])?;
+        } else {
+            c.execute("INSERT OR REPLACE INTO pattern_state VALUES(?1,?2,?3)", rusqlite::params![id, status, now()])?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[derive(serde::Serialize)]
@@ -880,6 +900,60 @@ pub async fn patterns_occurrences(st: St<'_>, media_id: String, pattern_id: Stri
             .query_map(rusqlite::params![media_id, pattern_id], |r| Ok(Occurrence { idx: r.get(0)?, text: r.get(1)? }))?
             .collect()
     }).await
+}
+
+#[tauri::command]
+pub async fn watch_tick(st: St<'_>, media_id: String, delta_sec: u32) -> Res<()> {
+    let ts = now();
+    st.db(move |c| {
+        crate::stats::record_watch_tick(c, &media_id, delta_sec, ts)?;
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn friction_record(
+    st: St<'_>,
+    media_id: String,
+    cue_idx: u32,
+    kind: String,
+    span: Option<String>,
+) -> Res<()> {
+    let ts = now();
+    let res: Result<(), String> = st
+        .db(move |c| Ok(crate::stats::record_friction(c, &media_id, cue_idx, &kind, span.as_deref(), ts)))
+        .await?;
+    res
+}
+
+#[tauri::command]
+pub async fn known_words_list(st: St<'_>) -> Res<Vec<crate::stats::KnownWord>> {
+    st.db(crate::stats::list_known_words).await
+}
+
+#[tauri::command]
+pub async fn known_word_set(st: St<'_>, word: String, known: bool) -> Res<crate::stats::KnownWordResult> {
+    let ts = now();
+    let res: Result<crate::stats::KnownWordResult, String> = st
+        .db(move |c| Ok(crate::stats::set_known_word(c, &word, known, ts)))
+        .await?;
+    res
+}
+
+#[tauri::command]
+pub async fn stats_overview(st: St<'_>, period: Option<String>) -> Res<crate::stats::StatsOverview> {
+    crate::stats::overview_for(&st, period).await
+}
+
+#[tauri::command]
+pub async fn stats_pattern_examples(
+    st: St<'_>,
+    pattern_id: String,
+    limit: Option<usize>,
+) -> Res<Vec<crate::stats::PatternFilmExample>> {
+    let lim = limit.unwrap_or(15);
+    st.db(move |c| crate::stats::query_pattern_examples(c, &pattern_id, lim)).await
 }
 
 #[tauri::command]

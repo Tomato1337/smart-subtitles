@@ -61,7 +61,7 @@ type Props = {
 }
 
 const FONT = { S: 'type-title-small', M: 'type-title-medium', L: 'type-title-large' } as const
-const FONT_ACTIVE = { S: 'type-title-medium', M: 'type-title-large', L: 'type-title-large' } as const
+const FONT_ACTIVE = { S: 'type-title-medium', M: 'type-title-large', L: 'type-headline-small' } as const
 
 /**
  * Row colours for the active cue: tonal buttons and the wave read them from the container.
@@ -153,12 +153,15 @@ const CueRow = memo(function CueRow({ cue, ann, active, focusFrom, focusTo, font
     <span className={`type-label-medium block font-semibold tabular-nums ${active ? 'text-[var(--md-sys-color-on-secondary-container)]' : 'text-[var(--md-sys-color-primary)]'}`}>{formatTime(cue.start)}</span>
     <span
      className={`${active ? FONT_ACTIVE[font] : FONT[font]} mt-3 block min-w-0 whitespace-pre-line break-words font-semibold text-[var(--app-dialog-text)]`}
-     style={active ? { fontStretch: '108%' } : undefined}
     >
      {renderEn(cue, ann, active)}
     </span>
     {translation && ann?.ru && (
-     <span className="type-body-medium mt-1 block min-w-0 whitespace-pre-line break-words text-[var(--app-dialog-text)]">{ann.ru}</span>
+     <span
+      className={`type-body-medium mt-1 block min-w-0 whitespace-pre-line break-words ${active ? 'text-[var(--md-sys-color-on-secondary-container)]/90' : 'text-[var(--md-sys-color-on-surface-variant)]'}`}
+     >
+      {ann.ru}
+     </span>
     )}
    </button>
    {needsRetry && (
@@ -286,7 +289,7 @@ export const Sidebar = memo(function Sidebar({
       onChange={(e) => setQuery(e.target.value)}
       placeholder="Поиск по EN и RU"
       aria-label="Поиск по EN и RU"
-      className="type-body-medium h-10 w-full rounded-full bg-[var(--md-sys-color-surface-container-highest)] px-4"
+      className="type-body-medium min-h-10 w-full rounded-full bg-[var(--md-sys-color-surface-container-highest)] px-4 py-2"
      />
     </div>
    )}

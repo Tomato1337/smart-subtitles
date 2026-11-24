@@ -7,13 +7,14 @@ import type { CardJobState, ChatMessage } from '@/common/types/ipc'
 import { formatTime } from '@/common/utilities/time'
 import { phaseLabel, useCardsStore } from '@/modules/Cards'
 import { useHotkeysStore, withKey } from '@/modules/Hotkeys'
+import { VocabBadges, useVocabBatch } from '@/modules/Vocab'
 import { useAgentStore } from '../store/agentStore'
 import { agentKey, useAgentActions, type Locate } from '../useAgent'
 import { ChatUsageBar } from './ChatUsageBar'
 import { Markdown } from './Markdown'
 
 const TOOL_LABEL: Record<string, string> = {
- media_transcript: 'читаю сценарий…', anki_words: 'смотрю слова в Anki…', pattern_ref: 'смотрю конструкцию…', propose_cards: 'готовлю карточки…',
+ media_transcript: 'читаю сценарий…', anki_words: 'смотрю слова в Anki…', pattern_ref: 'смотрю конструкцию…', vocab_lookup: 'проверяю частотность…', propose_cards: 'готовлю карточки…',
 }
 
 const JOB_NOTE: Partial<Record<CardJobState, string>> = {
@@ -42,6 +43,7 @@ function defaultPicked(jobs: ChatMessage['jobs'], words: ChatMessage['words']): 
 function Proposal({ mediaId, m }: { mediaId: string; m: ChatMessage }) {
  const qc = useQueryClient()
  const words = m.words ?? []
+ const vocabQuery = useVocabBatch(words.map((w) => w.word), mediaId)
  const jobs = m.jobs ?? []
  const jobAt = new Map(jobs.filter((j) => j.wordIndex !== null).map((j) => [j.wordIndex as number, j]))
  const succeeded = new Set(
@@ -111,11 +113,16 @@ function Proposal({ mediaId, m }: { mediaId: string; m: ChatMessage }) {
        onChange={() => toggle(i)}
        className="mt-1 accent-[var(--md-sys-color-primary)]"
       />
-      <span className="type-body-medium">
+      <span className="type-body-medium min-w-0 flex-1">
        <b>{w.word}</b> — {w.translation}
        {done && <span className="type-label-small text-[var(--md-sys-color-primary)]"> · в Anki</span>}
        {note && <span className="type-label-small text-[var(--md-sys-color-on-surface-variant)]"> · {note}</span>}
-       <br /><span className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">{w.full_sentence}</span>
+       {vocabQuery.data?.[i] && (
+        <div className="my-1">
+         <VocabBadges vocab={vocabQuery.data[i]} compact />
+        </div>
+       )}
+       <span className="type-body-small block text-[var(--md-sys-color-on-surface-variant)]">{w.full_sentence}</span>
       </span>
      </label>
     )

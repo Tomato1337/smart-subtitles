@@ -33,4 +33,47 @@ describe('themeVars', () => {
     expect(dark['--app-on-success-container']).toMatch(/^#[0-9a-f]{6}$/)
     expect(light['--app-success']).not.toBe(dark['--app-success'])
   })
+
+  test('lifts flat dark on-surface and dim container text while keeping variant distinct', () => {
+    const v = themeVars({
+      seed: '#bcc2ff',
+      mode: 'dark',
+      colors: {
+        surface: '#15151a',
+        on_surface: '#c7c5d1',
+        on_surface_variant: '#c7c5d1',
+        primary_container: '#3e4a9c',
+        on_primary_container: '#bfc2e4',
+        secondary_container: '#3e436d',
+        on_secondary_container: '#afb3dd',
+        tertiary_container: '#8b3627',
+        on_tertiary_container: '#e9b9b0',
+        error_container: '#7d2b25',
+        on_error_container: '#f4dddb',
+      },
+    })
+    expect(v['--md-sys-color-on-surface']).toBe('#e2e1e7')
+    expect(v['--md-sys-color-on-surface-variant']).toBe('#c7c5d1')
+    expect(v['--md-sys-color-on-primary-container']).toBe('#e7e9f5')
+    expect(v['--md-sys-color-on-secondary-container']).toBe('#d3d5ec')
+    expect(v['--md-sys-color-on-tertiary-container']).toBe('#f7e5e2')
+    // Already >= 6.5:1: left untouched.
+    expect(v['--md-sys-color-on-error-container']).toBe('#f4dddb')
+  })
+
+  test('keeps already high-contrast light roles unchanged', () => {
+    const v = themeVars({
+      seed: '#4d58aa',
+      mode: 'light',
+      colors: {
+        surface: '#fcf8ff',
+        on_surface: '#24213f',
+        on_surface_variant: '#5e5a85',
+        primary_container: '#b5bcff',
+        on_primary_container: '#1f2a7a',
+      },
+    })
+    expect(v['--md-sys-color-on-surface']).toBe('#24213f')
+    expect(v['--md-sys-color-on-primary-container']).toBe('#1f2a7a')
+  })
 })

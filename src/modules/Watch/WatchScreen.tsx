@@ -293,18 +293,20 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
  const replay = useCallback((cue: Cue) => {
   endSlow(true)
   endReplay()
+  void api.frictionRecord(session.mediaId, cue.idx, 'replay', null)
   const off = useSubsStore.getState().offset
   const from = cue.start + off
   p.seek(from)
   p.play()
   stopAtCueEnd(from, cue.end + off, usePlaybackStore.getState().lastSeekAt)
- }, [p, endSlow, endReplay, stopAtCueEnd])
+ }, [p, session.mediaId, endSlow, endReplay, stopAtCueEnd])
 
  // Slow-down applies to this cue only: the speed is restored and the film pauses when the cue ends.
  const slowReplay = useCallback((cue: Cue) => {
   const prevRate = slow.current?.win.prevRate ?? usePlaybackStore.getState().rate
   endSlow(false)
   endReplay()
+  void api.frictionRecord(session.mediaId, cue.idx, 'slow_replay', null)
   const off = useSubsStore.getState().offset
   const win: SlowWindow = { from: cue.start + off, to: cue.end + off, prevRate, armed: false, startedAt: Date.now() }
   p.setRate(SLOW_RATE)
@@ -319,7 +321,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
    else if (action !== 'keep') endSlow(action === 'restore')
   }, 25)
   slow.current = { win, timer }
- }, [p, endSlow, endReplay])
+ }, [p, session.mediaId, endSlow, endReplay])
  useEffect(() => () => {
   if (slow.current) clearInterval(slow.current.timer)
   if (replayEnd.current) clearInterval(replayEnd.current.timer)

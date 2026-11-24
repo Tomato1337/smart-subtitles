@@ -10,6 +10,7 @@ import { SnackbarHost } from './SnackbarHost'
 import { HomePage } from '@/pages/home'
 import { PlayerPage } from '@/pages/player'
 import { SettingsPage } from '@/pages/settings'
+import { StatsPage } from '@/pages/stats'
 
 function Root() {
   const navigate = useNavigate()
@@ -37,6 +38,11 @@ export type SettingsSearch = {
   focus?: string
 }
 
+export type StatsSearch = {
+  tab?: string
+  period?: string
+}
+
 const rootRoute = createRootRoute({ component: Root })
 const homeRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: HomePage })
 const playerRoute = createRoute({ getParentRoute: () => rootRoute, path: '/player', component: PlayerPage })
@@ -49,8 +55,19 @@ const settingsRoute = createRoute({
   }),
   component: SettingsPage,
 })
+const statsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/stats',
+  validateSearch: (search: Record<string, unknown>): StatsSearch => ({
+    tab: typeof search.tab === 'string' && search.tab ? search.tab : undefined,
+    period: typeof search.period === 'string' && search.period ? search.period : undefined,
+  }),
+  component: StatsPage,
+})
 
-export const router = createRouter({ routeTree: rootRoute.addChildren([homeRoute, playerRoute, settingsRoute]) })
+export const router = createRouter({
+  routeTree: rootRoute.addChildren([homeRoute, playerRoute, settingsRoute, statsRoute]),
+})
 router.subscribe('onResolved', (e) => logEvent(`route ${e.toLocation.pathname}`))
 
 declare module '@tanstack/react-router' {

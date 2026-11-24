@@ -250,6 +250,19 @@ export function HomeScreen({ onOpenWizard = () => {} }: { onOpenWizard?: () => v
           <h1 className="type-hero min-w-0 flex-1 truncate">Smart Subtitles</h1>
 
           <div className="flex shrink-0 items-center gap-2">
+            <IconButton
+              icon="bar_chart"
+              label="Статистика"
+              variant="secondary"
+              size="lg"
+              tipPos="bottom"
+              pressRadius="18px"
+              onClick={() => void navigate({ to: '/stats' })}
+              style={{
+                '--m3e-icon-button-size': '56px',
+                '--m3e-icon-button-radius': '28px',
+              } as CSSProperties}
+            />
             <CardsActivityButton variant="home" />
             <NotificationHeaderButton />
             <span className="relative inline-flex shrink-0">

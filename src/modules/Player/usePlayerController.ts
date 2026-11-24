@@ -4,6 +4,7 @@ import { api } from '@/common/api/tauri'
 import type { SessionState } from '@/common/types/ipc'
 import { MseStream } from './lib/MseStream'
 import { rangeAt, toRanges } from './lib/mseBuffer'
+import { WatchAccumulator } from './lib/watchAccumulator'
 import { usePlaybackStore } from './store/playback'
 
 export type PlayerController = {
@@ -84,9 +85,18 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
       v.addEventListener(n, f)
       return () => v.removeEventListener(n, f)
     }
+    const watch = new WatchAccumulator(15)
+    const flushWatch = () => {
+      const sec = watch.flush()
+      if (sec) void api.watchTick(mediaId, sec)
+    }
+
     const offs = [
       off('playing', () => patch({ playing: true, buffering: false })),
-      off('pause', () => patch({ playing: false })),
+      off('pause', () => {
+        patch({ playing: false })
+        flushWatch()
+      }),
       off('waiting', () => patch({ buffering: true })),
       off('canplay', () => patch({ buffering: false })),
       off('error', () => {
@@ -107,6 +117,8 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
       const s = usePlaybackStore.getState()
       if (!v.paused && !v.seeking) patch({ absTime: abs, bufferedEnd: end })
       else if (s.bufferedEnd !== end) patch({ bufferedEnd: end })
+      const sec = watch.sample(Date.now(), !v.paused && !v.seeking && !s.buffering)
+      if (sec) void api.watchTick(mediaId, sec)
       mse.maintain()
     }, 100)
     const save = setInterval(() => {
@@ -119,6 +131,7 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
       clearInterval(save)
       clearTimeout(debounce.current)
       for (const o of offs) o()
+      flushWatch()
       const t = mse.currentTime()
       if (t > 0) void api.mediaSavePosition(mediaId, t)
       mse.destroy()

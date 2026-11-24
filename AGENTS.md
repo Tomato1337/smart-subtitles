@@ -33,7 +33,7 @@ src-tauri/src/
   config.rs         config.json schema and defaults (serde, camelCase)
   state.rs session.rs  AppState, the open film (one session at a time)
   db.rs             SQLite schema + numbered migrations (PRAGMA user_version)
-  notify.rs logs.rs deps.rs poster.rs theme.rs patterns.rs
+  notify.rs logs.rs deps.rs poster.rs theme.rs patterns.rs vocab.rs stats.rs
   proc.rs           finding and starting external tools on every OS (see Conventions)
   media/            ffprobe, ffmpeg stream args (copy / VAAPI tonemap / x264), keyframes, clips
   subs/             parse/clean, sources: torrserver (/subs API), sidecar, embedded (mkv.rs EBML reader), opensubtitles;

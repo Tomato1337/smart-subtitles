@@ -15,10 +15,12 @@ mod server;
 mod session;
 mod setup;
 mod state;
+mod stats;
 mod subs;
 mod theme;
 mod tutor;
 mod types;
+mod vocab;
 
 use state::AppState;
 use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
@@ -171,6 +173,7 @@ pub fn run() {
             commands::annot_model,
             commands::annot_retry,
             commands::llm_explain,
+            commands::vocab_lookup,
             commands::agent_send,
             commands::agent_history,
             commands::agent_usage,
@@ -198,6 +201,7 @@ pub fn run() {
             commands::images_generate,
             commands::images_route,
             commands::images_omp_agent_models,
+            commands::images_omp_image_models,
             commands::tutor_import_script,
             commands::config_get,
             commands::config_save,
@@ -214,6 +218,12 @@ pub fn run() {
             commands::patterns_stats,
             commands::patterns_set_status,
             commands::patterns_occurrences,
+            commands::watch_tick,
+            commands::friction_record,
+            commands::known_words_list,
+            commands::known_word_set,
+            commands::stats_overview,
+            commands::stats_pattern_examples,
             commands::theme_current,
             commands::notifications_list,
             commands::notifications_push,

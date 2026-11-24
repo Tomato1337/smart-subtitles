@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, type CSSProperties } from 'react'
-import { Button, Chip, Icon, Select, Spinner, Switch, TextField, toast } from '@tomato1337/m3e-react'
+import { useEffect, useMemo, type CSSProperties } from 'react'
+import { Button, Chip, Combobox, Icon, Select, Spinner, Switch, TextField, toast, type ComboboxOption } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText, onEvent } from '@/common/api/tauri'
 import type { AnkiConnectionStatus, AppConfig, CardSource } from '@/common/types/ipc'
 import { autoSource, SOURCE_LABELS } from '@/modules/Cards'
 import { SECTION_META } from '../lib/sections'
+import { SEARCH_SELECT_THRESHOLD } from './LlmFields'
 import { SectionHeader, SettingGroup, SettingRow, type ApplyConfig } from './SettingsPrimitives'
 
 const BUILTIN = 'Smart Subtitles — Vocab'
@@ -49,8 +50,18 @@ export function AnkiSection({
 
   const allDecks = cfg.anki.indexDecks.includes('*')
   const deckList = catalog.data?.decks ?? []
-  const typeList = catalog.data?.noteTypes ?? []
+  const typeList = useMemo(() => catalog.data?.noteTypes ?? [], [catalog.data?.noteTypes])
   const fields = noteType.data?.fields ?? []
+  const noteTypeOptions = useMemo<ComboboxOption[]>(() => {
+    const out: ComboboxOption[] = [{ value: BUILTIN, label: `${BUILTIN} (встроенный)` }]
+    for (const t of typeList) {
+      if (t.name !== BUILTIN) out.push({ value: t.name, label: t.name })
+    }
+    if (cfg.anki.noteType && cfg.anki.noteType !== BUILTIN && !typeList.some((t) => t.name === cfg.anki.noteType)) {
+      out.push({ value: cfg.anki.noteType, label: cfg.anki.noteType })
+    }
+    return out
+  }, [typeList, cfg.anki.noteType])
 
   const setField = (field: string, source: CardSource) =>
     set('anki', { fields: { ...cfg.anki.fields, [field]: source } })
@@ -219,26 +230,30 @@ export function AnkiSection({
           label="Тип заметки"
           sub="Встроенный тип приложение создаёт и дополняет само."
           below={
-            <Select
-              aria-label="Тип заметки Anki"
-              variant="outlined"
-              value={cfg.anki.noteType}
-              onChange={(e) => set('anki', { noteType: e.target.value })}
-            >
-              <option value={BUILTIN}>{`${BUILTIN} (встроенный)`}</option>
-              {typeList
-                .filter((t) => t.name !== BUILTIN)
-                .map((t) => (
-                  <option key={t.name} value={t.name}>
-                    {t.name}
+            noteTypeOptions.length >= SEARCH_SELECT_THRESHOLD ? (
+              <Combobox
+                aria-label="Тип заметки Anki"
+                variant="outlined"
+                value={cfg.anki.noteType}
+                options={noteTypeOptions}
+                searchable
+                searchPlaceholder="Поиск типа заметки…"
+                onChange={(noteType) => set('anki', { noteType })}
+              />
+            ) : (
+              <Select
+                aria-label="Тип заметки Anki"
+                variant="outlined"
+                value={cfg.anki.noteType}
+                onChange={(e) => set('anki', { noteType: e.target.value })}
+              >
+                {noteTypeOptions.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
                   </option>
                 ))}
-              {!!cfg.anki.noteType &&
-                cfg.anki.noteType !== BUILTIN &&
-                !typeList.some((t) => t.name === cfg.anki.noteType) && (
-                  <option value={cfg.anki.noteType}>{cfg.anki.noteType}</option>
-                )}
-            </Select>
+              </Select>
+            )
           }
         />
 

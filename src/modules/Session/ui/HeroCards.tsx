@@ -150,7 +150,7 @@ export function ContinueCard({
             type="button"
             disabled={busy}
             onClick={onContinue}
-            className="m3e-morph state-layer state-on-surface type-title-large type-emph relative flex h-20 items-center gap-3 rounded-[20px] bg-[var(--md-sys-color-primary-container)] pr-9 pl-6 text-[var(--md-sys-color-on-primary-container)] active:rounded-[28px] disabled:opacity-60"
+            className="m3e-morph state-layer state-on-surface type-title-large type-emph relative flex min-h-20 items-center gap-3 rounded-[20px] bg-[var(--md-sys-color-primary-container)] py-4 pr-9 pl-6 text-[var(--md-sys-color-on-primary-container)] active:rounded-[28px] disabled:opacity-60"
           >
             <Icon name="play_arrow" size={32} fill />
             <span>Смотреть дальше</span>
@@ -365,7 +365,7 @@ export function WelcomeCard({
           <button
             type="button"
             onClick={onOpenWizard}
-            className="m3e-morph state-layer state-on-surface type-title-large type-emph relative flex h-20 items-center gap-3 rounded-[20px] bg-[var(--md-sys-color-primary-container)] pr-9 pl-6 text-[var(--md-sys-color-on-primary-container)] active:rounded-[28px]"
+            className="m3e-morph state-layer state-on-surface type-title-large type-emph relative flex min-h-20 items-center gap-3 rounded-[20px] bg-[var(--md-sys-color-primary-container)] py-4 pr-9 pl-6 text-[var(--md-sys-color-on-primary-container)] active:rounded-[28px]"
           >
             <Icon name="auto_fix_high" size={32} fill />
             <span>Мастер настройки</span>

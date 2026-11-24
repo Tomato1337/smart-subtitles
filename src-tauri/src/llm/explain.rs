@@ -15,6 +15,7 @@ pub struct Explanation {
     pub register: String,
     pub word_type: String,
     pub grammar: String,
+    pub frequency: Option<String>,
     pub pattern_id: Option<String>,
     pub examples: Vec<Example>,
 }
@@ -48,8 +49,33 @@ async fn ask_media<T: serde::de::DeserializeOwned>(
     client::chat_json(st, task, &media.media_id, tag, &messages, max_tokens).await.map_err(|e| e.to_string())
 }
 
+/// Records a word/phrase lookup for friction stats on every open (both cache miss and repeat clicks),
+/// deduplicating rapid accidental double-clicks inside a 3-second window.
+pub(crate) async fn record_lookup(st: &AppState, media_id: &str, cue_idx: u32, span: &str) {
+    let (m, sp, t) = (media_id.to_string(), span.to_string(), now());
+    let _ = st
+        .db(move |c| {
+            let recent: bool = c
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM friction_event WHERE media_id=?1 AND cue_idx=?2 AND kind='lookup' AND span=?3 AND created_at >= ?4)",
+                    params![m, cue_idx, sp, t - 3],
+                    |r| r.get(0),
+                )
+                .unwrap_or(false);
+            if !recent {
+                c.execute(
+                    "INSERT INTO friction_event(media_id,cue_idx,kind,span,created_at) VALUES(?1,?2,'lookup',?3,?4)",
+                    params![m, cue_idx, sp, t],
+                )?;
+            }
+            Ok(())
+        })
+        .await;
+}
+
 /// Contextual explanation of a span; cached per (media, cue, span).
 pub async fn explain(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: u32, span: String) -> Result<Explanation, String> {
+    record_lookup(st, &s.media_id, cue_idx, &span).await;
     let (m, sp) = (s.media_id.clone(), span.clone());
     let cached: Option<String> = st
         .db(move |c| Ok(c.query_row("SELECT json FROM explanation WHERE media_id=?1 AND cue_idx=?2 AND span=?3", params![m, cue_idx, sp], |r| r.get(0)).ok()))
@@ -58,12 +84,21 @@ pub async fn explain(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: u32, span: S
 
     let text = one_line(&cue_text(st, &s.media_id, cue_idx).await?);
     let task = format!(
-        "TASK explain span \"{span}\" in cue [{cue_idx}] «{text}». Return {{\"chunk\":\"<каноническая форма, напр. bail on someone>\",\"translation\":\"<перевод в этом контексте>\",\"meaning\":\"<что здесь имеется в виду, 1–2 предложения по-русски>\",\"literal\":\"<буквальный перевод или пусто>\",\"register\":\"neutral|informal|slang|vulgar|formal\",\"word_type\":\"<часть речи / тип по-английски>\",\"grammar\":\"<объяснение грамматики по-русски или пусто>\",\"pattern_id\":\"<id каталога или null>\",\"examples\":[{{\"en\":\"\",\"ru\":\"\"}}]}}. 2 примера."
+        "TASK explain span \"{span}\" in cue [{cue_idx}] «{text}». Return {{\"chunk\":\"<каноническая форма, напр. bail on someone>\",\"translation\":\"<перевод в этом контексте>\",\"meaning\":\"<что здесь имеется в виду, 1–2 предложения по-русски>\",\"literal\":\"<буквальный перевод или пусто>\",\"register\":\"neutral|informal|slang|vulgar|formal\",\"word_type\":\"<часть речи / тип по-английски>\",\"grammar\":\"<объяснение грамматики по-русски или пусто>\",\"frequency\":\"very_common|common|uncommon|rare\",\"pattern_id\":\"<id каталога или null>\",\"examples\":[{{\"en\":\"\",\"ru\":\"\"}}]}}. frequency = частотность этого слова/выражения в живой разговорной речи (very_common — базовое/повседневное, common — частое, uncommon — среднее/узкое, rare — редкое/архаичное/жаргонное). 2 примера."
     );
-    let e: Explanation = ask(st, s, Task::Explain, &format!("explain {cue_idx}"), task, 900).await?;
+    let mut e: Explanation = ask(st, s, Task::Explain, &format!("explain {cue_idx}"), task, 900).await?;
+    e.frequency = normalize_frequency(e.frequency.as_deref());
     let (m, sp, j) = (s.media_id.clone(), span, serde_json::to_string(&e).map_err(|e| e.to_string())?);
     st.db(move |c| { c.execute("INSERT OR REPLACE INTO explanation VALUES(?1,?2,?3,?4,?5)", params![m, cue_idx, sp, j, now()])?; Ok(()) }).await?;
     Ok(e)
+}
+
+fn normalize_frequency(raw: Option<&str>) -> Option<String> {
+    let s = raw?.trim().to_ascii_lowercase();
+    match s.as_str() {
+        "very_common" | "common" | "uncommon" | "rare" => Some(s),
+        _ => None,
+    }
 }
 
 fn one_line(s: &str) -> String { s.replace('\n', " ") }
@@ -157,5 +192,17 @@ mod tests {
         let mut d = draft("Come on, give me {{c1::a break}}", full);
         fix_phrase_cloze(&mut d, Some("come on"));
         assert_eq!(d.cloze_sentence, "Come on, give me {{c1::a break}}");
+    }
+
+    #[test]
+    fn legacy_explanation_without_frequency_deserializes_and_normalizes() {
+        let old: Explanation = serde_json::from_str(
+            r#"{"chunk":"bail on","translation":"бросить","meaning":"уйти","literal":"","register":"informal","word_type":"phrasal verb","grammar":"","pattern_id":null,"examples":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(old.frequency, None);
+        assert_eq!(normalize_frequency(Some("  COMMON ")).as_deref(), Some("common"));
+        assert_eq!(normalize_frequency(Some("very_common")).as_deref(), Some("very_common"));
+        assert_eq!(normalize_frequency(Some("bogus")), None);
     }
 }

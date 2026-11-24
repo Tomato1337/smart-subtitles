@@ -173,6 +173,33 @@ export type JobGrace = { jobId: string; version: number; tick: number; remaining
 /** One job of an agent proposal card. */
 export type ProposalJob = { jobId: string; wordIndex: number; state: CardJobState; noteId: number | null }
 
+export type VocabTier = 'core' | 'common' | 'uncommon' | 'rare'
+export type ExplainFrequency = 'very_common' | 'common' | 'uncommon' | 'rare'
+export type VocabRanks = { ngsl: number | null; ngslSpoken: number | null; bsl: number | null; subtitles: number | null }
+export type VocabPart = {
+ word: string
+ lemma: string | null
+ tier: VocabTier | null
+ cefr: string | null
+ functionWord: boolean
+}
+export type VocabInfo = {
+ query: string
+ lemma: string | null
+ isPhrase: boolean
+ found: boolean
+ tier: VocabTier | null
+ cefr: string | null
+ cefrSource: string | null
+ aboveLevel: boolean
+ ranks: VocabRanks
+ zipf: number | null
+ business: boolean
+ spoken: boolean
+ filmCount: number
+ parts: VocabPart[]
+}
+
 export type Explanation = {
  chunk: string
  translation: string
@@ -181,6 +208,7 @@ export type Explanation = {
  register: string
  word_type: string
  grammar: string
+ frequency?: ExplainFrequency | null
  pattern_id: string | null
  examples: { en: string; ru: string }[]
 }
@@ -544,3 +572,180 @@ export type NotifyLevel = 'warn' | 'error'
 
 /** A warn/error kept until the user deletes it (`notification` table, `createdAt` in unix seconds). */
 export type AppNotification = { id: number; level: NotifyLevel; message: string; createdAt: number }
+
+export type StatsPeriod = '7d' | '30d' | '90d' | 'all'
+
+export type CoreProgress = { total: number; learned: number; learning: number; known: number }
+
+export type KnownWord = { lemma: string; display: string; source: string; createdAt: number }
+export type KnownWordResult = { lemma: string; display: string; known: boolean; createdAt: number | null }
+
+export type HeatmapDay = { day: string; watchedSec: number; films: number; cards: number; level: number; future: boolean }
+export type WeeklyBar = { weekStart: string; label: string; watchedSec: number; films: number; cards: number }
+
+export type FrictionPoint = {
+  mediaId: string
+  label: string
+  title: string
+  lookupsPer10m: number | null
+  replaysPer10m: number | null
+  watchedMin: number
+}
+
+export type FilmProfile = {
+  mediaId: string
+  title: string
+  season: number | null
+  episode: number | null
+  posterUrl: string | null
+  watchedSec: number
+  durationSec: number | null
+  cuesCount: number
+  comprehensionPct: number | null
+  cefrA: number
+  cefrB: number
+  cefrC: number
+  cefrOther: number
+  wpm: number | null
+  lookupsPer10m: number | null
+  replaysPer10m: number | null
+  cardsAdded: number
+}
+
+export type ImmersionStats = {
+  watchedSec: number
+  prevWatchedSec: number | null
+  activeDays: number
+  filmsCount: number
+  streakDays: number
+  avgSessionMin: number
+  peakWeekday: string | null
+  avgComprehensionPct: number | null
+  lookupsPer10Min: number | null
+  prevLookupsPer10Min: number | null
+  cardsAdded: number
+  cardsActiveOrLearned: number
+  heatmap: HeatmapDay[]
+  weeklyBars: WeeklyBar[]
+  frictionTrend: FrictionPoint[]
+  films: FilmProfile[]
+}
+
+export type AnkiMaturityStats = {
+  total: number
+  learned: number
+  young: number
+  learning: number
+  newCount: number
+  weak: number
+  leech: number
+}
+
+export type UnaddedWord = {
+  lemma: string
+  span: string
+  translation: string
+  mediaId: string
+  title: string
+  season: number | null
+  episode: number | null
+  cueIdx: number
+  audioIndex: number
+  subOffset: number
+  quote: string
+  clicks: number
+  filmsCount: number
+  filmTitles: string[]
+  tier: VocabTier | null
+  cefr: string | null
+  aboveLevel: boolean
+  spoken: boolean
+  business: boolean
+  lastSeenAt: number
+}
+
+export type VocabularyStats = {
+  ngslSpoken: CoreProgress
+  ngsl: CoreProgress
+  knownCount: number
+  ankiConnected: boolean
+  ankiDeck: string
+  ankiMaturity: AnkiMaturityStats
+  ankiCefr: [number, number, number, number, number, number]
+  inWindowPct: number | null
+  unadded: UnaddedWord[]
+}
+
+export type GrammarLevelCount = { level: string; encountered: number; total: number }
+export type GrammarPatternItem = { id: string; count: number; filmsCount: number; status: 'learning' | 'known' | null }
+export type GrammarStats = {
+  total: number
+  encountered: number
+  known: number
+  learning: number
+  byLevel: GrammarLevelCount[]
+  items: GrammarPatternItem[]
+}
+
+export type SpendBucket = {
+  key: string
+  label: string
+  annotate: number
+  explain: number
+  chat: number
+  draft: number
+  totalUsd: number
+  requests: number
+  topFilm: string | null
+}
+
+export type FilmSpendRow = {
+  mediaId: string
+  title: string
+  season: number | null
+  episode: number | null
+  posterUrl: string | null
+  requests: number
+  cachedPct: number
+  usd: number
+  partial: boolean
+}
+
+export type AiStats = {
+  totalUsd: number
+  partial: boolean
+  avgPerFilmUsd: number | null
+  requests: number
+  inputTokens: number
+  cachedTokens: number
+  outputTokens: number
+  cacheHitPct: number
+  savedUsdEstimate: number | null
+  granularity: 'day' | 'week'
+  series: SpendBucket[]
+  byTask: TaskUsageRow[]
+  byModel: ModelUsageRow[]
+  byFilm: FilmSpendRow[]
+}
+
+export type StatsOverview = {
+  period: StatsPeriod
+  learnerCefr: string
+  hasActivity: boolean
+  immersion: ImmersionStats
+  vocabulary: VocabularyStats
+  grammar: GrammarStats
+  ai: AiStats
+}
+
+export type PatternFilmExample = {
+  mediaId: string
+  title: string
+  season: number | null
+  episode: number | null
+  cueIdx: number
+  startSec: number
+  text: string
+  startChar: number
+  endChar: number
+}

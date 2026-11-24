@@ -38,7 +38,7 @@ export function SettingsNav({
         type="button"
         aria-current={selected ? 'page' : undefined}
         onClick={() => onSelectSection(id)}
-        className={`state-layer state-on-surface relative flex h-11 w-full items-center gap-3 rounded-full pr-3 pl-4 text-left transition-colors ${
+        className={`state-layer state-on-surface relative flex min-h-11 w-full items-center gap-3 rounded-full py-2 pr-3 pl-4 text-left transition-colors ${
           selected
             ? 'bg-[var(--md-sys-color-secondary-container)] text-[var(--md-sys-color-on-secondary-container)]'
             : 'text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container-high)]'

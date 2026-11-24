@@ -1,12 +1,12 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
-import { Button, Presence, Segmented, Select, TextField } from '@tomato1337/m3e-react'
+import { Button, Combobox, Presence, Segmented, Select, TextField } from '@tomato1337/m3e-react'
 import { api } from '@/common/api/tauri'
 import type { AppConfig, LlmProvider, TaskLlm } from '@/common/types/ipc'
 import { estimateUsd, formatTokens, formatUsd } from '@/common/utilities/tokens'
 import { SECTION_META } from '../lib/sections'
 import { TASKS, WEIGHT_LABEL, type TaskProfile } from '../taskProfiles'
-import { groupProviders, ModelPicker, type PingSummary } from './LlmFields'
+import { buildProviderOptions, ModelPicker, type PingSummary } from './LlmFields'
 import { MonthlyUsageDialog } from './MonthlyUsageDialog'
 import { AppShapeBadge, AppStatusChip, SecretField, SectionHeader, SettingGroup, SettingRow, type ApplyConfig } from './SettingsPrimitives'
 
@@ -39,7 +39,15 @@ export function ModelsSection({
   const [pingState, setPingState] = useState<PingSummary>({ pending: false })
   const meta = SECTION_META.models
 
-  const groups = useMemo(() => groupProviders(providers), [providers])
+  const providerOptions = useMemo(
+    () =>
+      buildProviderOptions(
+        providers,
+        { value: '', label: 'Вручную', keywords: 'manual' },
+        { source: cfg.llm.source, provider: cfg.llm.provider },
+      ),
+    [providers, cfg.llm.source, cfg.llm.provider],
+  )
   const selectedProvider = providers?.find((p) => p.source === cfg.llm.source && p.id === cfg.llm.provider)
   const providerValue = cfg.llm.source ? `${cfg.llm.source}\n${cfg.llm.provider}` : ''
 
@@ -141,12 +149,15 @@ export function ModelsSection({
             }
             control={
               <div className="w-full sm:w-[300px]">
-                <Select
+                <Combobox
                   aria-label="Провайдер"
                   variant="outlined"
                   value={providerValue}
-                  onChange={(e) => {
-                    const v = e.target.value
+                  options={providerOptions}
+                  searchable={6}
+                  searchPlaceholder="Поиск провайдера…"
+                  align="end"
+                  onChange={(v) => {
                     if (!v) {
                       set('llm', { source: '', provider: '' })
                       return
@@ -157,21 +168,7 @@ export function ModelsSection({
                     if (p && p.models.length > 0 && !p.models.includes(cfg.llm.model)) patch.model = p.models[0]
                     set('llm', patch)
                   }}
-                >
-                  <option value="">Вручную</option>
-                  {cfg.llm.source && !selectedProvider && (
-                    <option value={providerValue}>{`${cfg.llm.source}/${cfg.llm.provider} (не найден)`}</option>
-                  )}
-                  {groups.map((g) => (
-                    <optgroup key={g.label} label={g.label}>
-                      {g.items.map((p) => (
-                        <option key={`${p.source}\n${p.id}`} value={`${p.source}\n${p.id}`}>
-                          {p.hasKey ? p.label : `${p.label} — нет ключа`}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </Select>
+                />
               </div>
             }
           />
@@ -327,8 +324,15 @@ function TaskRow({
     enabled: !!model,
     staleTime: 3_600_000,
   })
-  const groups = useMemo(() => groupProviders(providers), [providers])
-  const found = providers?.find((p) => p.source === t.source && p.id === t.provider)
+  const providerOptions = useMemo(
+    () =>
+      buildProviderOptions(
+        providers,
+        { value: '', label: 'Провайдер: как основной', keywords: 'default основной' },
+        { source: t.source, provider: t.provider },
+      ),
+    [providers, t.source, t.provider],
+  )
   const patch = (p: Partial<TaskLlm>) => set('llmTasks', { [task.key]: { ...t, ...p } })
 
   const est = info.data?.price ? estimateUsd(info.data.price, task.input, task.cached, task.output) : null
@@ -365,12 +369,14 @@ function TaskRow({
       below={
         <div className="flex flex-col gap-2">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-[240px_minmax(0,1fr)]">
-            <Select
+            <Combobox
               aria-label={`Провайдер для «${task.title}»`}
               variant="outlined"
               value={t.source ? `${t.source}\n${t.provider}` : ''}
-              onChange={(e) => {
-                const v = e.target.value
+              options={providerOptions}
+              searchable={6}
+              searchPlaceholder="Поиск провайдера…"
+              onChange={(v) => {
                 if (!v) {
                   patch({ source: '', provider: '', model: '' })
                   return
@@ -379,21 +385,7 @@ function TaskRow({
                 const p = providers?.find((x) => x.source === nextSource && x.id === nextProvider)
                 patch({ source: nextSource, provider: nextProvider, model: p?.models[0] ?? '' })
               }}
-            >
-              <option value="">Провайдер: как основной</option>
-              {t.source && !found && (
-                <option value={`${t.source}\n${t.provider}`}>{`${t.source}/${t.provider} (не найден)`}</option>
-              )}
-              {groups.map((g) => (
-                <optgroup key={g.label} label={g.label}>
-                  {g.items.map((p) => (
-                    <option key={`${p.source}\n${p.id}`} value={`${p.source}\n${p.id}`}>
-                      {p.hasKey ? p.label : `${p.label} — нет ключа`}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </Select>
+            />
 
             {foreign ? (
               <ModelPicker

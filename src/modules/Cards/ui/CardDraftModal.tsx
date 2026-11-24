@@ -6,6 +6,7 @@ import { api, errorText } from '@/common/api/tauri'
 import type { CardJobEditor, CardPreview as CardPreviewData, WordDraft } from '@/common/types/ipc'
 import { useDebounced } from '@/common/utilities/useDebounced'
 import { lookupSpan, useAnkiStore } from '@/modules/Anki'
+import { VocabBadges, useVocabLookup } from '@/modules/Vocab'
 import { adoptImageDraft, editorView, textFieldRows } from '../lib/editor'
 import { useCardsStore } from '../store/cardsStore'
 import { CARD_PREVIEW_HEIGHT, CardPreview } from './CardPreview'
@@ -96,6 +97,7 @@ function EditorDialog({ editor }: Props) {
   const index = useAnkiStore((s) => s.index)
   const cards = useAnkiStore((s) => s.cards)
   const dup = view === 'draft' && draft ? lookupSpan(draft.word, index, cards) : null
+  const vocabQuery = useVocabLookup(view === 'draft' ? (debouncedDraft?.word ?? draft?.word) : null, job.mediaId)
 
   const generate = async () => {
     if (!draft || generating || busy) return
@@ -286,6 +288,7 @@ function EditorDialog({ editor }: Props) {
                   </>
                 ) : (
                   <>
+                    {vocabQuery.data && <VocabBadges vocab={vocabQuery.data} />}
                     {dup && (
                       <div className="type-body-small rounded-[var(--md-sys-shape-corner-small)] px-3 py-2" style={{ background: 'var(--app-anki-label-container)', color: 'var(--app-anki-on-label-container)' }}>
                         Уже есть в Anki: {dup.translation || dup.word}
