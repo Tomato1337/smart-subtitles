@@ -101,7 +101,30 @@ it('formats subtitle sources, pluralized card counts, greetings, and relative da
 
 it('picks welcome steps prioritizing missing deps first', () => {
   expect(pickWelcomeSteps(makeSetup()).map((s) => s.step.id)).toEqual(['llm', 'opensubtitles', 'lampa'])
+  expect(pickWelcomeSteps(makeSetup()).map((s) => s.priority)).toEqual(['tonal', 'tonal', 'outlined'])
   expect(pickWelcomeSteps(makeSetup({ deps: false })).map((s) => s.step.id)).toEqual(['deps', 'llm', 'opensubtitles'])
+})
+
+it('guards non-finite numbers in home progress and duration helpers', () => {
+  expect(formatDurationRu(Number.NaN)).toBe('0 мин')
+  expect(formatRemainingMinutes(Number.NaN)).toBe('0 мин')
+  expect(isMediaCompleted(Number.NaN, 1000)).toBe(false)
+  expect(isMediaCompleted(500, Number.NaN)).toBe(false)
+  expect(formatContinueProgress(Number.NaN, Number.NaN)).toEqual({
+    label: '0:00',
+    progress: 0,
+    completed: false,
+  })
+  expect(formatContinueProgress(Number.NaN, 600)).toEqual({
+    label: '0:00 / 10:00',
+    progress: 0,
+    completed: false,
+  })
+  expect(formatRecentPosition(Number.NaN, null)).toEqual({
+    label: 'Не начат',
+    progress: 0,
+    completed: false,
+  })
 })
 
 it('prioritizes home attention banners and settings indicator levels', () => {

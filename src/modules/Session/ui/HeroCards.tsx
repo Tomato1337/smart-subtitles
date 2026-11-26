@@ -62,6 +62,14 @@ function AnnotStatusChip({ item }: { item: RecentMedia }) {
   }
 }
 
+const HERO_CTA_STYLE = {
+  '--m3e-button-height': '80px',
+  '--m3e-button-container': 'var(--md-sys-color-primary-container)',
+  '--m3e-button-content': 'var(--md-sys-color-on-primary-container)',
+  '--m3e-button-radius': '20px',
+  '--m3e-button-press-radius': '28px',
+} as CSSProperties
+
 export function ContinueCard({
   item,
   busy,
@@ -119,19 +127,19 @@ export function ContinueCard({
         />
       )}
 
-      <div className="relative z-[1] flex max-w-[600px] flex-col p-7 sm:p-8">
+      <div className="relative z-[1] flex min-w-0 max-w-[600px] flex-col p-7 sm:p-8">
         <div className="flex items-center gap-2 text-[var(--md-sys-color-primary)]">
           <Icon name="history" size={20} />
           <span className="type-label-large type-emph">Продолжить просмотр</span>
         </div>
 
-        <div className="mt-2 flex flex-wrap items-center gap-3">
-          <h2 className="type-display-small type-emph text-[var(--md-sys-color-on-surface)]">{item.title}</h2>
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-3">
+          <h2 className="type-display-small type-emph min-w-0 max-w-full wrap-anywhere text-[var(--md-sys-color-on-surface)]">{item.title}</h2>
           <AnnotStatusChip item={item} />
         </div>
 
         {metaParts.length > 0 && (
-          <p className="type-body-medium mt-1 text-[var(--md-sys-color-on-surface-variant)]">
+          <p className="type-body-medium mt-1 min-w-0 wrap-anywhere text-[var(--md-sys-color-on-surface-variant)]">
             {metaParts.join(' · ')}
           </p>
         )}
@@ -146,15 +154,17 @@ export function ContinueCard({
         </div>
 
         <div className="mt-6 flex flex-wrap items-center gap-3">
-          <button
-            type="button"
+          <Button
+            variant="tonal"
+            size="md"
             disabled={busy}
             onClick={onContinue}
-            className="m3e-morph state-layer state-on-surface type-title-large type-emph relative flex min-h-20 items-center gap-3 rounded-[20px] bg-[var(--md-sys-color-primary-container)] py-4 pr-9 pl-6 text-[var(--md-sys-color-on-primary-container)] active:rounded-[28px] disabled:opacity-60"
+            className="type-title-large type-emph gap-3 pr-9 pl-6"
+            style={HERO_CTA_STYLE}
           >
             <Icon name="play_arrow" size={32} fill />
             <span>Смотреть дальше</span>
-          </button>
+          </Button>
           <IconButton
             icon="replay"
             label="Сначала"
@@ -281,7 +291,7 @@ export function WelcomeCard({
       }`}
     >
       {/* Expressive decorative backdrop shapes matching design/gen/home.py */}
-      <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 hidden w-[360px] md:block">
+      <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 hidden w-[360px] lg:block">
         <div
           className="absolute -top-24 -right-14 size-[360px] bg-[var(--md-sys-color-primary-container)] opacity-90"
           style={{ clipPath: shapeClip.cookie12, WebkitClipPath: shapeClip.cookie12 }}
@@ -346,7 +356,7 @@ export function WelcomeCard({
                   <div className="type-title-small type-emph truncate text-[var(--md-sys-color-on-surface)]">
                     {step.title}
                   </div>
-                  <div className="type-body-small truncate text-[var(--md-sys-color-on-surface-variant)]">
+                  <div className="type-body-small line-clamp-2 wrap-anywhere text-[var(--md-sys-color-on-surface-variant)]">
                     {step.hint}
                   </div>
                 </div>
@@ -362,14 +372,16 @@ export function WelcomeCard({
         )}
 
         <div className="mt-6 flex flex-wrap items-center gap-3">
-          <button
-            type="button"
+          <Button
+            variant="tonal"
+            size="md"
             onClick={onOpenWizard}
-            className="m3e-morph state-layer state-on-surface type-title-large type-emph relative flex min-h-20 items-center gap-3 rounded-[20px] bg-[var(--md-sys-color-primary-container)] py-4 pr-9 pl-6 text-[var(--md-sys-color-on-primary-container)] active:rounded-[28px]"
+            className="type-title-large type-emph gap-3 pr-9 pl-6"
+            style={HERO_CTA_STYLE}
           >
             <Icon name="auto_fix_high" size={32} fill />
             <span>Мастер настройки</span>
-          </button>
+          </Button>
           <Button variant="outlined" size="md" icon="folder_open" onClick={onPickFile}>
             Открыть файл
           </Button>

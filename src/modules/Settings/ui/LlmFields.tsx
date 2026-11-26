@@ -83,6 +83,7 @@ export function ModelPicker({
   onModel,
   inherit,
   compact = false,
+  hideLabel = false,
   variant = 'outlined',
   onPingState,
 }: {
@@ -92,6 +93,7 @@ export function ModelPicker({
   onModel: (m: string) => void
   inherit?: string
   compact?: boolean
+  hideLabel?: boolean
   variant?: 'filled' | 'outlined'
   onPingState?: (state: PingSummary) => void
 }) {
@@ -163,12 +165,13 @@ export function ModelPicker({
     [inherit, list],
   )
 
+  const unlabeled = compact || hideLabel
   const picker =
     list.length > 0 && !custom ? (
       list.length >= SEARCH_SELECT_THRESHOLD ? (
         <Combobox
-          label={compact ? undefined : 'Модель'}
-          aria-label={compact ? 'Модель' : undefined}
+          label={unlabeled ? undefined : 'Модель'}
+          aria-label={unlabeled ? 'Модель' : undefined}
           hint={compact ? undefined : statusHint}
           variant={variant}
           value={model}
@@ -183,8 +186,8 @@ export function ModelPicker({
         />
       ) : (
         <Select
-          label={compact ? undefined : 'Модель'}
-          aria-label={compact ? 'Модель' : undefined}
+          label={unlabeled ? undefined : 'Модель'}
+          aria-label={unlabeled ? 'Модель' : undefined}
           hint={compact ? undefined : statusHint}
           variant={variant}
           value={model}
@@ -205,8 +208,8 @@ export function ModelPicker({
       )
     ) : (
       <TextField
-        label={compact ? undefined : 'Модель'}
-        aria-label={compact ? 'Модель' : undefined}
+        label={unlabeled ? undefined : 'Модель'}
+        aria-label={unlabeled ? 'Модель' : undefined}
         hint={compact ? undefined : statusHint}
         variant={variant}
         value={model}
@@ -220,7 +223,7 @@ export function ModelPicker({
     <div className="flex flex-col gap-2">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">{picker}</div>
-        <div className={`flex shrink-0 items-center gap-1 ${compact ? '' : 'pt-5'}`}>
+        <div className={`flex shrink-0 items-center gap-1 ${unlabeled ? '' : 'pt-5'}`}>
           <IconButton
             icon="refresh"
             label="Обновить список моделей"

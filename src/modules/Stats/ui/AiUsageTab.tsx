@@ -1,8 +1,9 @@
 import type { CSSProperties } from 'react'
-import { Icon, ListGroup, ShapeBadge } from '@tomato1337/m3e-react'
+import { ListGroup, ShapeBadge } from '@tomato1337/m3e-react'
 import type { AiStats } from '@/common/types/ipc'
+import { Cover } from '@/common/ui/Cover'
 import { formatTokens, formatUsd } from '@/common/utilities/tokens'
-import { formatEpisodeTitle } from '../lib/format'
+import { computeSpendSharePct, formatAiTaskRequestCount, formatEpisodeTitle } from '../lib/format'
 import { DailySpendChart, LegendDot, StackedBar } from './StatsCharts'
 
 const TASK_META: Record<string, { label: string; color: string }> = {
@@ -28,8 +29,6 @@ const BADGE_ON_PRIMARY: CSSProperties = {
 } as CSSProperties
 
 export function AiUsageTab({ data }: { data: AiStats }) {
-  const totalUsdSafe = Math.max(0.0001, data.totalUsd)
-
   return (
     <div className="flex flex-col gap-6">
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -43,7 +42,7 @@ export function AiUsageTab({ data }: { data: AiStats }) {
             {formatUsd(data.totalUsd)}
           </div>
           <p className="type-body-small opacity-90">
-            {data.avgPerFilmUsd !== null ? `≈ ${formatUsd(data.avgPerFilmUsd)} в среднем за фильм` : 'Локальный журнал llm_usage'}
+            {data.avgPerFilmUsd !== null ? `≈ ${formatUsd(data.avgPerFilmUsd)} в среднем за фильм` : 'Локальный журнал запросов'}
           </p>
         </div>
 
@@ -55,7 +54,7 @@ export function AiUsageTab({ data }: { data: AiStats }) {
           <div className="type-headline-large type-emph tabular-nums">{data.requests}</div>
           <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
             {data.byTask.length > 0
-              ? data.byTask.map((t) => `${t.requests} ${TASK_META[t.task]?.label.split(' ')[0].toLowerCase() ?? t.task}`).join(' · ')
+              ? data.byTask.map((t) => formatAiTaskRequestCount(t.task, t.requests)).join(' · ')
               : 'Запросов ещё не было'}
           </p>
         </div>
@@ -93,14 +92,14 @@ export function AiUsageTab({ data }: { data: AiStats }) {
         </p>
       )}
 
-      <section className="flex flex-col gap-4 rounded-[28px] bg-[var(--md-sys-color-surface-container)] p-6">
+      <section className="flex min-w-0 flex-col gap-4 rounded-[28px] bg-[var(--md-sys-color-surface-container)] p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="type-title-large type-emph">
               {data.granularity === 'day' ? 'Расход по дням' : 'Расход по неделям'}
             </h2>
             <p className="type-body-medium text-[var(--md-sys-color-on-surface-variant)]">
-              Локальный журнал llm_usage в SQLite
+              Локальный журнал запросов к моделям
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-4">
@@ -114,8 +113,8 @@ export function AiUsageTab({ data }: { data: AiStats }) {
         <DailySpendChart series={data.series} granularity={data.granularity} />
       </section>
 
-      <section className="grid grid-cols-1 gap-5 lg:grid-cols-[1.2fr_1fr]">
-        <div className="flex flex-col gap-5">
+      <section className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+        <div className="flex min-w-0 flex-col gap-5">
           <div className="flex flex-col gap-2.5">
             <h2 className="type-title-large type-emph">По задачам</h2>
             {data.byTask.length === 0 ? (
@@ -128,7 +127,7 @@ export function AiUsageTab({ data }: { data: AiStats }) {
                   const meta = TASK_META[row.task] ?? { label: row.task, color: 'var(--md-sys-color-primary)' }
                   const totIn = row.inputTokens + row.cachedTokens
                   const cachePct = totIn > 0 ? Math.round((row.cachedTokens / totIn) * 100) : 0
-                  const share = data.totalUsd > 0 ? Math.round((row.usd / totalUsdSafe) * 100) : 0
+                  const share = computeSpendSharePct(row.usd, data.totalUsd)
                   return (
                     <div
                       key={row.task}
@@ -148,7 +147,7 @@ export function AiUsageTab({ data }: { data: AiStats }) {
                           ]}
                         />
                       </div>
-                      <div className="text-right tabular-nums">
+                      <div className="shrink-0 text-right tabular-nums">
                         <div className="type-title-medium type-emph">
                           {row.partial ? 'от ' : ''}
                           {formatUsd(row.usd)}
@@ -162,9 +161,9 @@ export function AiUsageTab({ data }: { data: AiStats }) {
             )}
           </div>
 
-          <div className="flex flex-col gap-2.5">
-            <h2 className="type-title-large type-emph">По моделям</h2>
-            {data.byModel.length === 0 ? null : (
+          {data.byModel.length > 0 && (
+            <div className="flex min-w-0 flex-col gap-2.5">
+              <h2 className="type-title-large type-emph">По моделям</h2>
               <div
                 tabIndex={0}
                 aria-label="Расход по моделям"
@@ -180,8 +179,10 @@ export function AiUsageTab({ data }: { data: AiStats }) {
                         className="flex items-center justify-between gap-3 bg-[var(--md-sys-color-surface-container)] px-5 py-3"
                       >
                         <div className="min-w-0 flex-1">
-                          <div className="type-title-small truncate font-mono font-semibold">{row.model || 'не указана'}</div>
-                          <div className="type-body-small truncate text-[var(--md-sys-color-on-surface-variant)]">
+                          <div className="type-title-small min-w-0 wrap-anywhere font-mono font-semibold">
+                            {row.model || 'не указана'}
+                          </div>
+                          <div className="type-body-small wrap-anywhere text-[var(--md-sys-color-on-surface-variant)]">
                             {row.requests} запр. · {cachePct}% кэш · {formatTokens(totIn)} вход / {formatTokens(row.outputTokens)} выход
                           </div>
                         </div>
@@ -194,18 +195,21 @@ export function AiUsageTab({ data }: { data: AiStats }) {
                   })}
                 </ListGroup>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
-        <div className="flex min-h-0 flex-col gap-2.5">
+        <div className="flex min-h-0 min-w-0 flex-col gap-2.5">
           <h2 className="type-title-large type-emph shrink-0">По фильмам</h2>
           {data.byFilm.length === 0 ? (
             <div className="rounded-[20px] bg-[var(--md-sys-color-surface-container)] p-5 text-center">
               <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">Расходов по фильмам пока нет</p>
             </div>
           ) : (
-            <div className="lg:relative lg:min-h-0 lg:flex-1">
+            <div
+              className="lg:relative lg:flex-1"
+              style={{ minHeight: Math.min(280, data.byFilm.length * 73) }}
+            >
               <div
                 tabIndex={0}
                 aria-label="Расход по фильмам"
@@ -217,16 +221,14 @@ export function AiUsageTab({ data }: { data: AiStats }) {
                       key={f.mediaId}
                       className="flex items-center justify-between gap-3 bg-[var(--md-sys-color-surface-container)] px-4 py-2.5"
                     >
-                      <div className="flex min-w-0 items-center gap-3">
-                        {f.posterUrl ? (
-                          <img src={f.posterUrl} alt="" className="h-[51px] w-[34px] shrink-0 rounded-[7px] object-cover" />
-                        ) : (
-                          <div className="flex h-[51px] w-[34px] shrink-0 items-center justify-center rounded-[7px] bg-[var(--md-sys-color-surface-container-highest)] text-[var(--md-sys-color-on-surface-variant)]">
-                            <Icon name="movie" size={16} />
-                          </div>
-                        )}
-                        <div className="min-w-0">
-                          <div className="type-title-small type-emph truncate">
+                      <div className="flex min-w-0 flex-1 items-center gap-3">
+                        <Cover
+                          src={f.posterUrl}
+                          title={f.title}
+                          className="h-[51px] w-[34px] shrink-0 rounded-[7px]"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="type-title-small type-emph min-w-0 wrap-anywhere">
                             {formatEpisodeTitle(f.title, f.season, f.episode)}
                           </div>
                           <div className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">

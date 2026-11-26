@@ -1,24 +1,10 @@
 import { useMemo } from 'react'
 import { Button, Icon, Kbd, ListGroup } from '@tomato1337/m3e-react'
+import { formatCountRu } from '@/common/utilities/pluralRu'
 import { HOTKEY_ACTIONS } from '@/modules/Hotkeys'
 import { hotkeyIndexItems, searchSettings, type SettingsIndexItem, type SettingsStatusContext } from '../lib/settingsIndex'
 import type { NavSection } from '../lib/sections'
 import { AppStatusChip } from './SettingsPrimitives'
-
-function pluralSettings(n: number): string {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 === 1 && mod100 !== 11) return `${n} настройка`
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} настройки`
-  return `${n} настроек`
-}
-
-function pluralSections(n: number): string {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 === 1 && mod100 !== 11) return `${n} разделе`
-  return `${n} разделах`
-}
 
 export function SearchResults({
   query,
@@ -49,9 +35,9 @@ export function SearchResults({
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="type-headline-small type-emph">
+        <h2 className="type-headline-small type-emph min-w-0 wrap-anywhere">
           {results.length > 0
-            ? `«${trimmed}» — ${pluralSettings(results.length)} в ${pluralSections(grouped.length)}`
+            ? `«${trimmed}» — ${formatCountRu(results.length, 'настройка', 'настройки', 'настроек')} в ${formatCountRu(grouped.length, 'разделе', 'разделах', 'разделах')}`
             : `По запросу «${trimmed}» ничего не найдено`}
         </h2>
         <div className="flex items-center gap-2">
@@ -99,14 +85,14 @@ export function SearchResults({
                   >
                     <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="type-title-medium type-emph">{item.title}</span>
+                        <span className="type-title-medium type-emph wrap-anywhere">{item.title}</span>
                         {item.configKey && (
                           <code className="type-label-small rounded-[var(--md-sys-shape-corner-extra-small)] bg-[var(--md-sys-color-surface-container-highest)] px-1.5 py-0.5 font-mono text-[var(--md-sys-color-on-surface-variant)]">
                             {item.configKey}
                           </code>
                         )}
                       </div>
-                      <span className="type-body-medium text-[var(--md-sys-color-on-surface-variant)]">
+                      <span className="type-body-medium wrap-anywhere text-[var(--md-sys-color-on-surface-variant)]">
                         {item.description}
                       </span>
                     </div>

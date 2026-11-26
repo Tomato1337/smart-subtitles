@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 import { Button, Combobox, Presence, Segmented, Select, TextField } from '@tomato1337/m3e-react'
 import { api } from '@/common/api/tauri'
 import type { AppConfig, LlmProvider, TaskLlm } from '@/common/types/ipc'
+import { formatCountRu, pluralRu } from '@/common/utilities/pluralRu'
 import { estimateUsd, formatTokens, formatUsd } from '@/common/utilities/tokens'
 import { SECTION_META } from '../lib/sections'
 import { TASKS, WEIGHT_LABEL, type TaskProfile } from '../taskProfiles'
@@ -17,9 +18,9 @@ const SOURCE_MODES = [
 
 const EFFORT_OPTIONS = [
   { value: 'off', label: 'выкл' },
-  { value: 'low', label: 'low' },
-  { value: 'medium', label: 'med' },
-  { value: 'high', label: 'high' },
+  { value: 'low', label: 'низк.' },
+  { value: 'medium', label: 'сред.' },
+  { value: 'high', label: 'макс.' },
 ] as const
 
 export function ModelsSection({
@@ -145,7 +146,7 @@ export function ModelsSection({
             sub={
               selectedProvider?.hasKey
                 ? `${selectedProvider.baseUrl} · ${selectedProvider.api === 'anthropic' ? 'Anthropic' : 'OpenAI-совместимый'} · ключ из ${selectedProvider.file}`
-                : `${providers?.length ?? 0} провайдеров найдено на этом компьютере`
+                : `${formatCountRu(providers?.length ?? 0, 'провайдер', 'провайдера', 'провайдеров')} ${pluralRu(providers?.length ?? 0, 'найден', 'найдено', 'найдено')} на этом компьютере`
             }
             control={
               <div className="w-full sm:w-[300px]">
@@ -245,6 +246,7 @@ export function ModelsSection({
               conn={cfg.llm}
               providers={providers}
               model={cfg.llm.model}
+              hideLabel
               onModel={(model) => set('llm', { model })}
               onPingState={setPingState}
             />
@@ -358,13 +360,16 @@ function TaskRow({
       }
       sub={subText}
       control={
-        <Segmented
-          label={`Рассуждение для «${task.title}»`}
-          size="sm"
-          value={t.effort}
-          options={EFFORT_OPTIONS}
-          onChange={(effort) => patch({ effort })}
-        />
+        <div className="flex flex-col items-start gap-1 sm:items-end">
+          <span className="type-label-medium text-[var(--md-sys-color-on-surface-variant)]">Рассуждение</span>
+          <Segmented
+            label={`Рассуждение для «${task.title}»`}
+            size="sm"
+            value={t.effort}
+            options={EFFORT_OPTIONS}
+            onChange={(effort) => patch({ effort })}
+          />
+        </div>
       }
       below={
         <div className="flex flex-col gap-2">

@@ -218,18 +218,20 @@ export function HomeScreen({ onOpenWizard = () => {} }: { onOpenWizard?: () => v
     }
     if (latest) {
       const greeting = greetingForHour(new Date().getHours())
-      const completed = isMediaCompleted(latest.lastPosition, latest.duration)
+      const pos = Number.isFinite(latest.lastPosition) && latest.lastPosition > 0 ? latest.lastPosition : 0
+      const dur = latest.duration !== null && Number.isFinite(latest.duration) && latest.duration > 0 ? latest.duration : null
+      const completed = isMediaCompleted(pos, dur)
       const tail = completed
         ? 'просмотрен — можно пересмотреть сначала.'
-        : latest.lastPosition > 0 && latest.duration && latest.duration > latest.lastPosition
-          ? `ждёт на ${formatTime(latest.lastPosition)} — осталось ${formatRemainingMinutes(latest.duration - latest.lastPosition)}.`
-          : latest.lastPosition > 0
-            ? `ждёт на ${formatTime(latest.lastPosition)}.`
+        : pos > 0 && dur && dur > pos
+          ? `ждёт на ${formatTime(pos)} — осталось ${formatRemainingMinutes(dur - pos)}.`
+          : pos > 0
+            ? `ждёт на ${formatTime(pos)}.`
             : 'готов к просмотру.'
       return (
         <>
           {greeting}{' '}
-          <strong className="font-semibold text-[var(--md-sys-color-on-surface)]">«{latest.title}»</strong> {tail}
+          <strong className="font-semibold wrap-anywhere text-[var(--md-sys-color-on-surface)]">«{latest.title}»</strong> {tail}
         </>
       )
     }
@@ -279,20 +281,30 @@ export function HomeScreen({ onOpenWizard = () => {} }: { onOpenWizard?: () => v
                   '--m3e-icon-button-radius': '28px',
                 } as CSSProperties}
               />
-              {settingsAttention && (
+              {settingsAttention === 'error' && (
+                <span
+                  aria-hidden="true"
+                  className="type-label-small pointer-events-none absolute -top-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full font-bold leading-none ring-2 ring-[var(--md-sys-color-surface)]"
+                  style={{
+                    background: 'light-dark(var(--md-sys-color-error), color-mix(in srgb, var(--md-sys-color-error) 30%, #ff5449))',
+                    color: 'light-dark(var(--md-sys-color-on-error), #240605)',
+                  }}
+                >
+                  !
+                </span>
+              )}
+              {settingsAttention === 'warn' && (
                 <span
                   aria-hidden="true"
                   className="pointer-events-none absolute top-0.5 right-0.5 size-3 rounded-full ring-2 ring-[var(--md-sys-color-surface)]"
-                  style={{
-                    background: settingsAttention === 'error' ? 'var(--md-sys-color-error)' : 'var(--app-warning)',
-                  }}
+                  style={{ background: 'var(--app-warning)' }}
                 />
               )}
             </span>
           </div>
         </div>
 
-        <p className="type-body-large mt-2 text-[var(--md-sys-color-on-surface-variant)]">{renderSubtitle()}</p>
+        <p className="type-body-large mt-2 min-w-0 wrap-anywhere text-[var(--md-sys-color-on-surface-variant)]">{renderSubtitle()}</p>
       </header>
 
       <div className="mt-7 flex flex-col gap-3">

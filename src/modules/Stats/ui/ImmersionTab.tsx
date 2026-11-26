@@ -1,6 +1,8 @@
 import { useState, type CSSProperties } from 'react'
-import { Segmented, ShapeBadge, StatusChip, ListGroup, Icon } from '@tomato1337/m3e-react'
+import { Segmented, ShapeBadge, StatusChip, ListGroup } from '@tomato1337/m3e-react'
 import type { ImmersionStats } from '@/common/types/ipc'
+import { Cover } from '@/common/ui/Cover'
+import { formatCountRu } from '@/common/utilities/pluralRu'
 import {
   filmCefrSummary,
   formatEpisodeTitle,
@@ -84,22 +86,32 @@ export function ImmersionTab({
   const watchDelta = formatWatchDelta(data.watchedSec, data.prevWatchedSec)
   const watchSub =
     data.filmsCount > 0
-      ? `${data.filmsCount} фильм(ов)${watchDelta ? ` · ${watchDelta}` : ''}`
+      ? `${formatCountRu(data.filmsCount, 'фильм', 'фильма', 'фильмов')}${watchDelta ? ` · ${watchDelta}` : ''}`
       : 'Запусти фильм, чтобы начать учёт минут'
 
+  const lookupsPer10Min = data.lookupsPer10Min !== null && Number.isFinite(data.lookupsPer10Min) ? data.lookupsPer10Min : null
+  const prevLookupsPer10Min =
+    data.prevLookupsPer10Min !== null && Number.isFinite(data.prevLookupsPer10Min) ? data.prevLookupsPer10Min : null
+  const avgComprehensionPct =
+    data.avgComprehensionPct !== null && Number.isFinite(data.avgComprehensionPct) ? data.avgComprehensionPct : null
+
   const frictionSub = (() => {
-    if (data.lookupsPer10Min === null) return 'Нет данных за период'
-    if (data.prevLookupsPer10Min !== null) {
-      const diff = +(data.lookupsPer10Min - data.prevLookupsPer10Min).toFixed(1)
-      if (diff < 0) return `↓ с ${data.prevLookupsPer10Min} к пред. периоду — реже паузишь`
-      if (diff > 0) return `↑ с ${data.prevLookupsPer10Min} — более сложные фильмы`
-      return `на уровне прошлого периода (${data.prevLookupsPer10Min})`
+    if (lookupsPer10Min === null) return 'Нет данных за период'
+    if (prevLookupsPer10Min !== null) {
+      const diff = +(lookupsPer10Min - prevLookupsPer10Min).toFixed(1)
+      if (diff < 0) return `↓ с ${prevLookupsPer10Min} к пред. периоду — реже паузишь`
+      if (diff > 0) return `↑ с ${prevLookupsPer10Min} — более сложные фильмы`
+      return `на уровне прошлого периода (${prevLookupsPer10Min})`
     }
     return 'Подсказок за каждые 10 мин речи'
   })()
 
-  const firstClick = data.frictionTrend.find((p) => p.lookupsPer10m !== null)?.lookupsPer10m ?? null
-  const lastClick = [...data.frictionTrend].reverse().find((p) => p.lookupsPer10m !== null)?.lookupsPer10m ?? null
+  const firstClick =
+    data.frictionTrend.find((p) => p.lookupsPer10m !== null && Number.isFinite(p.lookupsPer10m))?.lookupsPer10m ?? null
+  const lastClick =
+    [...data.frictionTrend]
+      .reverse()
+      .find((p) => p.lookupsPer10m !== null && Number.isFinite(p.lookupsPer10m))?.lookupsPer10m ?? null
   const trendDeltaPct =
     data.frictionTrend.length >= 2 && firstClick !== null && firstClick > 0 && lastClick !== null
       ? Math.round(((lastClick - firstClick) / firstClick) * 100)
@@ -115,7 +127,12 @@ export function ImmersionTab({
           label="Время в английском"
           value={formatWatchDuration(data.watchedSec)}
           sub={watchSub}
-          subSuccess={Boolean(data.prevWatchedSec !== null && data.watchedSec > data.prevWatchedSec)}
+          subSuccess={Boolean(
+            data.prevWatchedSec !== null &&
+              Number.isFinite(data.watchedSec) &&
+              Number.isFinite(data.prevWatchedSec) &&
+              data.watchedSec > data.prevWatchedSec,
+          )}
         />
         <KpiCard
           shape="cookie9"
@@ -123,7 +140,7 @@ export function ImmersionTab({
           tone="neutral"
           badgeStyle={BADGE_SUCCESS}
           label="Среднее понимание"
-          value={data.avgComprehensionPct !== null ? `${data.avgComprehensionPct}%` : '—'}
+          value={avgComprehensionPct !== null ? `${avgComprehensionPct}%` : '—'}
           sub={`По субтитрам · база ${learnerCefr} + Anki + «Знаю»`}
         />
         <KpiCard
@@ -131,13 +148,9 @@ export function ImmersionTab({
           icon="touch_app"
           tone="secondary"
           label="Кликов на 10 мин"
-          value={data.lookupsPer10Min !== null ? String(data.lookupsPer10Min) : '—'}
+          value={lookupsPer10Min !== null ? String(lookupsPer10Min) : '—'}
           sub={frictionSub}
-          subSuccess={Boolean(
-            data.lookupsPer10Min !== null &&
-              data.prevLookupsPer10Min !== null &&
-              data.lookupsPer10Min < data.prevLookupsPer10Min,
-          )}
+          subSuccess={Boolean(lookupsPer10Min !== null && prevLookupsPer10Min !== null && lookupsPer10Min < prevLookupsPer10Min)}
         />
         <KpiCard
           shape="cookie12"
@@ -154,8 +167,8 @@ export function ImmersionTab({
         />
       </section>
 
-      <section className="grid grid-cols-1 gap-5 lg:grid-cols-[1.35fr_1fr]">
-        <div className="flex flex-col gap-4 rounded-[28px] bg-[var(--md-sys-color-surface-container)] p-6">
+      <section className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+        <div className="flex min-w-0 flex-col gap-4 rounded-[28px] bg-[var(--md-sys-color-surface-container)] p-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="type-title-large type-emph">Активность</h2>
@@ -197,7 +210,7 @@ export function ImmersionTab({
           </div>
         </div>
 
-        <div className="flex flex-col gap-4 rounded-[28px] bg-[var(--md-sys-color-surface-container)] p-6">
+        <div className="flex min-w-0 flex-col gap-4 rounded-[28px] bg-[var(--md-sys-color-surface-container)] p-6">
           <div className="flex items-start justify-between gap-2">
             <div>
               <h2 className="type-title-large type-emph">Снижение «трения»</h2>
@@ -249,19 +262,23 @@ export function ImmersionTab({
               <span>Понимание</span>
               <span>Лексика по CEFR</span>
               <span>Темп речи</span>
-              <span>Трение / 10м</span>
+              <span>Трение / 10 мин</span>
               <span>Anki</span>
             </div>
 
             <ListGroup>
               {data.films.map((f) => {
-                const pace = paceLabel(f.wpm)
+                const wpm = f.wpm !== null && Number.isFinite(f.wpm) ? f.wpm : null
+                const pace = paceLabel(wpm)
+                const compPct = f.comprehensionPct !== null && Number.isFinite(f.comprehensionPct) ? f.comprehensionPct : null
+                const lookups = f.lookupsPer10m !== null && Number.isFinite(f.lookupsPer10m) ? f.lookupsPer10m : null
+                const replays = f.replaysPer10m !== null && Number.isFinite(f.replaysPer10m) ? f.replaysPer10m : null
                 const compStyle =
-                  f.comprehensionPct === null
+                  compPct === null
                     ? undefined
-                    : f.comprehensionPct >= 80
+                    : compPct >= 80
                       ? SUCCESS_CHIP
-                      : f.comprehensionPct < 70
+                      : compPct < 70
                         ? WARNING_CHIP
                         : undefined
                 return (
@@ -270,36 +287,32 @@ export function ImmersionTab({
                     className="grid grid-cols-1 items-center gap-3 bg-[var(--md-sys-color-surface-container)] px-5 py-3 md:grid-cols-[minmax(220px,1.35fr)_84px_minmax(215px,1.3fr)_96px_124px_60px] md:gap-4"
                   >
                     <div className="flex min-w-0 items-center gap-3">
-                      {f.posterUrl ? (
-                        <img
-                          src={f.posterUrl}
-                          alt=""
-                          className="h-[57px] w-[38px] shrink-0 rounded-[8px] object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-[57px] w-[38px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--md-sys-color-surface-container-highest)] text-[var(--md-sys-color-on-surface-variant)]">
-                          <Icon name="movie" size={18} />
-                        </div>
-                      )}
-                      <div className="min-w-0">
+                      <Cover
+                        src={f.posterUrl}
+                        title={f.title}
+                        className="h-[57px] w-[38px] shrink-0 rounded-[8px]"
+                      />
+                      <div className="min-w-0 flex-1">
                         <div className="type-title-small type-emph truncate">
                           {formatEpisodeTitle(f.title, f.season, f.episode)}
                         </div>
                         <div className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
                           {f.watchedSec > 0 ? formatWatchDuration(f.watchedSec) : '0 м'}
-                          {f.cuesCount > 0 ? ` · ${f.cuesCount} реплик` : ' · без субтитров'}
+                          {f.cuesCount > 0
+                            ? ` · ${formatCountRu(f.cuesCount, 'реплика', 'реплики', 'реплик')}`
+                            : ' · без субтитров'}
                         </div>
                       </div>
                     </div>
 
                     <div>
-                      {f.comprehensionPct !== null ? (
+                      {compPct !== null ? (
                         <StatusChip
                           size="sm"
-                          tone={f.comprehensionPct >= 70 && f.comprehensionPct < 80 ? 'primary' : 'neutral'}
+                          tone={compPct >= 70 && compPct < 80 ? 'primary' : 'neutral'}
                           style={compStyle}
                         >
-                          {f.comprehensionPct}%
+                          {compPct}%
                         </StatusChip>
                       ) : (
                         <span className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">—</span>
@@ -329,9 +342,9 @@ export function ImmersionTab({
                     </div>
 
                     <div>
-                      {f.wpm !== null ? (
+                      {wpm !== null ? (
                         <>
-                          <div className="type-title-small type-emph tabular-nums">{f.wpm} сл/м</div>
+                          <div className="type-title-small type-emph tabular-nums">{wpm} сл/м</div>
                           {pace && <div className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">{pace}</div>}
                         </>
                       ) : (
@@ -340,8 +353,8 @@ export function ImmersionTab({
                     </div>
 
                     <div className="type-body-medium tabular-nums text-[var(--md-sys-color-on-surface-variant)]">
-                      {f.lookupsPer10m !== null || f.replaysPer10m !== null
-                        ? `${f.lookupsPer10m ?? 0} кл · ${f.replaysPer10m ?? 0} повт.`
+                      {lookups !== null || replays !== null
+                        ? `${lookups ?? 0} кл · ${replays ?? 0} повт.`
                         : '—'}
                     </div>
 

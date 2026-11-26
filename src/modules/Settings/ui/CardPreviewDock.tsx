@@ -8,12 +8,30 @@ import { CardPreview } from '@/modules/Cards'
 import { imageSettingsKey } from './ImageFields'
 import { AppStatusChip } from './SettingsPrimitives'
 
+/** Reads the active document color scheme so the card preview matches dark/light mode on open. */
+export function detectDarkScheme(): boolean {
+  if (typeof document !== 'undefined') {
+    const inline = document.documentElement.style.colorScheme
+    if (inline === 'dark') return true
+    if (inline === 'light') return false
+    if (typeof getComputedStyle === 'function') {
+      const computed = getComputedStyle(document.documentElement).colorScheme
+      if (computed.includes('dark') && !computed.includes('light')) return true
+      if (computed.includes('light') && !computed.includes('dark')) return false
+    }
+  }
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches
+  }
+  return true
+}
+
 /**
  * Sticky right dock on `anki`, `media` and `images` sections showing the live Anki card preview.
  * Uses the FNV-1a `imageSettingsKey` digest in the query key so API keys never appear in devtools.
  */
 export function CardPreviewDock({ cfg }: { cfg: AppConfig }) {
-  const [night, setNight] = useState(false)
+  const [night, setNight] = useState(detectDarkScheme)
   const debounced = useDebounced({ anki: cfg.anki, images: cfg.images, tutor: cfg.tutor }, 300)
   const preview = useQuery({
     queryKey: ['card-preview', debounced.anki, imageSettingsKey(debounced.images, debounced.tutor)],
@@ -24,7 +42,7 @@ export function CardPreviewDock({ cfg }: { cfg: AppConfig }) {
   return (
     <aside
       aria-label="Предпросмотр карточки Anki"
-      className="flex w-full flex-col gap-3 rounded-[28px] bg-[var(--md-sys-color-surface-container-low)] p-4 xl:sticky xl:top-[84px] xl:max-h-[calc(100vh-108px)] xl:self-start xl:overflow-y-auto"
+      className="stats-scroll flex w-full flex-col gap-3 rounded-[28px] bg-[var(--md-sys-color-surface-container-low)] p-4 xl:sticky xl:top-[84px] xl:max-h-[calc(100vh-108px)] xl:self-start xl:overflow-y-auto"
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">

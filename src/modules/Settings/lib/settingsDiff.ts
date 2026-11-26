@@ -129,3 +129,12 @@ export function diffConfig(draft: AppConfig, saved: AppConfig): SettingsDiff {
     restartRequired: draft.server.port !== saved.server.port,
   }
 }
+
+/**
+ * Reconciles `draft` after `configSave(savedSnapshot)` succeeds: clears `draft` when no edits were
+ * made while the save was in flight, or preserves newer edits untouched.
+ */
+export function reconcileDraftAfterSave(currentDraft: AppConfig | null, savedSnapshot: AppConfig): AppConfig | null {
+  if (!currentDraft) return null
+  return diffConfig(currentDraft, savedSnapshot).dirty ? currentDraft : null
+}

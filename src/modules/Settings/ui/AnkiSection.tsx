@@ -4,12 +4,42 @@ import { Button, Chip, Combobox, Icon, Select, Spinner, Switch, TextField, toast
 import { notify } from '@/common/api/notify'
 import { api, errorText, onEvent } from '@/common/api/tauri'
 import type { AnkiConnectionStatus, AppConfig, CardSource } from '@/common/types/ipc'
+import { formatCountRu, pluralRu } from '@/common/utilities/pluralRu'
 import { autoSource, SOURCE_LABELS } from '@/modules/Cards'
 import { SECTION_META } from '../lib/sections'
 import { SEARCH_SELECT_THRESHOLD } from './LlmFields'
 import { SectionHeader, SettingGroup, SettingRow, type ApplyConfig } from './SettingsPrimitives'
 
 const BUILTIN = 'Smart Subtitles — Vocab'
+
+/** Derives the Anki connection summary line, suppressing stale cached catalog counts when offline. */
+export function describeAnkiCatalogStatus({
+  ankiStatus,
+  ankiChecking,
+  catalogFetching,
+  catalogError,
+  decksCount,
+  noteTypesCount,
+}: {
+  ankiStatus?: AnkiConnectionStatus
+  ankiChecking: boolean
+  catalogFetching: boolean
+  catalogError: string | null
+  decksCount: number | null
+  noteTypesCount: number | null
+}): string {
+  if (ankiChecking || catalogFetching) return 'Спрашиваю Anki…'
+  if (ankiStatus && !ankiStatus.ok) {
+    return ankiStatus.error
+      ? `Anki не отвечает: ${ankiStatus.error}`
+      : 'Anki не отвечает — откройте Anki с AnkiConnect'
+  }
+  if (catalogError) return catalogError
+  if (decksCount !== null && noteTypesCount !== null) {
+    return `Anki отвечает: ${formatCountRu(decksCount, 'колода', 'колоды', 'колод')}, ${formatCountRu(noteTypesCount, 'тип заметки', 'типа заметок', 'типов заметок')}`
+  }
+  return 'Проверьте подключение к AnkiConnect'
+}
 
 export function AnkiSection({
   cfg,
@@ -49,8 +79,9 @@ export function AnkiSection({
   }, [qc])
 
   const allDecks = cfg.anki.indexDecks.includes('*')
-  const deckList = catalog.data?.decks ?? []
-  const typeList = useMemo(() => catalog.data?.noteTypes ?? [], [catalog.data?.noteTypes])
+  const ankiOffline = ankiStatus ? !ankiStatus.ok : false
+  const deckList = ankiOffline ? [] : (catalog.data?.decks ?? [])
+  const typeList = useMemo(() => (ankiOffline ? [] : (catalog.data?.noteTypes ?? [])), [ankiOffline, catalog.data?.noteTypes])
   const fields = noteType.data?.fields ?? []
   const noteTypeOptions = useMemo<ComboboxOption[]>(() => {
     const out: ComboboxOption[] = [{ value: BUILTIN, label: `${BUILTIN} (встроенный)` }]
@@ -124,7 +155,9 @@ export function AnkiSection({
           <Icon name="sync_problem" size={24} />
           <span className="type-body-medium min-w-0 flex-1">
             Anki не отвечает на {cfg.anki.url}
-            {ankiStatus.queuedCards > 0 ? ` — ${ankiStatus.queuedCards} карточек ждут в очереди.` : '.'}
+            {ankiStatus.queuedCards > 0
+              ? ` — ${ankiStatus.queuedCards} ${pluralRu(ankiStatus.queuedCards, 'карточка ждёт', 'карточки ждут', 'карточек ждут')} в очереди.`
+              : '.'}
           </span>
           <Button
             variant="text"
@@ -155,13 +188,14 @@ export function AnkiSection({
           changed={changedKeys.has('anki.url')}
           configKey="anki.url"
           label="Адрес AnkiConnect"
-          sub={
-            catalog.isFetching
-              ? 'Спрашиваю Anki…'
-              : catalog.error
-                ? errorText(catalog.error)
-                : `Anki отвечает: колод ${deckList.length}, типов заметок ${typeList.length}`
-          }
+          sub={describeAnkiCatalogStatus({
+            ankiStatus,
+            ankiChecking,
+            catalogFetching: catalog.isFetching,
+            catalogError: catalog.error ? errorText(catalog.error) : null,
+            decksCount: catalog.data ? deckList.length : null,
+            noteTypesCount: catalog.data ? typeList.length : null,
+          })}
           control={
             <div className="w-full sm:w-[240px]">
               <TextField
@@ -214,7 +248,7 @@ export function AnkiSection({
               <datalist id="anki-decks-list">
                 {deckList.map((d) => (
                   <option key={d.name} value={d.name}>
-                    {`${d.cards} карточек`}
+                    {formatCountRu(d.cards, 'карточка', 'карточки', 'карточек')}
                   </option>
                 ))}
               </datalist>
@@ -292,7 +326,7 @@ export function AnkiSection({
           highlighted={focusId === 'anki.fields'}
           changed={changedKeys.has('anki.fields')}
           configKey="anki.fields"
-          label={`${cfg.anki.noteType} · ${fields.length} полей`}
+          label={`${cfg.anki.noteType} · ${formatCountRu(fields.length, 'поле', 'поля', 'полей')}`}
           below={
             noteType.isPending ? (
               <Spinner label="Загружаю поля" size={20} width={2} />
@@ -358,7 +392,7 @@ export function AnkiSection({
           label="Все колоды"
           sub={
             ankiStatus
-              ? `${ankiStatus.indexCount} слов в индексе${indexUpdatedText ? ` · обновлён в ${indexUpdatedText}` : ''}`
+              ? `${formatCountRu(ankiStatus.indexCount, 'слово', 'слова', 'слов')} в индексе${indexUpdatedText ? ` · обновлён в ${indexUpdatedText}` : ''}`
               : 'Чтение словаря из Anki'
           }
           control={
