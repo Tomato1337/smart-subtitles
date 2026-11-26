@@ -43,7 +43,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
     <Dialog onClose={onClose} dismissible label="Настройка Smart Subtitles" className="max-h-[90vh] w-[720px] max-w-[96vw] p-0">
       <div className="flex shrink-0 items-center justify-between px-6 pt-5 pb-2">
         <h2 className="type-headline-small">{TITLES[step]}</h2>
-        <IconButton icon="close" label="Закрыть" onClick={onClose} />
+        <IconButton icon="close" label="Закрыть" noTip onClick={onClose} />
       </div>
       <Progress step={step} />
       {saved && status ? (

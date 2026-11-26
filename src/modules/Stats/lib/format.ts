@@ -5,10 +5,14 @@ import type {
   StatsPeriod,
   UnaddedWord,
 } from '@/common/types/ipc'
+import { formatCountRu } from '@/common/utilities/pluralRu'
 
 export type StatsTab = 'immersion' | 'vocab' | 'grammar' | 'ai'
 export type UnaddedFilter = 'useful' | 'all' | 'repeat'
 export type GrammarStatusFilter = 'all' | 'learning' | 'encountered' | 'known'
+
+/** Query key matching `Patterns` module's `statsKey` (`['patterns-stats']`). */
+export const PATTERN_STATS_KEY = ['patterns-stats'] as const
 
 const CEFR_ORDER = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'] as const
 const MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
@@ -26,6 +30,7 @@ export function normalizeTab(raw: unknown): StatsTab {
 
 /** Formats watched seconds cleanly in Russian: `0 м`, `42 м`, `1 ч 43 м`, `14 ч 20 м`. */
 export function formatWatchDuration(sec: number): string {
+  if (!Number.isFinite(sec) || sec <= 0) return '0 м'
   const mins = Math.max(0, Math.round(sec / 60))
   const h = Math.floor(mins / 60)
   const m = mins % 60
@@ -35,7 +40,7 @@ export function formatWatchDuration(sec: number): string {
 
 /** Signed change between current and previous watch-time windows; null when no prior data exists. */
 export function formatWatchDelta(curSec: number, prevSec: number | null): string | null {
-  if (prevSec === null) return null
+  if (prevSec === null || !Number.isFinite(curSec) || !Number.isFinite(prevSec)) return null
   const diffMin = Math.round((curSec - prevSec) / 60)
   if (diffMin === 0) return 'на уровне прошлого периода'
   const sign = diffMin > 0 ? '+' : '−'
@@ -56,17 +61,11 @@ export function formatEpisodeTitle(title: string, season: number | null, episode
 }
 
 export function formatFilmCountLabel(count: number): string {
-  const n = Math.abs(Math.trunc(count))
-  const mod100 = n % 100
-  const mod10 = n % 10
-  if (mod100 >= 11 && mod100 <= 14) return `${n} фильмов`
-  if (mod10 === 1) return `${n} фильм`
-  if (mod10 >= 2 && mod10 <= 4) return `${n} фильма`
-  return `${n} фильмов`
+  return formatCountRu(count, 'фильм', 'фильма', 'фильмов')
 }
 
 export function paceLabel(wpm: number | null): string | null {
-  if (wpm === null) return null
+  if (wpm === null || !Number.isFinite(wpm)) return null
   if (wpm < 120) return 'спокойный'
   if (wpm <= 145) return 'средний'
   return 'быстрый'
@@ -96,11 +95,36 @@ export function formatSharePct(share: number): string {
 }
 
 export function filmCefrSummary(f: FilmProfile): string {
-  const basePct = Math.round((f.cefrA + f.cefrB) * 100)
+  const rawBase = (Number.isFinite(f.cefrA) ? f.cefrA : 0) + (Number.isFinite(f.cefrB) ? f.cefrB : 0)
+  const basePct = Math.round(Math.max(0, rawBase) * 100)
   const parts = [`A1–B2 ${basePct}%`]
-  if (f.cefrC > 0) parts.push(`C1–C2 ${formatSharePct(f.cefrC)}`)
-  if (f.cefrOther > 0) parts.push(`прочее ${formatSharePct(f.cefrOther)}`)
+  if (Number.isFinite(f.cefrC) && f.cefrC > 0) parts.push(`C1–C2 ${formatSharePct(f.cefrC)}`)
+  if (Number.isFinite(f.cefrOther) && f.cefrOther > 0) parts.push(`прочее ${formatSharePct(f.cefrOther)}`)
   return parts.join(' · ')
+}
+
+/** Computes rounded percentage share directly against `totalUsd` (so sub-cent totals still add up to 100%). */
+export function computeSpendSharePct(usd: number, totalUsd: number): number {
+  if (!Number.isFinite(usd) || !Number.isFinite(totalUsd) || totalUsd <= 0 || usd <= 0) return 0
+  return Math.round((usd / totalUsd) * 100)
+}
+
+const AI_TASK_FORMS: Record<string, readonly [string, string, string]> = {
+  annotate: ['разбор', 'разбора', 'разборов'],
+  explain: ['объяснение', 'объяснения', 'объяснений'],
+  chat: ['вопрос в чат', 'вопроса в чат', 'вопросов в чат'],
+  draft: ['черновик', 'черновика', 'черновиков'],
+  cost: ['оценка цены', 'оценки цены', 'оценок цены'],
+}
+
+/** Formats per-task AI request counts with exact Russian noun agreement (`10 разборов`). */
+export function formatAiTaskRequestCount(task: string, requests: number): string {
+  const forms = AI_TASK_FORMS[task]
+  if (!forms) {
+    const safe = Number.isFinite(requests) ? Math.trunc(requests) : 0
+    return `${safe} ${task}`
+  }
+  return formatCountRu(requests, forms[0], forms[1], forms[2])
 }
 
 export type HeatmapWeekColumn = {

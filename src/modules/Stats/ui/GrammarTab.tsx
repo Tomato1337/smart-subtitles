@@ -1,9 +1,9 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState, type CSSProperties } from 'react'
-import { useNavigate } from '@tanstack/react-router'
 import {
   Button,
   Chip,
+  Icon,
   ListGroup,
   Segmented,
   ShapeBadge,
@@ -15,9 +15,10 @@ import {
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { GrammarStats } from '@/common/types/ipc'
+import { pluralRu } from '@/common/utilities/pluralRu'
 import { formatTime } from '@/common/utilities/time'
 import { PATTERNS } from '@/modules/Patterns'
-import { filterGrammarPatterns, formatEpisodeTitle, type GrammarStatusFilter } from '../lib/format'
+import { filterGrammarPatterns, formatEpisodeTitle, PATTERN_STATS_KEY, type GrammarStatusFilter } from '../lib/format'
 import { usePatternExamples } from '../useStats'
 
 const SUCCESS_CHIP: CSSProperties = {
@@ -48,7 +49,6 @@ function HighlightedCue({ text, start, end }: { text: string; start: number; end
 
 export function GrammarTab({ data }: { data: GrammarStats }) {
   const qc = useQueryClient()
-  const navigate = useNavigate()
   const [statusFilter, setStatusFilter] = useState<GrammarStatusFilter>('all')
   const [levelFilter, setLevelFilter] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -74,7 +74,7 @@ export function GrammarTab({ data }: { data: GrammarStats }) {
       api.patternsSetStatus(id, status),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['stats'] })
-      void qc.invalidateQueries({ queryKey: ['pattern-stats'] })
+      void qc.invalidateQueries({ queryKey: PATTERN_STATS_KEY })
     },
     onError: (e) => notify('error', errorText(e)),
   })
@@ -82,7 +82,6 @@ export function GrammarTab({ data }: { data: GrammarStats }) {
   const openExample = async (mediaId: string, startSec: number) => {
     try {
       await api.sessionReopen(mediaId, false, startSec)
-      void navigate({ to: '/' })
     } catch (e) {
       notify('error', errorText(e))
     }
@@ -189,12 +188,14 @@ export function GrammarTab({ data }: { data: GrammarStats }) {
           ))}
         </div>
 
-        <div className="ml-auto w-full sm:w-[220px]">
+        <div className="ml-auto w-full sm:w-[240px]">
           <TextField
-            label="Поиск"
+            variant="pill"
+            aria-label="Поиск конструкции или формулы"
             placeholder="Конструкция или формула"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            leading={<Icon name="search" size={18} />}
           />
         </div>
       </section>
@@ -255,11 +256,11 @@ export function GrammarTab({ data }: { data: GrammarStats }) {
                     key={`${ex.mediaId}:${ex.cueIdx}`}
                     className="flex items-center justify-between gap-3 bg-[var(--md-sys-color-surface-container)] px-4 py-2.5"
                   >
-                    <div className="min-w-0">
-                      <div className="type-label-small font-semibold text-[var(--md-sys-color-primary)]">
+                    <div className="min-w-0 flex-1">
+                      <div className="type-label-small wrap-anywhere font-semibold text-[var(--md-sys-color-primary)]">
                         {formatEpisodeTitle(ex.title, ex.season, ex.episode)} · {formatTime(ex.startSec)}
                       </div>
-                      <div className="type-body-medium truncate">
+                      <div className="type-body-medium wrap-anywhere">
                         <HighlightedCue text={ex.text.replaceAll('\n', ' ')} start={ex.startChar} end={ex.endChar} />
                       </div>
                     </div>
@@ -304,24 +305,27 @@ export function GrammarTab({ data }: { data: GrammarStats }) {
                 key={p.id}
                 type="button"
                 onClick={() => setSelectedId(p.id)}
-                className={`flex flex-col gap-2 rounded-[24px] p-4.5 text-left transition-colors ${
+                className={`flex min-w-0 flex-col gap-2 rounded-[24px] p-4.5 text-left transition-colors ${
                   isSelected
                     ? 'border-2 border-[var(--md-sys-color-primary)] bg-[var(--md-sys-color-surface-container-high)]'
                     : p.count === 0
-                      ? 'bg-[var(--md-sys-color-surface-container-low)] opacity-65 hover:opacity-95'
+                      ? 'border border-[var(--md-sys-color-outline-variant)]/50 bg-[var(--md-sys-color-surface-container-low)] hover:bg-[var(--md-sys-color-surface-container)]'
                       : 'bg-[var(--md-sys-color-surface-container)] hover:bg-[var(--md-sys-color-surface-container-high)]'
                 }`}
               >
-                <div className="flex w-full items-start justify-between gap-2">
-                  <span className="type-title-medium type-emph min-w-0 truncate">{p.label}</span>
-                  <StatusChip size="sm" tone={statusTone} style={statusStyle}>
+                <div className="flex w-full min-w-0 items-start justify-between gap-2">
+                  <span className="type-title-medium type-emph min-w-0 flex-1 line-clamp-2 wrap-anywhere">{p.label}</span>
+                  <StatusChip size="sm" tone={statusTone} style={statusStyle} className="shrink-0">
                     {statusLabel}
                   </StatusChip>
                 </div>
-                <div className="type-label-large font-semibold text-[var(--app-kind-grammar)]">{p.formula}</div>
+                <div className="type-label-large min-w-0 wrap-anywhere font-semibold text-[var(--app-kind-grammar)]">{p.formula}</div>
                 <div className="type-body-small mt-auto flex w-full items-center justify-between text-[var(--md-sys-color-on-surface-variant)]">
                   <span>
-                    {p.level} · ×{p.count} {p.filmsCount > 0 ? `в ${p.filmsCount} фильм(ах)` : 'пока'}
+                    {p.level} ·{' '}
+                    {p.count === 0
+                      ? 'пока не встречалась'
+                      : `×${p.count}${p.filmsCount > 0 ? ` в ${p.filmsCount} ${pluralRu(p.filmsCount, 'фильме', 'фильмах', 'фильмах')}` : ''}`}
                   </span>
                   {isSelected && <span className="type-label-small font-semibold text-[var(--md-sys-color-primary)]">выбрано</span>}
                 </div>

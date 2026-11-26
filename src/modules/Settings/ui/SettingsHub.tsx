@@ -8,7 +8,7 @@ import type { AppConfig } from '@/common/types/ipc'
 import { HOTKEY_ACTIONS } from '@/modules/Hotkeys'
 import { NotificationHeaderButton } from '@/modules/Notifications'
 import { SECTION_META, type NavSection, type SettingsSection } from '../lib/sections'
-import { diffConfig } from '../lib/settingsDiff'
+import { diffConfig, reconcileDraftAfterSave } from '../lib/settingsDiff'
 import { hotkeyIndexItems, searchSettings } from '../lib/settingsIndex'
 import { AnkiSection } from './AnkiSection'
 import { CardPreviewDock } from './CardPreviewDock'
@@ -55,6 +55,8 @@ export function SettingsHub({ section, focus, onNavigateSection, onBack, scrollC
 
   const saved = configQuery.data
   const [draft, setDraft] = useState<AppConfig | null>(null)
+  const draftRef = useRef(draft)
+  draftRef.current = draft
 
   const [query, setQuery] = useState('')
   const [wizardOpen, setWizardOpen] = useState(false)
@@ -90,9 +92,10 @@ export function SettingsHub({ section, focus, onNavigateSection, onBack, scrollC
   const save = useMutation({
     mutationFn: (cfgToSave: AppConfig) => api.configSave(cfgToSave),
     onSuccess: (restart, cfgToSave) => {
-      dirtyRef.current = false
+      const nextDraft = reconcileDraftAfterSave(draftRef.current, cfgToSave)
+      dirtyRef.current = nextDraft !== null
       qc.setQueryData(['config'], cfgToSave)
-      setDraft(null)
+      setDraft((cur) => reconcileDraftAfterSave(cur, cfgToSave))
       toast(restart ? 'Сохранено. Новый порт заработает после перезапуска приложения' : 'Настройки сохранены')
       void qc.invalidateQueries({ queryKey: ['config'] })
       void qc.invalidateQueries({ queryKey: ['llm-providers'] })
@@ -183,7 +186,7 @@ export function SettingsHub({ section, focus, onNavigateSection, onBack, scrollC
     const out: Partial<Record<NavSection, NavAlert>> = {}
     if (!activeDraft) return out
     if (!llmReady(activeDraft.llm, providersQuery.data)) out.models = { kind: 'count', count: 1 }
-    if (!activeDraft.opensubtitles.apiKey.trim()) out.subs = { kind: 'count', count: 1 }
+    if (!activeDraft.opensubtitles.apiKey.trim()) out.subs = { kind: 'warning' }
     if (ankiQuery.data && (!ankiQuery.data.ok || ankiQuery.data.queuedCards > 0)) out.anki = { kind: 'warning' }
     if (activeDraft.lampa.origins.length === 0) out.lampa = { kind: 'warning' }
     const missingReqDeps = depsQuery.data?.deps.filter((d) => d.importance === 'required' && !d.found).length ?? 0
@@ -238,11 +241,7 @@ export function SettingsHub({ section, focus, onNavigateSection, onBack, scrollC
         </div>
       </header>
 
-      <div
-        className={`mx-auto px-6 pt-5 pb-32 ${
-          showPreview ? 'max-w-[1440px]' : 'max-w-[1232px]'
-        }`}
-      >
+      <div className="mx-auto max-w-[1440px] px-6 pt-5 pb-32">
         {configQuery.error ? (
           <div className="rounded-[24px] bg-[var(--md-sys-color-error-container)] p-6 text-[var(--md-sys-color-on-error-container)]">
             <p className="type-title-medium type-emph">Не удалось загрузить настройки</p>
@@ -272,7 +271,7 @@ export function SettingsHub({ section, focus, onNavigateSection, onBack, scrollC
               searchInputRef={searchInputRef}
             />
 
-            <main className="min-w-0">
+            <main className={showPreview ? 'min-w-0' : 'min-w-0 max-w-[920px]'}>
               {searching ? (
                 <SearchResults
                   query={query}

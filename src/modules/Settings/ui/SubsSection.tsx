@@ -34,7 +34,7 @@ export function SubsSection({
         subtitle={meta.subtitle}
         icon={meta.icon}
         shape={meta.shape}
-        tone={hasKey ? 'primary' : 'error'}
+        tone={meta.tone}
       />
 
       <section
@@ -64,7 +64,6 @@ export function SubsSection({
         </div>
         <SubtitleSourcesFields
           sources={cfg.subtitles.sources}
-          hasOpenSubtitlesKey={hasKey}
           onChange={(sources) => set('subtitles', { sources })}
         />
       </section>
@@ -78,7 +77,7 @@ export function SubsSection({
               ключ задан
             </AppStatusChip>
           ) : (
-            <AppStatusChip tone="error" size="md" icon="error">
+            <AppStatusChip tone="warning" size="md" icon="warning">
               нет ключа
             </AppStatusChip>
           )

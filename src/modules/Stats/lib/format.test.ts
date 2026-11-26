@@ -4,9 +4,11 @@ import {
   buildHeatmapColumns,
   cefrGoalLabel,
   cefrWindowLabel,
+  computeSpendSharePct,
   filmCefrSummary,
   filterGrammarPatterns,
   filterUnaddedWords,
+  formatAiTaskRequestCount,
   formatFilmCountLabel,
   formatSharePct,
   formatUsdAxisTick,
@@ -14,6 +16,7 @@ import {
   formatWatchDuration,
   niceAxisCeil,
   paceLabel,
+  PATTERN_STATS_KEY,
   pickAxisLabelIndices,
 } from './format'
 
@@ -211,5 +214,32 @@ describe('Stats formatters & filters', () => {
     expect(
       filmCefrSummary({ ...baseFilm, cefrA: 0.7, cefrB: 0.3, cefrC: 0, cefrOther: 0 }),
     ).toBe('A1–B2 100%')
+    expect(
+      filmCefrSummary({ ...baseFilm, cefrA: Number.NaN, cefrB: Number.NaN, cefrC: Number.NaN, cefrOther: Number.NaN }),
+    ).toBe('A1–B2 0%')
+  })
+
+  test('guards non-finite numbers across duration, pace, counts, and AI share math', () => {
+    expect(formatWatchDuration(Number.NaN)).toBe('0 м')
+    expect(formatWatchDuration(Number.POSITIVE_INFINITY)).toBe('0 м')
+    expect(formatWatchDelta(Number.NaN, 120)).toBeNull()
+    expect(formatWatchDelta(120, Number.NaN)).toBeNull()
+    expect(formatFilmCountLabel(Number.NaN)).toBe('0 фильмов')
+    expect(paceLabel(Number.NaN)).toBeNull()
+    expect(paceLabel(Number.POSITIVE_INFINITY)).toBeNull()
+    expect(formatSharePct(Number.NaN)).toBe('0%')
+
+    expect(computeSpendSharePct(0.00001, 0.00001)).toBe(100)
+    expect(computeSpendSharePct(0.000005, 0.00001)).toBe(50)
+    expect(computeSpendSharePct(0, 0)).toBe(0)
+    expect(computeSpendSharePct(Number.NaN, 1)).toBe(0)
+
+    expect(formatAiTaskRequestCount('annotate', 10)).toBe('10 разборов')
+    expect(formatAiTaskRequestCount('annotate', 1)).toBe('1 разбор')
+    expect(formatAiTaskRequestCount('explain', 2)).toBe('2 объяснения')
+    expect(formatAiTaskRequestCount('chat', 1)).toBe('1 вопрос в чат')
+    expect(formatAiTaskRequestCount('draft', 5)).toBe('5 черновиков')
+
+    expect(PATTERN_STATS_KEY).toEqual(['patterns-stats'])
   })
 })

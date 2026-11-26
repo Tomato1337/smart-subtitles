@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon, IconButton, ListGroup, Switch } from '@tomato1337/m3e-react'
 import type { SubtitleSource } from '@/common/types/ipc'
-import { AppStatusChip } from './SettingsPrimitives'
 
 const SOURCES: [SubtitleSource, string, string][] = [
   ['torrserver', 'TorrServer', 'Субтитры из той же раздачи'],
@@ -12,6 +11,11 @@ const SOURCES: [SubtitleSource, string, string][] = [
 
 const INFO = new Map(SOURCES.map(([id, title, hint]) => [id, { title, hint }]))
 
+/** Formats ordered `subtitles.sources` with localized Russian labels for summaries. */
+export function formatSubtitleSources(sources: readonly SubtitleSource[]): string {
+  return sources.map((id) => INFO.get(id)?.title ?? id).join(' → ')
+}
+
 /**
  * Order of the automatic subtitle search: enabled sources first (in order), disabled below.
  * Supports pointer drag-and-drop on the handle (with Esc cancel and layout midpoints) as well
@@ -19,11 +23,9 @@ const INFO = new Map(SOURCES.map(([id, title, hint]) => [id, { title, hint }]))
  */
 export function SubtitleSourcesFields({
   sources,
-  hasOpenSubtitlesKey,
   onChange,
 }: {
   sources: SubtitleSource[]
-  hasOpenSubtitlesKey: boolean
   onChange: (s: SubtitleSource[]) => void
 }) {
   const rows: SubtitleSource[] = [
@@ -165,7 +167,6 @@ export function SubtitleSourcesFields({
           const showDropLineAbove = draggingId !== null && dropSlot === pos && dragFromIndex !== null && dragFromIndex > pos
           const showDropLineBelow = draggingId !== null && dropSlot === pos && dragFromIndex !== null && dragFromIndex < pos
           const { title, hint } = INFO.get(id) ?? { title: id, hint: '' }
-          const warn = id === 'opensubtitles' && !hasOpenSubtitlesKey
 
           return (
             <div
@@ -251,12 +252,6 @@ export function SubtitleSourcesFields({
                 <span className="type-title-medium type-emph">{title}</span>
                 <span className="type-body-medium text-[var(--md-sys-color-on-surface-variant)]">{hint}</span>
               </div>
-
-              {warn && (
-                <AppStatusChip tone="error" size="md" icon="key_off" className="shrink-0">
-                  нужен ключ
-                </AppStatusChip>
-              )}
 
               <div className="flex shrink-0 items-center gap-0.5">
                 <IconButton

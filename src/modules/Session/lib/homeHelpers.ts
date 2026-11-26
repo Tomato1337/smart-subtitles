@@ -1,5 +1,6 @@
 import type { RecentMedia } from '@/common/api/tauri'
 import type { AnkiConnectionStatus, DepsStatus, SetupStatus, SetupStep, SystemInfo } from '@/common/types/ipc'
+import { pluralRu } from '@/common/utilities/pluralRu'
 import { formatTime } from '@/common/utilities/time'
 
 export type SettingsSection =
@@ -38,18 +39,10 @@ export function formatSeasonEpisode(season: number | null, episode: number | nul
   return null
 }
 
-function pluralRu(n: number, one: string, few: string, many: string): string {
-  const abs = Math.abs(n) % 100
-  const mod10 = abs % 10
-  if (abs >= 11 && abs <= 19) return many
-  if (mod10 === 1) return one
-  if (mod10 >= 2 && mod10 <= 4) return few
-  return many
-}
-
 /** Formats duration in Russian compact form (`1 ч 43 мин`, `52 мин`, `< 1 мин`). */
 export function formatDurationRu(sec: number): string {
-  const totalSec = Math.max(0, Math.floor(sec))
+  if (!Number.isFinite(sec) || sec <= 0) return '0 мин'
+  const totalSec = Math.floor(sec)
   if (totalSec > 0 && totalSec < 60) return '< 1 мин'
   const mins = Math.floor(totalSec / 60)
   const h = Math.floor(mins / 60)
@@ -61,14 +54,15 @@ export function formatDurationRu(sec: number): string {
 
 /** Formats remaining playback time (`12 мин`, `1 ч 14 мин`, `< 1 мин`). */
 export function formatRemainingMinutes(sec: number): string {
-  const rem = Math.max(0, Math.ceil(sec))
+  if (!Number.isFinite(sec) || sec <= 0) return '0 мин'
+  const rem = Math.ceil(sec)
   if (rem > 0 && rem < 60) return '< 1 мин'
   return formatDurationRu(rem)
 }
 
 /** True when playback reached the final tail of a film (matching backend `resume_position` 60 s rule). */
 export function isMediaCompleted(lastPosition: number, duration: number | null): boolean {
-  if (!duration || duration <= 0) return false
+  if (!Number.isFinite(lastPosition) || !duration || !Number.isFinite(duration) || duration <= 0) return false
   return lastPosition >= Math.max(duration - 60, duration * 0.95)
 }
 
@@ -77,17 +71,18 @@ export function formatContinueProgress(
   lastPosition: number,
   duration: number | null,
 ): { label: string; progress: number; completed: boolean } {
-  if (!duration || duration <= 0) {
-    return { label: formatTime(lastPosition), progress: 0, completed: false }
+  const pos = Number.isFinite(lastPosition) && lastPosition > 0 ? lastPosition : 0
+  if (!duration || !Number.isFinite(duration) || duration <= 0) {
+    return { label: formatTime(pos), progress: 0, completed: false }
   }
-  const completed = isMediaCompleted(lastPosition, duration)
-  const progress = completed ? 1 : Math.max(0, Math.min(1, lastPosition / duration))
+  const completed = isMediaCompleted(pos, duration)
+  const progress = completed ? 1 : Math.max(0, Math.min(1, pos / duration))
   if (completed) {
     return { label: `Досмотрен · ${formatTime(duration)}`, progress: 1, completed: true }
   }
-  const rem = Math.max(0, duration - lastPosition)
-  const base = `${formatTime(lastPosition)} / ${formatTime(duration)}`
-  if (lastPosition > 0 && rem > 0) {
+  const rem = Math.max(0, duration - pos)
+  const base = `${formatTime(pos)} / ${formatTime(duration)}`
+  if (pos > 0 && rem > 0) {
     return { label: `${base} · осталось ${formatRemainingMinutes(rem)}`, progress, completed: false }
   }
   return { label: base, progress, completed: false }
@@ -98,13 +93,14 @@ export function formatRecentPosition(
   lastPosition: number,
   duration: number | null,
 ): { label: string; progress: number; completed: boolean } {
-  if (!duration || duration <= 0) {
-    return { label: lastPosition > 0 ? formatTime(lastPosition) : 'Не начат', progress: 0, completed: false }
+  const pos = Number.isFinite(lastPosition) && lastPosition > 0 ? lastPosition : 0
+  if (!duration || !Number.isFinite(duration) || duration <= 0) {
+    return { label: pos > 0 ? formatTime(pos) : 'Не начат', progress: 0, completed: false }
   }
-  const completed = isMediaCompleted(lastPosition, duration)
+  const completed = isMediaCompleted(pos, duration)
   if (completed) return { label: 'Досмотрен', progress: 1, completed: true }
-  const progress = Math.max(0, Math.min(1, lastPosition / duration))
-  const posText = lastPosition < 60 && lastPosition > 0 ? '< 1 мин' : formatDurationRu(lastPosition)
+  const progress = Math.max(0, Math.min(1, pos / duration))
+  const posText = pos < 60 && pos > 0 ? '< 1 мин' : formatDurationRu(pos)
   return { label: `${posText} из ${formatDurationRu(duration)}`, progress, completed: false }
 }
 
@@ -163,15 +159,15 @@ export type WelcomeStepItem = {
   step: SetupStep
   section: SettingsSection
   actionLabel: string
-  priority: 'tonal' | 'text'
+  priority: 'tonal' | 'outlined'
 }
 
-const STEP_META: Record<SetupStep['id'], { section: SettingsSection; actionLabel: string; priority: 'tonal' | 'text' }> = {
+const STEP_META: Record<SetupStep['id'], { section: SettingsSection; actionLabel: string; priority: 'tonal' | 'outlined' }> = {
   deps: { section: 'system', actionLabel: 'Проверить', priority: 'tonal' },
   llm: { section: 'models', actionLabel: 'Выбрать', priority: 'tonal' },
   opensubtitles: { section: 'subs', actionLabel: 'Добавить', priority: 'tonal' },
-  lampa: { section: 'lampa', actionLabel: 'Указать', priority: 'text' },
-  anki: { section: 'anki', actionLabel: 'Настроить', priority: 'text' },
+  lampa: { section: 'lampa', actionLabel: 'Указать', priority: 'outlined' },
+  anki: { section: 'anki', actionLabel: 'Настроить', priority: 'outlined' },
 }
 
 /** Picks the 3 key onboarding steps for `WelcomeCard`: `deps` only when missing, otherwise LLM, OpenSubtitles, Lampa. */

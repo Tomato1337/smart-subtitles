@@ -64,7 +64,7 @@ export const SECTION_META: Record<NavSection, SectionMeta> = {
     id: 'anki',
     group: 'Карточки',
     label: 'Anki',
-    subtitle: 'Куда и как попадают карточки. Предпросмотр справа обновляется сразу по черновику.',
+    subtitle: 'Куда и как попадают карточки. Предпросмотр обновляется сразу по черновику.',
     icon: 'style',
     shape: 'sunny',
     tone: 'anki',

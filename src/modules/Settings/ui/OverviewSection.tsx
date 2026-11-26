@@ -1,11 +1,13 @@
 import { Button, Icon, ListGroup } from '@tomato1337/m3e-react'
 import type { AnkiConnectionStatus, AppConfig, DepsStatus, LlmProvider, MonthlyUsage, SystemInfo } from '@/common/types/ipc'
+import { pluralRu } from '@/common/utilities/pluralRu'
 import { formatUsd } from '@/common/utilities/tokens'
 import { HOTKEY_ACTIONS, useHotkeysStore } from '@/modules/Hotkeys'
 import { NAV_GROUPS, SECTION_META, type AppTone, type NavSection } from '../lib/sections'
 import { imageRouteLabel } from './ImageFields'
 import { llmReady } from './LlmFields'
 import { AppShapeBadge, AppStatusChip, SectionHeader } from './SettingsPrimitives'
+import { formatSubtitleSources } from './SubtitleSourcesFields'
 
 type AttentionItem = {
   id: string
@@ -45,11 +47,7 @@ function formatRelativeSeen(lampaLastSeen: Record<string, number> | undefined): 
 
 function pluralOrigins(n: number): string {
   if (n === 0) return 'Нет разрешённых адресов'
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 === 1 && mod100 !== 11) return `${n} адрес Lampa`
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} адреса Lampa`
-  return `${n} адресов Lampa`
+  return `${n} ${pluralRu(n, 'адрес', 'адреса', 'адресов')} Lampa`
 }
 
 export function OverviewSection({
@@ -109,7 +107,7 @@ export function OverviewSection({
     issues.push({
       id: 'opensubtitles',
       icon: 'key_off',
-      tone: 'error',
+      tone: 'warning',
       title: 'Нет ключа OpenSubtitles',
       description: 'Субтитры только из раздачи, файла или контейнера.',
       sectionLabel: 'Субтитры',
@@ -184,11 +182,11 @@ export function OverviewSection({
     },
     subs: {
       lines: [
-        cfg.subtitles.sources.length > 0 ? cfg.subtitles.sources.join(' → ') : 'Автопоиск выключен',
+        cfg.subtitles.sources.length > 0 ? formatSubtitleSources(cfg.subtitles.sources) : 'Автопоиск выключен',
         `OpenSubtitles: ${cfg.opensubtitles.apiKey ? 'ключ задан' : 'нет ключа'} · фокус ${Math.round(cfg.subtitles.idleOpacity * 100)}%`,
       ],
-      chip: cfg.opensubtitles.apiKey ? undefined : { label: 'нет ключа', tone: 'error' },
-      toneOverride: cfg.opensubtitles.apiKey ? 'primary' : 'error',
+      chip: cfg.opensubtitles.apiKey ? undefined : { label: 'нет ключа', tone: 'warning' },
+      toneOverride: cfg.opensubtitles.apiKey ? 'primary' : 'warning',
     },
     anki: {
       lines: [
@@ -270,8 +268,8 @@ export function OverviewSection({
                   onClick={issue.onRowClick ?? issue.onAction}
                   className="min-w-0 flex-1 text-left"
                 >
-                  <div className="type-title-small type-emph">{issue.title}</div>
-                  <div className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">{issue.description}</div>
+                  <div className="type-title-small type-emph wrap-anywhere">{issue.title}</div>
+                  <div className="type-body-small wrap-anywhere text-[var(--md-sys-color-on-surface-variant)]">{issue.description}</div>
                 </button>
                 <span className="type-label-medium hidden text-[var(--md-sys-color-on-surface-variant)] sm:inline">
                   {issue.sectionLabel}
@@ -313,7 +311,7 @@ export function OverviewSection({
                   key={id}
                   type="button"
                   onClick={() => onJump(id)}
-                  className="state-layer state-on-surface relative flex flex-col gap-3 rounded-[24px] bg-[var(--md-sys-color-surface-container-low)] p-5 text-left transition-colors hover:bg-[var(--md-sys-color-surface-container)]"
+                  className="state-layer state-on-surface relative flex min-w-0 flex-col gap-3 rounded-[24px] bg-[var(--md-sys-color-surface-container-low)] p-5 text-left transition-colors hover:bg-[var(--md-sys-color-surface-container)]"
                 >
                   <div className="flex w-full items-center justify-between gap-2">
                     <AppShapeBadge
@@ -332,12 +330,12 @@ export function OverviewSection({
                       <Icon name="chevron_right" size={22} className="text-[var(--md-sys-color-on-surface-variant)]" />
                     )}
                   </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="type-title-medium type-emph">{meta.label}</span>
-                    <span className="type-body-small line-clamp-2 text-[var(--md-sys-color-on-surface-variant)]">
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <span className="type-title-medium type-emph wrap-anywhere">{meta.label}</span>
+                    <span className="type-body-small line-clamp-2 wrap-anywhere text-[var(--md-sys-color-on-surface-variant)]">
                       {info.lines[0]}
                     </span>
-                    <span className="type-body-small line-clamp-2 text-[var(--md-sys-color-on-surface-variant)]">
+                    <span className="type-body-small line-clamp-2 wrap-anywhere text-[var(--md-sys-color-on-surface-variant)]">
                       {info.lines[1]}
                     </span>
                   </div>

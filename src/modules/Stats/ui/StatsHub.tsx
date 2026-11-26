@@ -3,6 +3,7 @@ import { Button, Icon, IconButton, Segmented, ShapeBadge, Spinner, StatusChip, t
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { StatsPeriod } from '@/common/types/ipc'
+import { formatCountRu } from '@/common/utilities/pluralRu'
 import { formatUsd } from '@/common/utilities/tokens'
 import { NotificationHeaderButton } from '@/modules/Notifications'
 import { cefrGoalLabel, type StatsTab } from '../lib/format'
@@ -168,7 +169,7 @@ export function StatsHub({
             />
             <span>
               {data.vocabulary.ankiConnected
-                ? `Anki · ${data.vocabulary.ankiMaturity.total} карточек`
+                ? `Anki · ${formatCountRu(data.vocabulary.ankiMaturity.total, 'карточка', 'карточки', 'карточек')}`
                 : 'Anki не в сети · обновить'}
             </span>
           </button>
@@ -194,7 +195,7 @@ export function StatsHub({
         data-app-topbar=""
         className="sticky top-0 z-20 border-b border-[var(--md-sys-color-outline-variant)]/50 bg-[color-mix(in_srgb,var(--md-sys-color-surface)_92%,transparent)] backdrop-blur-md"
       >
-        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center gap-3 px-6 py-3.5">
+        <div className="mx-auto flex max-w-[1160px] flex-wrap items-center gap-3 px-6 py-3.5">
           <IconButton icon="arrow_back" label="Назад" variant="tonal" size="lg" onClick={onBack} />
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2.5">
             <h1 className="type-headline-medium type-emph">Статистика</h1>

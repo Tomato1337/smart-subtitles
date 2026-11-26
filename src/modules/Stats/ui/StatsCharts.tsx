@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { FrictionPoint, HeatmapDay, SpendBucket, WeeklyBar } from '@/common/types/ipc'
+import { formatCountRu } from '@/common/utilities/pluralRu'
 import { formatUsd } from '@/common/utilities/tokens'
 import {
   buildHeatmapColumns,
@@ -31,13 +32,17 @@ export function StackedBar({
   height?: number
   radius?: number
 }) {
-  const total = segments.reduce((acc, s) => acc + Math.max(0, s.value), 0)
+  const safeSegs = segments.map((s) => ({
+    ...s,
+    value: Number.isFinite(s.value) && s.value > 0 ? s.value : 0,
+  }))
+  const total = safeSegs.reduce((acc, s) => acc + s.value, 0)
   return (
     <div
       className="flex w-full overflow-hidden bg-[var(--md-sys-color-surface-container-highest)]"
       style={{ height, borderRadius: radius, gap: 2 }}
     >
-      {total <= 0 ? null : segments.map((s, idx) => {
+      {total <= 0 ? null : safeSegs.map((s, idx) => {
         if (s.value <= 0) return null
         const pct = (s.value / total) * 100
         return (
@@ -53,10 +58,13 @@ export function StackedBar({
   )
 }
 
-export function LegendDot({ color, label }: { color: string; label: string }) {
+export function LegendDot({ color, label, ring = false }: { color: string; label: string; ring?: boolean }) {
   return (
     <span className="inline-flex items-center gap-1.5 type-body-small text-[var(--md-sys-color-on-surface-variant)]">
-      <span className="size-2 shrink-0 rounded-full" style={{ background: color }} />
+      <span
+        className={`size-2 shrink-0 rounded-full ${ring ? 'ring-1 ring-[var(--md-sys-color-outline)]' : ''}`}
+        style={{ background: color }}
+      />
       {label}
     </span>
   )
@@ -80,7 +88,7 @@ export function HeatmapChart({ days }: { days: HeatmapDay[] }) {
             <span>
               <strong>{formatShortDate(shown.day)}</strong> ·{' '}
               {shown.watchedSec > 0 ? formatWatchDuration(shown.watchedSec) : 'без просмотра'}
-              {shown.films > 0 ? ` · ${shown.films} фильм(а)` : ''}
+              {shown.films > 0 ? ` · ${formatCountRu(shown.films, 'фильм', 'фильма', 'фильмов')}` : ''}
               {shown.cards > 0 ? ` · +${shown.cards} карт.` : ''}
             </span>
           </span>
@@ -135,8 +143,9 @@ export function HeatmapChart({ days }: { days: HeatmapDay[] }) {
                         onMouseEnter={() => !d.future && setHovered(d)}
                         onFocus={() => !d.future && setHovered(d)}
                         onMouseLeave={() => setHovered(null)}
-                        className={`size-[22px] rounded-[6px] transition-transform focus-visible:outline-none ${
-                          d.future ? 'opacity-25' : 'hover:scale-110'
+                        onBlur={() => setHovered(null)}
+                        className={`size-[22px] rounded-[6px] transition-transform motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--md-sys-color-primary)] ${
+                          d.future ? 'opacity-25' : 'hover:scale-110 motion-reduce:hover:scale-100'
                         } ${selected ? 'ring-2 ring-[var(--md-sys-color-on-surface)] ring-offset-1 ring-offset-[var(--md-sys-color-surface-container)]' : ''}`}
                         style={{ background: HEATMAP_FILLS[d.level] ?? HEATMAP_FILLS[0] }}
                       />
@@ -153,27 +162,28 @@ export function HeatmapChart({ days }: { days: HeatmapDay[] }) {
 }
 
 export function WeeklyBarsChart({ bars }: { bars: WeeklyBar[] }) {
-  const maxSec = Math.max(60, ...bars.map((b) => b.watchedSec))
+  const maxSec = Math.max(60, ...bars.map((b) => (Number.isFinite(b.watchedSec) && b.watchedSec > 0 ? b.watchedSec : 0)))
   return (
     <div className="flex h-[220px] items-end gap-2 pt-4">
       {bars.map((b) => {
-        const pct = Math.max(b.watchedSec > 0 ? 8 : 3, Math.round((b.watchedSec / maxSec) * 100))
+        const sec = Number.isFinite(b.watchedSec) && b.watchedSec > 0 ? b.watchedSec : 0
+        const pct = Math.max(sec > 0 ? 8 : 3, Math.round((sec / maxSec) * 100))
         return (
           <div
             key={b.weekStart}
             className="flex min-w-0 flex-1 flex-col items-center gap-1.5"
-            title={`${b.label}: ${formatWatchDuration(b.watchedSec)}${b.cards > 0 ? ` · +${b.cards} карт.` : ''}`}
+            title={`${b.label}: ${formatWatchDuration(sec)}${b.cards > 0 ? ` · +${b.cards} карт.` : ''}`}
           >
             <span className="type-label-small truncate text-[var(--md-sys-color-on-surface-variant)]">
-              {b.watchedSec > 0 ? formatWatchDuration(b.watchedSec) : ''}
+              {sec > 0 ? formatWatchDuration(sec) : ''}
             </span>
             <div className="flex h-[142px] w-full items-end justify-center">
               <div
-                className="w-full max-w-[28px] rounded-t-[8px] rounded-b-[4px] transition-all"
+                className="w-full max-w-[28px] rounded-t-[8px] rounded-b-[4px] transition-all motion-reduce:transition-none"
                 style={{
                   height: `${pct}%`,
                   background:
-                    b.watchedSec > 0
+                    sec > 0
                       ? 'var(--md-sys-color-primary)'
                       : 'var(--md-sys-color-surface-container-highest)',
                 }}
@@ -189,13 +199,15 @@ export function WeeklyBarsChart({ bars }: { bars: WeeklyBar[] }) {
   )
 }
 
+const isFiniteNum = (v: number | null | undefined): v is number => typeof v === 'number' && Number.isFinite(v)
+
 export function FrictionTrendChart({ points }: { points: FrictionPoint[] }) {
-  const valid = points.filter((p) => p.lookupsPer10m !== null || p.replaysPer10m !== null)
+  const valid = points.filter((p) => isFiniteNum(p.lookupsPer10m) || isFiniteNum(p.replaysPer10m))
   const [activeIdx, setActiveIdx] = useState<number | null>(null)
 
   if (valid.length === 0) {
     return (
-      <div className="flex h-[196px] items-center justify-center rounded-[16px] bg-[var(--md-sys-color-surface-container-low)] px-4 text-center">
+      <div className="flex flex-1 min-h-[196px] items-center justify-center rounded-[16px] bg-[var(--md-sys-color-surface-container-low)] px-4 text-center">
         <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
           График появится после просмотра фильма с кликами по словам или повторами реплик.
         </p>
@@ -205,7 +217,10 @@ export function FrictionTrendChart({ points }: { points: FrictionPoint[] }) {
 
   const rawMax = Math.max(
     0,
-    ...valid.flatMap((p) => [p.lookupsPer10m ?? 0, p.replaysPer10m ?? 0]),
+    ...valid.flatMap((p) => [
+      isFiniteNum(p.lookupsPer10m) ? p.lookupsPer10m : 0,
+      isFiniteNum(p.replaysPer10m) ? p.replaysPer10m : 0,
+    ]),
   )
   const ceilMax = niceAxisCeil(rawMax, 2)
   const midTick = Number((ceilMax / 2).toPrecision(10))
@@ -222,10 +237,10 @@ export function FrictionTrendChart({ points }: { points: FrictionPoint[] }) {
   const yFor = (v: number) => plotB - (v / ceilMax) * (plotB - plotT)
 
   const clickPts = valid
-    .map((p, i) => (p.lookupsPer10m !== null ? { x: xFor(i), y: yFor(p.lookupsPer10m), v: p.lookupsPer10m, p } : null))
+    .map((p, i) => (isFiniteNum(p.lookupsPer10m) ? { x: xFor(i), y: yFor(p.lookupsPer10m), v: p.lookupsPer10m, p } : null))
     .filter((x): x is NonNullable<typeof x> => x !== null)
   const replayPts = valid
-    .map((p, i) => (p.replaysPer10m !== null ? { x: xFor(i), y: yFor(p.replaysPer10m), v: p.replaysPer10m, p } : null))
+    .map((p, i) => (isFiniteNum(p.replaysPer10m) ? { x: xFor(i), y: yFor(p.replaysPer10m), v: p.replaysPer10m, p } : null))
     .filter((x): x is NonNullable<typeof x> => x !== null)
 
   const clickPath = clickPts.map((pt, i) => `${i === 0 ? 'M' : 'L'}${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`).join(' ')
@@ -236,9 +251,10 @@ export function FrictionTrendChart({ points }: { points: FrictionPoint[] }) {
   const replayPath = replayPts.map((pt, i) => `${i === 0 ? 'M' : 'L'}${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`).join(' ')
 
   const focused = activeIdx !== null ? valid[activeIdx] : valid[valid.length - 1]
+  const shownLabels = pickAxisLabelIndices(valid.length, -1, 7)
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex min-w-0 flex-col gap-2">
       <svg viewBox={`0 0 ${w} ${h}`} className="h-[196px] w-full overflow-visible" role="img" aria-label="Динамика кликов и повторов по фильмам">
         {[0, midTick, ceilMax].map((tick) => {
           const yy = yFor(tick)
@@ -304,32 +320,39 @@ export function FrictionTrendChart({ points }: { points: FrictionPoint[] }) {
               fill="var(--md-sys-color-primary)"
               stroke="var(--md-sys-color-surface-container)"
               strokeWidth="2"
-              className="cursor-pointer"
+              tabIndex={0}
+              role="button"
+              aria-label={`${pt.p.title}: ${pt.v} кл/10м`}
+              className="cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--md-sys-color-primary)]"
               onMouseEnter={() => setActiveIdx(i)}
+              onFocus={() => setActiveIdx(i)}
               onMouseLeave={() => setActiveIdx(null)}
+              onBlur={() => setActiveIdx(null)}
             />
           )
         })}
 
-        {valid.map((p, i) => (
-          <text
-            key={p.mediaId}
-            x={xFor(i)}
-            y={plotB + 18}
-            textAnchor="middle"
-            fontSize="11"
-            fill="var(--md-sys-color-on-surface-variant)"
-          >
-            {p.label}
-          </text>
-        ))}
+        {valid.map((p, i) =>
+          shownLabels.has(i) ? (
+            <text
+              key={p.mediaId}
+              x={xFor(i)}
+              y={plotB + 18}
+              textAnchor="middle"
+              fontSize="11"
+              fill="var(--md-sys-color-on-surface-variant)"
+            >
+              {p.label}
+            </text>
+          ) : null,
+        )}
       </svg>
 
       {focused && (
-        <div className="type-body-small flex flex-wrap items-center justify-between gap-2 text-[var(--md-sys-color-on-surface-variant)]">
-          <span className="truncate font-medium text-[var(--md-sys-color-on-surface)]">{focused.title}</span>
-          <span>
-            {focused.lookupsPer10m ?? 0} кл · {focused.replaysPer10m ?? 0} повт. / 10 м
+        <div className="type-body-small flex min-w-0 flex-wrap items-center justify-between gap-2 text-[var(--md-sys-color-on-surface-variant)]">
+          <span className="min-w-0 max-w-full wrap-anywhere font-medium text-[var(--md-sys-color-on-surface)]">{focused.title}</span>
+          <span className="shrink-0">
+            {(isFiniteNum(focused.lookupsPer10m) ? focused.lookupsPer10m : 0)} кл · {(isFiniteNum(focused.replaysPer10m) ? focused.replaysPer10m : 0)} повт. / 10 м
           </span>
         </div>
       )}
@@ -398,7 +421,7 @@ export function DailySpendChart({
     let best = -1
     let bestUsd = 0
     series.forEach((b, i) => {
-      if (b.totalUsd > bestUsd) {
+      if (Number.isFinite(b.totalUsd) && b.totalUsd > bestUsd) {
         bestUsd = b.totalUsd
         best = i
       }
@@ -418,18 +441,18 @@ export function DailySpendChart({
     )
   }
 
-  const rawMax = Math.max(0, ...series.map((b) => b.totalUsd))
+  const rawMax = Math.max(0, ...series.map((b) => (Number.isFinite(b.totalUsd) ? b.totalUsd : 0)))
   const ceilMax = niceAxisCeil(rawMax, 0.01)
   const midTick = Number((ceilMax / 2).toPrecision(10))
   const shownLabels = pickAxisLabelIndices(series.length, peakIdx, 7)
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex min-h-[30px] flex-wrap items-center justify-between gap-2">
-        {active && active.totalUsd > 0 ? (
-          <span className="type-label-medium inline-flex items-center gap-2 rounded-[10px] bg-[var(--md-sys-color-inverse-surface)] px-3 py-1 text-[var(--md-sys-color-inverse-on-surface)]">
-            <span className="size-2 rounded-full bg-[var(--md-sys-color-inverse-primary)]" />
-            <span>
+    <div className="flex min-w-0 flex-col gap-3">
+      <div className="flex min-h-[30px] min-w-0 flex-wrap items-center justify-between gap-2">
+        {active && Number.isFinite(active.totalUsd) && active.totalUsd > 0 ? (
+          <span className="type-label-medium inline-flex max-w-full min-w-0 items-center gap-2 rounded-[10px] bg-[var(--md-sys-color-inverse-surface)] px-3 py-1 text-[var(--md-sys-color-inverse-on-surface)]">
+            <span className="size-2 shrink-0 rounded-full bg-[var(--md-sys-color-inverse-primary)]" />
+            <span className="min-w-0 wrap-anywhere">
               {active.label} · <strong>{formatUsd(active.totalUsd)}</strong> · {active.requests} запр.
               {active.topFilm ? ` (${active.topFilm})` : ''}
             </span>
@@ -457,27 +480,29 @@ export function DailySpendChart({
 
           <div className="relative flex h-[156px] items-end gap-1.5">
             {series.map((b, i) => {
-              const totalH = b.totalUsd > 0 ? Math.max(5, Math.round((b.totalUsd / ceilMax) * 156)) : 3
-              const isSelected = activeIdx === i && b.totalUsd > 0
+              const usd = Number.isFinite(b.totalUsd) ? b.totalUsd : 0
+              const totalH = usd > 0 ? Math.max(5, Math.round((usd / ceilMax) * 156)) : 3
+              const isSelected = activeIdx === i && usd > 0
               const segs = [
                 { val: b.annotate, color: 'var(--md-sys-color-primary)' },
                 { val: b.explain, color: 'var(--app-kind-phrasal-verb)' },
                 { val: b.chat, color: 'var(--app-kind-reduction)' },
                 { val: b.draft, color: 'var(--app-anki-label)' },
-              ].filter((s) => s.val > 0)
+              ].filter((s) => Number.isFinite(s.val) && s.val > 0)
               const segTotal = segs.reduce((acc, s) => acc + s.val, 0) || 1
 
               return (
                 <button
                   key={b.key}
                   type="button"
-                  aria-label={`${b.label}: ${formatUsd(b.totalUsd)}`}
+                  aria-label={`${b.label}: ${formatUsd(usd)}`}
                   onMouseEnter={() => setHoveredIdx(i)}
                   onFocus={() => setHoveredIdx(i)}
                   onMouseLeave={() => setHoveredIdx(null)}
-                  className="group flex h-full min-w-0 flex-1 items-end justify-center focus-visible:outline-none"
+                  onBlur={() => setHoveredIdx(null)}
+                  className="group flex h-full min-w-0 flex-1 items-end justify-center rounded-[6px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--md-sys-color-primary)]"
                 >
-                  {b.totalUsd <= 0 ? (
+                  {usd <= 0 ? (
                     <span className="h-[3px] w-full max-w-[22px] rounded-sm bg-[var(--md-sys-color-surface-container-highest)]" />
                   ) : (
                     <span
@@ -509,17 +534,20 @@ export function DailySpendChart({
             {series.map((b, i) => {
               if (!shownLabels.has(i)) return null
               const posStyle =
-                i === 0
-                  ? { left: 0 }
-                  : i === series.length - 1
-                    ? { right: 0 }
-                    : { left: `${((i + 0.5) / series.length) * 100}%`, transform: 'translateX(-50%)' }
+                series.length === 1
+                  ? { left: '50%', transform: 'translateX(-50%)' }
+                  : i === 0
+                    ? { left: 0 }
+                    : i === series.length - 1
+                      ? { right: 0 }
+                      : { left: `${((i + 0.5) / series.length) * 100}%`, transform: 'translateX(-50%)' }
+              const highlightActive = i === activeIdx && active && Number.isFinite(active.totalUsd) && active.totalUsd > 0
               return (
                 <span
                   key={b.key}
                   style={posStyle}
                   className={`type-label-small absolute top-0 whitespace-nowrap ${
-                    i === activeIdx
+                    highlightActive
                       ? 'font-semibold text-[var(--md-sys-color-primary)]'
                       : 'text-[var(--md-sys-color-on-surface-variant)]'
                   }`}

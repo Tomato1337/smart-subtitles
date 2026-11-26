@@ -32,7 +32,7 @@ export function MonthlyUsageDialog({ onClose }: { onClose: () => void }) {
             Локальный журнал запросов в SQLite; цены из ~/.omp/agent/models.yml и models.dev.
           </p>
         </div>
-        <IconButton icon="close" label="Закрыть" onClick={onClose} />
+        <IconButton icon="close" label="Закрыть" noTip onClick={onClose} />
       </div>
 
       <div className="px-6 pb-3">
@@ -111,9 +111,9 @@ export function MonthlyUsageDialog({ onClose }: { onClose: () => void }) {
                     key={row.model}
                     className="flex flex-wrap items-center justify-between gap-2 bg-[var(--md-sys-color-surface-container)] px-4 py-3"
                   >
-                    <div className="min-w-0">
-                      <div className="type-title-small font-mono">{row.model || 'не указана'}</div>
-                      <div className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
+                    <div className="min-w-0 flex-1">
+                      <div className="type-title-small min-w-0 wrap-anywhere font-mono">{row.model || 'не указана'}</div>
+                      <div className="type-body-small wrap-anywhere text-[var(--md-sys-color-on-surface-variant)]">
                         {row.requests} запр. · {formatTokens(row.inputTokens)} вход ({formatTokens(row.cachedTokens)} кэш) · {formatTokens(row.outputTokens)} выход
                       </div>
                     </div>

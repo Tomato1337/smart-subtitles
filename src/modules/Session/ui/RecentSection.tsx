@@ -244,7 +244,9 @@ function ListRow({
   onResetAnnot: (mediaId: string) => void
 }) {
   const se = formatSeasonEpisode(item.season, item.episode)
-  const { progress, completed } = formatRecentPosition(item.lastPosition, item.duration)
+  const safePos = Number.isFinite(item.lastPosition) && item.lastPosition > 0 ? item.lastPosition : 0
+  const safeDur = item.duration !== null && Number.isFinite(item.duration) && item.duration > 0 ? item.duration : null
+  const { progress, completed } = formatRecentPosition(safePos, safeDur)
   const titleLine = [item.title, se, item.year ? String(item.year) : null].filter(Boolean).join(' · ')
 
   return (
@@ -286,7 +288,7 @@ function ListRow({
           <span>
             {completed
               ? 'Досмотрен'
-              : `${formatTime(item.lastPosition)}${item.duration ? ` / ${formatTime(item.duration)}` : ''}`}
+              : `${formatTime(safePos)}${safeDur ? ` / ${formatTime(safeDur)}` : ''}`}
           </span>
           {item.duration && item.duration > 0 ? (
             completed ? (

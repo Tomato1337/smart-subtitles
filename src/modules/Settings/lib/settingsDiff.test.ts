@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { AppConfig } from '@/common/types/ipc'
-import { diffConfig } from './settingsDiff'
+import { diffConfig, reconcileDraftAfterSave } from './settingsDiff'
 
 function makeConfig(): AppConfig {
   return {
@@ -107,5 +107,16 @@ describe('diffConfig', () => {
     expect(diff.dirty).toBe(true)
     expect(diff.changedKeys.has('anki.fields')).toBe(true)
     expect(diff.changedBySection.anki).toBe(1)
+  })
+
+  test('reconcileDraftAfterSave clears unchanged draft and preserves concurrent edits', () => {
+    const saved = makeConfig()
+    const unchanged = makeConfig()
+    expect(reconcileDraftAfterSave(null, saved)).toBeNull()
+    expect(reconcileDraftAfterSave(unchanged, saved)).toBeNull()
+
+    const editedDuringSave = makeConfig()
+    editedDuringSave.anki.deck = 'Edited While Saving'
+    expect(reconcileDraftAfterSave(editedDuringSave, saved)).toBe(editedDuringSave)
   })
 })

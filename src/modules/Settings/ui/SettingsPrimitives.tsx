@@ -152,7 +152,7 @@ export function SettingRow({
           )}
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="type-title-medium type-emph">{label}</span>
+              <span className="type-title-medium type-emph wrap-anywhere">{label}</span>
               {changed && (
                 <AppStatusChip tone="primary" size="sm">
                   изменено
@@ -164,7 +164,7 @@ export function SettingRow({
                 </code>
               )}
             </div>
-            {sub && <span className="type-body-medium text-[var(--md-sys-color-on-surface-variant)]">{sub}</span>}
+            {sub && <span className="type-body-medium wrap-anywhere text-[var(--md-sys-color-on-surface-variant)]">{sub}</span>}
           </div>
         </div>
         {control && <div className="flex shrink-0 flex-wrap items-center gap-2">{control}</div>}
