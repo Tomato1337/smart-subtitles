@@ -3,7 +3,7 @@
 # GitHub Release (or run `updpkgsums` after verifying), then run `makepkg -si`.
 # CI: .github/workflows/release.yml puts the freshly built .deb next to this file and sets pkgver + sha256sums.
 pkgname=smart-subtitle-bin
-pkgver=0.5.0
+pkgver=0.5.1
 pkgrel=1
 pkgdesc="Video player with smart English subtitles, LLM translations and Anki cards"
 arch=('x86_64')
