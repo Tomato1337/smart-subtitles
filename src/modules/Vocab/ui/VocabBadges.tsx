@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react'
 import { StatusChip, type StatusTone } from '@tomato1337/m3e-react'
 import type { ExplainFrequency, VocabInfo } from '@/common/types/ipc'
+import { pluralRu } from '@/common/utilities/pluralRu'
 import { formatCorpusSummary, resolveFrequencyBadge, type BadgeTone } from '../lib/format'
 
 const CUSTOM_CHIP_STYLES: Partial<Record<BadgeTone, CSSProperties>> = {
@@ -19,10 +20,7 @@ function chipTone(tone: BadgeTone): StatusTone {
 }
 
 export function pluralTimesRu(n: number): string {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'раза'
-  return 'раз'
+  return pluralRu(n, 'раз', 'раза', 'раз')
 }
 
 /** Compact M3 StatusChip row: frequency tier, CEFR level (with above-level warning), and film count. */

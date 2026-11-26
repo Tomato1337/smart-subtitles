@@ -674,6 +674,11 @@ pub async fn cards_job_edit(st: St<'_>, job_id: String, refresh: bool) -> Res<cr
 }
 
 #[tauri::command]
+pub async fn cards_job_close_edit(st: St<'_>, job_id: String) -> Res<crate::anki::jobs::CardJob> {
+    crate::anki::jobs::close_edit(&st, &job_id).await
+}
+
+#[tauri::command]
 pub async fn cards_job_preview(
     st: St<'_>,
     job_id: String,

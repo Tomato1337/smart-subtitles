@@ -238,6 +238,7 @@ pub fn run() {
             commands::cards_job_hold,
             commands::cards_job_cancel,
             commands::cards_job_edit,
+            commands::cards_job_close_edit,
             commands::cards_job_preview,
             commands::cards_job_image,
             commands::cards_job_save,

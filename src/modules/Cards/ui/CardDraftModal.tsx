@@ -22,7 +22,7 @@ const FIELDS: [keyof WordDraft, string][] = [
 ]
 
 export type CardDraftModalProps = {
-  /** Called when the modal is dismissed without saving or cancelling (for `cards_job_close_edit` wiring). */
+  /** Overrides the default `cards_job_close_edit` call when the modal is dismissed without saving or cancelling. */
   onDismissModal?: (jobId: string) => Promise<void> | void
 }
 
@@ -215,8 +215,13 @@ function EditorDialog({ editor, onDismissModal }: Props) {
   const dismiss = () => {
     if (busy) return
     closeEditor()
-    if (onDismissModal) {
-      void Promise.resolve(onDismissModal(job.id)).catch((e) => notify('error', errorText(e)))
+    try {
+      const res = onDismissModal
+        ? onDismissModal(job.id)
+        : api.cardsJobCloseEdit(job.id).then(upsert)
+      void Promise.resolve(res).catch((e) => notify('error', errorText(e)))
+    } catch (e) {
+      notify('error', errorText(e))
     }
   }
 

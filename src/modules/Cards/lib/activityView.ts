@@ -1,4 +1,5 @@
 import type { CardJob, CardJobState } from '@/common/types/ipc'
+import { pluralRu } from '@/common/utilities/pluralRu'
 import { ACTIVE_STATES } from '../store/cardsStore'
 import { phaseLabel, taskStep } from './task'
 
@@ -41,14 +42,6 @@ export type ActivityButtonState = {
 const EDITABLE: Record<string, true> = { editing: true, added: true, failed: true, interrupted: true, resolving: true }
 
 const STEP_PROGRESS: Record<number, number> = { 1: 0.24, 2: 0.4, 3: 0.58, 4: 0.78, 5: 0.92 }
-
-function pluralRu(n: number, one: string, few: string, many: string): string {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 === 1 && mod100 !== 11) return one
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few
-  return many
-}
 
 export function isArchivedState(state: CardJobState): boolean {
   return state === 'cancelled' || state === 'deleted'
@@ -173,10 +166,12 @@ export function activitySubtitle(counts: ActivityCounts, hideCancelled: boolean)
 }
 
 export function archivedHiddenLabel(archivedCount: number): string {
-  const mod10 = archivedCount % 10
-  const mod100 = archivedCount % 100
-  if (mod10 === 1 && mod100 !== 11) return `Скрыта ${archivedCount} отменённая или удалённая`
-  return `Скрыто ${archivedCount} отменённых и удалённых`
+  return pluralRu(
+    archivedCount,
+    `Скрыта ${archivedCount} отменённая или удалённая`,
+    `Скрыто ${archivedCount} отменённых и удалённых`,
+    `Скрыто ${archivedCount} отменённых и удалённых`,
+  )
 }
 
 export function activityProgress(job: CardJob): { value: number; text: string } | null {

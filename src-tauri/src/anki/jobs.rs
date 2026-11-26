@@ -2930,7 +2930,6 @@ pub(crate) async fn close_edit_db(db: &Arc<Mutex<Connection>>, job_id: &str) -> 
     Err(STALE.into())
 }
 
-#[allow(dead_code)]
 pub async fn close_edit(st: &Arc<AppState>, job_id: &str) -> Result<CardJob, String> {
     let (row, changed) = close_edit_db(&st.db, job_id).await?;
     if let Some(control) = st

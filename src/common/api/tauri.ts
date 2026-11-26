@@ -123,6 +123,7 @@ export const api = {
  cardsJobHold: (jobId: string, clientId: string, held: boolean) => call<CardJob>('cards_job_hold', { jobId, clientId, held }),
  cardsJobCancel: (jobId: string, revision: number) => call<CardJob>('cards_job_cancel', { jobId, revision }),
  cardsJobEdit: (jobId: string, refresh: boolean) => call<CardJobEditor>('cards_job_edit', { jobId, refresh }),
+ cardsJobCloseEdit: (jobId: string) => call<CardJob>('cards_job_close_edit', { jobId }),
  cardsJobPreview: (jobId: string, revision: number, draft: WordDraft, fieldValues: Record<string, string> | null) =>
   call<CardPreview>('cards_job_preview', { jobId, revision, draft, fieldValues }),
  cardsJobImage: (jobId: string, revision: number, prompt: string) => call<CardJobEditor>('cards_job_image', { jobId, revision, prompt }),
