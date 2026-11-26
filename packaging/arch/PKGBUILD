@@ -1,8 +1,9 @@
 # Arch Linux package repacked from the release .deb (the same binary Debian/Ubuntu get).
-# Local install: makepkg -si   (downloads the .deb of `pkgver` from GitHub Releases)
-# CI: .github/workflows/release.yml puts the freshly built .deb next to this file and sets pkgver.
+# Local install: verify smart-subtitle_${pkgver}_amd64.deb against SHA256SUMS.txt from the
+# GitHub Release (or run `updpkgsums` after verifying), then run `makepkg -si`.
+# CI: .github/workflows/release.yml puts the freshly built .deb next to this file and sets pkgver + sha256sums.
 pkgname=smart-subtitle-bin
-pkgver=0.1.0
+pkgver=0.5.0
 pkgrel=1
 pkgdesc="Video player with smart English subtitles, LLM translations and Anki cards"
 arch=('x86_64')
@@ -15,6 +16,7 @@ provides=('smart-subtitle')
 conflicts=('smart-subtitle')
 options=('!strip' '!debug')
 source=("smart-subtitle_${pkgver}_amd64.deb::${url}/releases/download/v${pkgver}/smart-subtitle_${pkgver}_amd64.deb")
+# Kept as SKIP in git because release .deb hashes are produced per tag by CI; verify against SHA256SUMS.txt on release.
 sha256sums=('SKIP')
 
 package() {

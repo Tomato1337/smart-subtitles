@@ -16,11 +16,13 @@ pub fn video_mode(p: &Probe, vaapi_ok: bool) -> VideoMode {
 
 pub fn stream_args(url: &str, start: f64, audio_index: u32, p: &Probe, mode: VideoMode, vaapi_dev: &str) -> Vec<String> {
     let mut a: Vec<String> = vec!["-hide_banner".into(), "-loglevel".into(), "error".into()];
-    let w = p.video.width.min(1920);
+    // nv12 and yuv420p encoders reject odd target widths.
+    let w = (p.video.width.min(1920) & !1).max(2);
     if mode == VideoMode::Vaapi {
         a.extend(["-hwaccel", "vaapi", "-hwaccel_device", vaapi_dev, "-hwaccel_output_format", "vaapi"].map(String::from));
     }
-    a.extend(["-copyts".into(), "-ss".into(), start.to_string(), "-i".into(), super::input(url)]);
+    a.extend(["-copyts".into(), "-ss".into(), start.to_string()]);
+    super::push_input(&mut a, url);
     a.extend(["-map".into(), format!("0:{}", p.video.index), "-map".into(), format!("0:{audio_index}")]);
     a.extend(["-c:a", "aac", "-b:a", "192k", "-ac", "2", "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"].map(String::from));
     match mode {
@@ -89,5 +91,18 @@ mod tests {
         let p = probe("mpeg4", "yuv420p", 1280, false);
         let s = stream_args("U", 5.0, 1, &p, VideoMode::X264, "d").join(" ");
         assert_eq!(s, format!("-hide_banner -loglevel error -copyts -ss 5 -i U -map 0:0 -map 0:1 {TAIL} -vf scale=1280:-2,format=yuv420p -c:v libx264 -preset veryfast -crf 21 -g 48 {OUT}"));
+    }
+
+    #[test]
+    fn odd_widths_round_to_even_and_http_gets_protocol_whitelist() {
+        let p_odd = probe("hevc", "yuv420p", 853, false);
+        let x264 = stream_args("https://cdn.example/v.mkv", 0.0, 1, &p_odd, VideoMode::X264, "/dev/dri/renderD128").join(" ");
+        assert!(x264.contains("-protocol_whitelist http,https,tcp,tls -i https://cdn.example/v.mkv"));
+        assert!(x264.contains("-vf scale=852:-2,format=yuv420p"));
+
+        let p_tiny = probe("hevc", "yuv420p10le", 1, true);
+        let vaapi = stream_args("http://127.0.0.1:8095/s", 0.0, 1, &p_tiny, VideoMode::Vaapi, "/dev/dri/renderD128").join(" ");
+        assert!(vaapi.contains("scale_vaapi=w=2:h=-2:format=nv12"));
+        assert!(vaapi.contains("-protocol_whitelist http,https,tcp,tls -i http://127.0.0.1:8095/s"));
     }
 }

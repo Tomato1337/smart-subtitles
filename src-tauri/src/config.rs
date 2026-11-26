@@ -282,6 +282,58 @@ pub fn config_dir() -> PathBuf {
 pub fn cache_dir() -> PathBuf {
     dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".")).join("smart-subtitle")
 }
+pub fn agent_token_path() -> PathBuf {
+    config_dir().join("agent.token")
+}
+
+/// Loads the per-install agent bearer token from `agent.token` (mode 0600 on Unix),
+/// generating and atomically persisting a new high-entropy token if missing or empty.
+pub fn load_or_create_agent_token() -> anyhow::Result<String> {
+    let path = agent_token_path();
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    load_or_create_agent_token_in(dir)
+}
+
+pub(crate) fn load_or_create_agent_token_in(dir: &std::path::Path) -> anyhow::Result<String> {
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join("agent.token");
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        let tok = raw.trim();
+        if tok.len() >= 32 && tok.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+            return Ok(tok.to_string());
+        }
+    }
+    let token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+    let tmp = dir.join(format!("agent.token.tmp.{}", uuid::Uuid::new_v4().simple()));
+    write_private_file(&tmp, token.as_bytes())?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(token)
+}
+
+fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
 
 impl Config {
     /// Loads config.json, creating it with defaults when missing.
@@ -293,7 +345,7 @@ impl Config {
             serde_json::from_slice(&std::fs::read(&path)?)?
         } else {
             let c = Config::default();
-            std::fs::write(&path, serde_json::to_vec_pretty(&c)?)?;
+            write_private_file(&path, &serde_json::to_vec_pretty(&c)?)?;
             c
         };
         cfg.resolve_llm();
@@ -305,12 +357,7 @@ impl Config {
         let dir = config_dir();
         std::fs::create_dir_all(&dir)?;
         let tmp = dir.join("config.json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-        }
+        write_private_file(&tmp, &serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(&tmp, dir.join("config.json"))?;
         Ok(())
     }
@@ -319,18 +366,40 @@ impl Config {
     /// URLs that already carry credentials, or lie elsewhere, are returned unchanged.
     pub fn with_auth(&self, url: &str) -> String {
         let t = &self.torrserver;
-        if t.base_url.is_empty() || t.username.is_empty() || !url.starts_with(t.base_url.trim_end_matches('/')) {
+        if t.base_url.is_empty() || t.username.is_empty() {
             return url.to_string();
         }
-        match url::Url::parse(url) {
-            Ok(mut u) if u.username().is_empty() => {
-                if u.set_username(&t.username).is_err() || u.set_password(Some(&t.password)).is_err() {
-                    return url.to_string();
-                }
-                u.to_string()
-            }
-            _ => url.to_string(),
+        let Ok(base) = url::Url::parse(&t.base_url) else {
+            return url.to_string();
+        };
+        if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
+            return url.to_string();
         }
+        let Ok(mut u) = url::Url::parse(url) else {
+            return url.to_string();
+        };
+        let same_origin = u.scheme() == base.scheme()
+            && u.host_str() == base.host_str()
+            && u.port_or_known_default() == base.port_or_known_default();
+        if !same_origin {
+            return url.to_string();
+        }
+        let base_path = base.path().trim_end_matches('/');
+        if !base_path.is_empty() {
+            let p = u.path();
+            let path_matches = p == base_path
+                || (p.starts_with(base_path) && p.as_bytes().get(base_path.len()) == Some(&b'/'));
+            if !path_matches {
+                return url.to_string();
+            }
+        }
+        if !u.username().is_empty() || u.password().is_some() {
+            return url.to_string();
+        }
+        if u.set_username(&t.username).is_err() || u.set_password(Some(&t.password)).is_err() {
+            return url.to_string();
+        }
+        u.to_string()
     }
 
     /// Re-reads the referenced provider from the agent's own files, so a rotated key is picked up.
@@ -471,6 +540,41 @@ mod tests {
         assert_eq!(percent_decode(p.password().unwrap()), "p$%w");
         assert_eq!(c.with_auth("https://other.example/tor/x"), "https://other.example/tor/x");
         assert_eq!(c.with_auth("http://127.0.0.1:8095/stream/x"), "http://127.0.0.1:8095/stream/x");
+        // Lookalike path prefix and scheme downgrade must not receive credentials.
+        assert_eq!(c.with_auth("https://h.example/tor-evil/stream/x"), "https://h.example/tor-evil/stream/x");
+        assert_eq!(c.with_auth("http://h.example/tor/stream/x"), "http://h.example/tor/stream/x");
+    }
+
+    #[test]
+    fn with_auth_rejects_lookalike_domains_and_port_prefixes() {
+        let c_host: Config = serde_json::from_str(r#"{"torrserver":{"baseUrl":"http://ts.local","username":"u","password":"secret"}}"#).unwrap();
+        assert_eq!(c_host.with_auth("http://ts.local.attacker.example/sub.srt"), "http://ts.local.attacker.example/sub.srt");
+        assert!(c_host.with_auth("http://ts.local/sub.srt").starts_with("http://u:secret@ts.local/"));
+        assert!(c_host.with_auth("http://ts.local:80/sub.srt").starts_with("http://u:secret@ts.local/"));
+
+        let c_port: Config = serde_json::from_str(r#"{"torrserver":{"baseUrl":"http://127.0.0.1:80","username":"u","password":"secret"}}"#).unwrap();
+        assert_eq!(c_port.with_auth("http://127.0.0.1:8090/stream/x"), "http://127.0.0.1:8090/stream/x");
+        assert!(c_port.with_auth("http://127.0.0.1/stream/x").starts_with("http://u:secret@127.0.0.1/"));
+    }
+
+    #[test]
+    fn agent_token_persists_with_owner_only_permissions() {
+        let dir = std::env::temp_dir().join(format!("ss-token-{}", uuid::Uuid::new_v4()));
+        let t1 = load_or_create_agent_token_in(&dir).unwrap();
+        assert!(t1.len() >= 64);
+        assert_eq!(load_or_create_agent_token_in(&dir).unwrap(), t1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.join("agent.token")).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        // Empty/corrupted token file is regenerated.
+        std::fs::write(dir.join("agent.token"), "short\n").unwrap();
+        let t2 = load_or_create_agent_token_in(&dir).unwrap();
+        assert_ne!(t2, "short");
+        assert!(t2.len() >= 64);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

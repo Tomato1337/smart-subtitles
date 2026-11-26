@@ -30,39 +30,85 @@ pub enum By {
 
 const CEFR: [&str; 6] = ["A1", "A2", "B1", "B2", "C1", "C2"];
 
-/// Rejects configs that would break the app or the Lampa integration; messages go straight to the UI.
-pub fn validate(cfg: &Config) -> Result<(), String> {
-    if cfg.server.port == 0 {
-        return Err("Порт должен быть от 1 до 65535".into());
+pub(crate) fn valid_http_url(raw: &str) -> bool {
+    url::Url::parse(raw).is_ok_and(|u| {
+        matches!(u.scheme(), "http" | "https") && u.host_str().is_some_and(|h| !h.is_empty())
+    })
+}
+
+pub(crate) fn validate_tts_voice(voice: &str) -> Result<(), String> {
+    let ok = (1..=64).contains(&voice.len())
+        && !voice.starts_with('-')
+        && voice.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "anki.ttsVoice: «{voice}» — ожидается имя голоса [A-Za-z0-9_-] (1–64 символа, не с «-»)"
+        ))
     }
-    if !CEFR.contains(&cfg.learner.cefr.as_str()) {
-        return Err(format!("learner.cefr: ожидается A1–C2, получено «{}»", cfg.learner.cefr));
+}
+
+pub(crate) fn validate_vaapi_device(dev: &str) -> Result<(), String> {
+    if dev.is_empty() {
+        return Ok(());
     }
-    for task in crate::llm::tasks::Task::ALL {
-        let t = cfg.llm_tasks.get(task);
-        if !t.source.is_empty() && t.model.is_empty() {
-            return Err(format!("llmTasks.{}.model: выберите модель", task.key()));
+    let rest = dev.strip_prefix("/dev/dri/").ok_or_else(|| {
+        format!("ffmpeg.vaapiDevice: «{dev}» — ожидается путь вида /dev/dri/renderD128")
+    })?;
+    let ok = (1..=64).contains(&rest.len())
+        && !rest.starts_with('-')
+        && !rest.contains("..")
+        && rest.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'));
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("ffmpeg.vaapiDevice: «{dev}» — недопустимое имя устройства"))
+    }
+}
+
+pub(crate) fn validate_tutor_root(root: &str) -> Result<(), String> {
+    if root.is_empty() {
+        return Ok(());
+    }
+    if root.contains('\0') {
+        return Err("tutor.root: недопустимый нулевой байт".into());
+    }
+    let p = std::path::Path::new(root);
+    if !p.is_absolute() {
+        return Err(format!("tutor.root: «{root}» — нужен абсолютный путь"));
+    }
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(format!("tutor.root: «{root}» — не должен содержать «..»"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_llm_conn(llm: &crate::config::Llm, require_base_if_manual: bool) -> Result<(), String> {
+    if !llm.source.is_empty() && llm.provider.trim().is_empty() {
+        return Err("llm.provider: выберите провайдера".into());
+    }
+    if !llm.base_url.is_empty() {
+        if !valid_http_url(&llm.base_url) {
+            return Err(format!("llm.baseUrl: «{}» — нужен http(s)-адрес", llm.base_url));
         }
+    } else if require_base_if_manual && llm.source.is_empty() {
+        return Err("llm.baseUrl: укажите http(s)-адрес".into());
     }
-    for o in &cfg.lampa.origins {
-        let ok = url::Url::parse(o).map(|u| u.origin().ascii_serialization() == *o).unwrap_or(false);
-        if !ok {
-            return Err(format!(
-                "lampa.origins: «{o}» — не origin, нужно вида https://lampa.example.com (без пути и слеша в конце)"
-            ));
-        }
+    Ok(())
+}
+
+pub(crate) fn validate_anki(anki: &crate::config::Anki) -> Result<(), String> {
+    if !valid_http_url(&anki.url) {
+        return Err(format!("anki.url: «{}» — нужен адрес вида http://127.0.0.1:8765", anki.url));
     }
-    let anki_url_ok = url::Url::parse(&cfg.anki.url).map(|u| matches!(u.scheme(), "http" | "https")).unwrap_or(false);
-    if !anki_url_ok {
-        return Err(format!("anki.url: «{}» — нужен адрес вида http://127.0.0.1:8765", cfg.anki.url));
-    }
-    if cfg.anki.deck.trim().is_empty() {
+    if anki.deck.trim().is_empty() {
         return Err("anki.deck: укажите колоду".into());
     }
-    if cfg.anki.note_type.trim().is_empty() {
+    if anki.note_type.trim().is_empty() {
         return Err("anki.noteType: укажите тип заметки".into());
     }
-    for (field, source) in &cfg.anki.fields {
+    for (field, source) in &anki.fields {
         if source.is_empty() {
             continue;
         }
@@ -70,14 +116,31 @@ pub fn validate(cfg: &Config) -> Result<(), String> {
             return Err(format!("anki.fields.{field}: неизвестный источник «{source}»"));
         }
     }
-    if !["none", "clip", "tts"].contains(&cfg.anki.sentence_audio.as_str()) {
-        return Err(format!("anki.sentenceAudio: ожидается none, clip или tts, получено «{}»", cfg.anki.sentence_audio));
+    validate_tts_voice(&anki.tts_voice)?;
+    if !["none", "clip", "tts"].contains(&anki.sentence_audio.as_str()) {
+        return Err(format!("anki.sentenceAudio: ожидается none, clip или tts, получено «{}»", anki.sentence_audio));
     }
-    if !["none", "openai", "runware", "gemini", "omp"].contains(&cfg.images.backend.as_str()) {
-        return Err(format!("images.backend: ожидается none, openai, runware, gemini или omp, получено «{}»", cfg.images.backend));
+    Ok(())
+}
+
+pub(crate) fn validate_tutor(tutor: &crate::config::Tutor) -> Result<(), String> {
+    validate_tutor_root(&tutor.root)?;
+    if !tutor.api_url.is_empty() {
+        if !valid_http_url(&tutor.api_url) {
+            return Err(format!("tutor.apiUrl: «{}» — нужен http(s)-адрес", tutor.api_url));
+        }
+    } else if tutor.enabled {
+        return Err("tutor.apiUrl: укажите http(s)-адрес".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_images(images: &crate::config::Images, tutor: &crate::config::Tutor) -> Result<(), String> {
+    if !["none", "openai", "runware", "gemini", "omp"].contains(&images.backend.as_str()) {
+        return Err(format!("images.backend: ожидается none, openai, runware, gemini или omp, получено «{}»", images.backend));
     }
     let mut fallbacks: Vec<&str> = Vec::new();
-    for b in &cfg.images.fallbacks {
+    for b in &images.fallbacks {
         if !["openai", "runware", "gemini", "omp"].contains(&b.as_str()) {
             return Err(format!(
                 "images.fallbacks: ожидается openai, runware, gemini или omp, получено «{b}»"
@@ -90,10 +153,48 @@ pub fn validate(cfg: &Config) -> Result<(), String> {
     }
     // Tutor owns the primary while it is enabled with its own image settings; the app's own
     // backend is then unused, so it may also sit in the fallback order.
-    let tutor_primary = cfg.tutor.enabled && cfg.tutor.use_image_settings;
-    if !tutor_primary && cfg.images.backend != "none" && fallbacks.contains(&cfg.images.backend.as_str()) {
-        return Err(format!("images.fallbacks: «{}» уже выбран основным", cfg.images.backend));
+    let tutor_primary = tutor.enabled && tutor.use_image_settings;
+    if !tutor_primary && images.backend != "none" && fallbacks.contains(&images.backend.as_str()) {
+        return Err(format!("images.fallbacks: «{}» уже выбран основным", images.backend));
     }
+    if !images.openai.base_url.is_empty() && !valid_http_url(&images.openai.base_url) {
+        return Err(format!("images.openai.baseUrl: «{}» — нужен http(s)-адрес", images.openai.base_url));
+    }
+    Ok(())
+}
+
+/// Rejects configs that would break the app or the Lampa integration; messages go straight to the UI.
+pub fn validate(cfg: &Config) -> Result<(), String> {
+    if cfg.server.port == 0 {
+        return Err("Порт должен быть от 1 до 65535".into());
+    }
+    if !CEFR.contains(&cfg.learner.cefr.as_str()) {
+        return Err(format!("learner.cefr: ожидается A1–C2, получено «{}»", cfg.learner.cefr));
+    }
+    validate_llm_conn(&cfg.llm, false)?;
+    for task in crate::llm::tasks::Task::ALL {
+        let t = cfg.llm_tasks.get(task);
+        if !t.source.is_empty() && t.provider.trim().is_empty() {
+            return Err(format!("llmTasks.{}.provider: выберите провайдера", task.key()));
+        }
+        if !t.source.is_empty() && t.model.is_empty() {
+            return Err(format!("llmTasks.{}.model: выберите модель", task.key()));
+        }
+    }
+    for o in &cfg.lampa.origins {
+        let ok = url::Url::parse(o).map(|u| u.origin().ascii_serialization() == *o).unwrap_or(false);
+        if !ok {
+            return Err(format!(
+                "lampa.origins: «{o}» — не origin, нужно вида https://lampa.example.com (без пути и слеша в конце)"
+            ));
+        }
+    }
+    if !cfg.torrserver.base_url.is_empty() && !valid_http_url(&cfg.torrserver.base_url) {
+        return Err(format!("torrserver.baseUrl: «{}» — нужен http(s)-адрес", cfg.torrserver.base_url));
+    }
+    validate_anki(&cfg.anki)?;
+    validate_tutor(&cfg.tutor)?;
+    validate_images(&cfg.images, &cfg.tutor)?;
     let mut seen: Vec<&str> = Vec::new();
     for s in &cfg.subtitles.sources {
         if !crate::config::SUBTITLE_SOURCES.contains(&s.as_str()) {
@@ -107,6 +208,7 @@ pub fn validate(cfg: &Config) -> Result<(), String> {
     if !cfg.subtitles.idle_opacity.is_finite() || !(0.0..=1.0).contains(&cfg.subtitles.idle_opacity) {
         return Err(format!("subtitles.idleOpacity: ожидается число от 0 до 1, получено {}", cfg.subtitles.idle_opacity));
     }
+    validate_vaapi_device(&cfg.ffmpeg.vaapi_device)?;
     Ok(())
 }
 
@@ -128,6 +230,26 @@ const FREE_MAPS: [&str; 2] = ["anki.fields", "anki.indexFields"];
 
 fn value_at<'a>(v: &'a mut serde_json::Value, path: &str) -> Option<&'a mut serde_json::Value> {
     path.split('.').try_fold(v, |v, k| v.get_mut(k))
+}
+
+fn value_at_ref<'a>(v: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    path.split('.').try_fold(v, |v, k| v.get(k))
+}
+
+fn supplied_non_masked_secret(patch: &serde_json::Value, path: &str) -> bool {
+    matches!(value_at_ref(patch, path), Some(serde_json::Value::String(s)) if s != MASK)
+}
+
+fn clear_stale_secrets(old: &Config, next: &mut Config, llm_ok: bool, openai_ok: bool, torr_ok: bool) {
+    if !llm_ok && (next.llm.base_url != old.llm.base_url || next.llm.source != old.llm.source) {
+        next.llm.api_key.clear();
+    }
+    if !openai_ok && next.images.openai.base_url != old.images.openai.base_url {
+        next.images.openai.api_key.clear();
+    }
+    if !torr_ok && next.torrserver.base_url != old.torrserver.base_url {
+        next.torrserver.password.clear();
+    }
 }
 
 /// The config as the agent sees it: every secret replaced by `MASK`, empty ones stay empty.
@@ -189,12 +311,16 @@ fn merge(t: &mut serde_json::Map<String, serde_json::Value>, p: serde_json::Map<
     }
 }
 
-/// Applies a JSON Merge Patch to the stored config; `MASK` in a secret field keeps the current value.
+/// Applies a JSON Merge Patch to the stored config; `MASK` in a secret field keeps the current value,
+/// except when the corresponding endpoint/source changes without an explicit non-masked secret.
 pub fn merge_patch(cfg: &Config, patch: serde_json::Value) -> Result<Config, String> {
     if !patch.is_object() {
         return Err("Тело должно быть JSON-объектом".into());
     }
     check_keys(&patch, &serde_json::to_value(Config::default()).unwrap_or_default(), "")?;
+    let llm_key_supplied = supplied_non_masked_secret(&patch, "llm.apiKey");
+    let openai_key_supplied = supplied_non_masked_secret(&patch, "images.openai.apiKey");
+    let torr_pass_supplied = supplied_non_masked_secret(&patch, "torrserver.password");
     let mut patch = patch;
     for path in SECRETS {
         drop_masked(&mut patch, path);
@@ -203,7 +329,9 @@ pub fn merge_patch(cfg: &Config, patch: serde_json::Value) -> Result<Config, Str
     if let (serde_json::Value::Object(t), serde_json::Value::Object(p)) = (&mut base, patch) {
         merge(t, p);
     }
-    serde_json::from_value::<Config>(base).map_err(|e| format!("некорректный конфиг: {e}"))
+    let mut next = serde_json::from_value::<Config>(base).map_err(|e| format!("некорректный конфиг: {e}"))?;
+    clear_stale_secrets(cfg, &mut next, llm_key_supplied, openai_key_supplied, torr_pass_supplied);
+    Ok(next)
 }
 
 #[derive(Serialize)]
@@ -364,6 +492,19 @@ pub fn status(cfg: &Config, port: u16) -> SetupStatus {
 /// Saves and applies the config at once, for the UI and for agents alike. Returns true when the
 /// change needs an app restart (server port).
 pub async fn apply(st: &Arc<AppState>, cfg: Config, by: By) -> Result<bool, String> {
+    let _guard = st.config_lock.lock().await;
+    apply_locked(st, cfg, by, true).await
+}
+
+/// Caller must hold `st.config_lock`.
+pub(crate) async fn apply_locked(st: &Arc<AppState>, mut cfg: Config, by: By, clear_unchanged_secrets: bool) -> Result<bool, String> {
+    let old = st.cfg();
+    if clear_unchanged_secrets {
+        let llm_supplied = cfg.llm.api_key != old.llm.api_key;
+        let openai_supplied = cfg.images.openai.api_key != old.images.openai.api_key;
+        let torr_supplied = cfg.torrserver.password != old.torrserver.password;
+        clear_stale_secrets(&old, &mut cfg, llm_supplied, openai_supplied, torr_supplied);
+    }
     validate(&cfg)?;
     // Re-read the referenced provider off the async runtime: on macOS this may wait on a Keychain ACL prompt.
     let cfg = tokio::task::spawn_blocking(move || {
@@ -373,7 +514,6 @@ pub async fn apply(st: &Arc<AppState>, cfg: Config, by: By) -> Result<bool, Stri
     })
     .await
     .map_err(|e| format!("Не удалось проверить провайдера: {e}"))?;
-    let old = st.cfg();
     cfg.save().map_err(|e| format!("Не удалось сохранить config.json: {e}"))?;
     let vaapi_changed = old.ffmpeg.vaapi_device != cfg.ffmpeg.vaapi_device;
     // The index has to be re-read when Anki-side settings changed; Tutor connectivity is not the index's business.
@@ -396,34 +536,143 @@ pub async fn apply(st: &Arc<AppState>, cfg: Config, by: By) -> Result<bool, Stri
     Ok(restart)
 }
 
-/// Agent-facing routes: no `Origin`, a loopback `Host`; everything else gets 403.
+/// Agent-facing routes: `/llms.txt` requires loopback Host, no Origin, and no cross-site Sec-Fetch;
+/// `/api/setup*` additionally requires `Authorization: Bearer <agent_token>`.
 pub fn routes(st: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new()
+    let public = Router::new()
         .route("/llms.txt", get(guide))
+        .route_layer(axum::middleware::from_fn_with_state(st.clone(), public_agent_only));
+    let authed = Router::new()
         .route("/api/setup", get(api_setup))
         .route("/api/setup/config", patch(api_patch))
         .route("/api/setup/llm/providers", get(api_providers))
         .route("/api/setup/llm/models", get(api_models))
-        .route_layer(axum::middleware::from_fn_with_state(st, agent_only))
+        .route_layer(axum::middleware::from_fn_with_state(st, agent_only));
+    public.merge(authed)
 }
 
-/// Browsers attach `Origin` to cross-origin calls; a foreign `Host` is a DNS-rebinding attempt.
-pub fn agent_allowed(headers: &HeaderMap, port: u16) -> Result<(), &'static str> {
+pub(crate) fn constant_time_eq(a: &str, b: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    let da = Sha256::digest(a.as_bytes());
+    let db = Sha256::digest(b.as_bytes());
+    let mut diff = 0u8;
+    for (x, y) in da.iter().zip(db.iter()) {
+        diff |= std::hint::black_box(*x ^ *y);
+    }
+    std::hint::black_box(diff) == 0 && a.len() == b.len()
+}
+
+pub(crate) fn valid_bearer(headers: &HeaderMap, expected_token: &str) -> bool {
+    if expected_token.is_empty() {
+        return false;
+    }
+    let mut all = headers.get_all(header::AUTHORIZATION).iter();
+    let Some(val) = all.next() else { return false };
+    if all.next().is_some() {
+        return false;
+    }
+    let Ok(s) = val.to_str() else { return false };
+    let Some((scheme, token)) = s.split_once(' ') else { return false };
+    scheme.eq_ignore_ascii_case("bearer") && constant_time_eq(token, expected_token)
+}
+
+pub(crate) fn valid_loopback_host(headers: &HeaderMap, port: u16) -> bool {
+    let mut all = headers.get_all(header::HOST).iter();
+    let Some(val) = all.next() else { return false };
+    if all.next().is_some() {
+        return false;
+    }
+    let host = val.to_str().unwrap_or("").to_ascii_lowercase();
+    host == format!("127.0.0.1:{port}") || host == format!("localhost:{port}")
+}
+
+/// Rejects browser-initiated subresource/cross-site Fetch Metadata headers while allowing plain
+/// CLI agents (no `Sec-Fetch-*`) and direct address-bar navigation (`Sec-Fetch-Site: none`).
+pub(crate) fn sec_fetch_safe(headers: &HeaderMap) -> bool {
+    let mut has_any = false;
+    let mut site: Option<&str> = None;
+    let mut mode: Option<&str> = None;
+    let mut dest: Option<&str> = None;
+    for (name, value) in headers {
+        let k = name.as_str();
+        if !k.starts_with("sec-fetch-") {
+            continue;
+        }
+        has_any = true;
+        let Ok(v) = value.to_str() else { return false };
+        if k == "sec-fetch-site" {
+            if site.is_some() {
+                return false;
+            }
+            site = Some(v);
+        } else if k == "sec-fetch-mode" {
+            if mode.is_some() {
+                return false;
+            }
+            mode = Some(v);
+        } else if k == "sec-fetch-dest" {
+            if dest.is_some() {
+                return false;
+            }
+            dest = Some(v);
+        }
+    }
+    if !has_any {
+        return true;
+    }
+    let Some(s) = site else {
+        return false;
+    };
+    if !s.eq_ignore_ascii_case("none") {
+        return false;
+    }
+    if let Some(m) = mode {
+        if !m.eq_ignore_ascii_case("navigate") {
+            return false;
+        }
+    }
+    if let Some(d) = dest {
+        if !d.eq_ignore_ascii_case("document") {
+            return false;
+        }
+    }
+    true
+}
+
+/// Public guide/health check when no `Origin` is present: loopback `Host`, no `Origin`, safe `Sec-Fetch-*`.
+pub fn agent_public_allowed(headers: &HeaderMap, port: u16) -> Result<(), &'static str> {
     if headers.contains_key(header::ORIGIN) {
         return Err("Доступ из браузера закрыт: API настройки только для локальных агентов (curl)");
     }
-    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("").to_ascii_lowercase();
-    if host == format!("127.0.0.1:{port}") || host == format!("localhost:{port}") {
-        Ok(())
-    } else {
-        Err("Host должен быть 127.0.0.1")
+    if !valid_loopback_host(headers, port) {
+        return Err("Host должен быть 127.0.0.1");
+    }
+    if !sec_fetch_safe(headers) {
+        return Err("Доступ из браузера закрыт (Sec-Fetch)");
+    }
+    Ok(())
+}
+
+/// Authenticated setup routes: `Origin` absent, loopback `Host`, safe `Sec-Fetch-*`, valid Bearer token.
+pub fn agent_allowed(headers: &HeaderMap, port: u16, expected_token: &str) -> Result<(), (StatusCode, &'static str)> {
+    agent_public_allowed(headers, port).map_err(|msg| (StatusCode::FORBIDDEN, msg))?;
+    if !valid_bearer(headers, expected_token) {
+        return Err((StatusCode::UNAUTHORIZED, "Требуется Authorization: Bearer из agent.token"));
+    }
+    Ok(())
+}
+
+async fn public_agent_only(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+    match agent_public_allowed(req.headers(), st.listen_port) {
+        Ok(()) => next.run(req).await,
+        Err(msg) => crate::server::err(StatusCode::FORBIDDEN, msg),
     }
 }
 
 async fn agent_only(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Response {
-    match agent_allowed(req.headers(), st.listen_port) {
+    match agent_allowed(req.headers(), st.listen_port, &st.agent_token) {
         Ok(()) => next.run(req).await,
-        Err(msg) => crate::server::err(StatusCode::FORBIDDEN, msg),
+        Err((code, msg)) => crate::server::err(code, msg),
     }
 }
 
@@ -447,11 +696,12 @@ async fn api_patch(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
         Ok(v) => v,
         Err(e) => return crate::server::err(StatusCode::BAD_REQUEST, e.to_string()),
     };
+    let _guard = st.config_lock.lock().await;
     let cfg = match merge_patch(&st.cfg(), patch) {
         Ok(c) => c,
         Err(e) => return crate::server::err(StatusCode::BAD_REQUEST, e),
     };
-    let restart = match apply(&st, cfg, By::Agent).await {
+    let restart = match apply_locked(&st, cfg, By::Agent, false).await {
         Ok(r) => r,
         Err(e) => return crate::server::err(StatusCode::BAD_REQUEST, e),
     };
@@ -615,11 +865,70 @@ mod tests {
 
     #[test]
     fn agent_allowed_requires_loopback_host_and_no_origin() {
-        assert!(agent_allowed(&headers(&[("Host", "127.0.0.1:47800")]), 47800).is_ok());
-        assert!(agent_allowed(&headers(&[("Host", "localhost:47800")]), 47800).is_ok());
-        assert!(agent_allowed(&headers(&[("Host", "evil.example:47800")]), 47800).is_err());
+        let tok = "test-secret-token";
+        assert!(agent_public_allowed(&headers(&[("Host", "127.0.0.1:47800")]), 47800).is_ok());
+        assert!(agent_public_allowed(&headers(&[("Host", "localhost:47800")]), 47800).is_ok());
+        assert!(agent_public_allowed(&headers(&[("Host", "127.0.0.1:47800"), ("Sec-Fetch-Site", "none")]), 47800).is_ok());
+        assert!(agent_public_allowed(&headers(&[("Host", "127.0.0.1:47800"), ("Sec-Fetch-Site", "cross-site")]), 47800).is_err());
+        assert!(agent_public_allowed(&headers(&[("Host", "127.0.0.1:47800"), ("Sec-Fetch-Dest", "image")]), 47800).is_err());
+        assert!(agent_public_allowed(&headers(&[("Host", "evil.example:47800")]), 47800).is_err());
         let with_origin = headers(&[("Host", "127.0.0.1:47800"), ("Origin", "https://lampa.example.com")]);
-        assert!(agent_allowed(&with_origin, 47800).is_err());
+        assert!(agent_public_allowed(&with_origin, 47800).is_err());
+
+        // Setup endpoints additionally require Authorization: Bearer <agent_token>.
+        assert!(agent_allowed(&headers(&[("Host", "127.0.0.1:47800")]), 47800, tok).is_err());
+        assert!(agent_allowed(&headers(&[("Host", "127.0.0.1:47800"), ("Authorization", "Bearer wrong")]), 47800, tok).is_err());
+        assert!(agent_allowed(&headers(&[("Host", "127.0.0.1:47800"), ("Authorization", "Bearer test-secret-token")]), 47800, tok).is_ok());
+        assert!(agent_allowed(
+            &headers(&[
+                ("Host", "127.0.0.1:47800"),
+                ("Authorization", "Bearer test-secret-token"),
+                ("Sec-Fetch-Site", "cross-site"),
+            ]),
+            47800,
+            tok
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn changing_endpoint_or_source_clears_stale_secrets() {
+        let base = cfg(r#"{"llm":{"baseUrl":"https://api.deepseek.com","apiKey":"sk-old"},"images":{"openai":{"baseUrl":"https://api.openai.com/v1","apiKey":"sk-img"}},"torrserver":{"baseUrl":"https://ts.a.example","password":"tpw"}}"#);
+        // Changing baseUrl without a new secret clears stored key even if "***" is echoed back.
+        let p1 = merge_patch(&base, serde_json::json!({"llm":{"baseUrl":"https://evil.example/v1","apiKey":"***"}})).unwrap();
+        assert_eq!(p1.llm.api_key, "");
+        assert_eq!(p1.images.openai.api_key, "sk-img");
+
+        // Changing llm.source clears stored manual llm.apiKey.
+        let p2 = merge_patch(&base, serde_json::json!({"llm":{"source":"omp","provider":"anthropic"}})).unwrap();
+        assert_eq!(p2.llm.api_key, "");
+
+        // Explicitly supplying a new non-masked secret in the same patch keeps the new secret.
+        let p3 = merge_patch(&base, serde_json::json!({"llm":{"baseUrl":"https://new.example/v1","apiKey":"sk-new"},"images":{"openai":{"baseUrl":"https://img2.example/v1"}},"torrserver":{"baseUrl":"https://ts.b.example","password":"newpw"}})).unwrap();
+        assert_eq!(p3.llm.api_key, "sk-new");
+        assert_eq!(p3.images.openai.api_key, "");
+        assert_eq!(p3.torrserver.password, "newpw");
+    }
+
+    #[test]
+    fn validate_checks_urls_providers_tts_vaapi_and_tutor_root() {
+        assert!(validate(&cfg(r#"{"llm":{"baseUrl":"file:///etc/passwd"}}"#)).is_err());
+        assert!(validate(&cfg(r#"{"images":{"openai":{"baseUrl":"ftp://x"}}}"#)).is_err());
+        assert!(validate(&cfg(r#"{"torrserver":{"baseUrl":"javascript:alert(1)"}}"#)).is_err());
+        assert!(validate(&cfg(r#"{"tutor":{"apiUrl":"not-a-url"}}"#)).is_err());
+        assert!(validate(&cfg(r#"{"llm":{"source":"omp","provider":""}}"#)).is_err());
+        assert!(validate(&cfg(r#"{"llmTasks":{"chat":{"source":"omp","provider":"","model":"m"}}}"#)).is_err());
+        assert!(validate(&cfg(r#"{"anki":{"ttsVoice":"-bad"}}"#)).is_err());
+        assert!(validate(&cfg(r#"{"anki":{"ttsVoice":"en-US;rm -rf"}}"#)).is_err());
+        assert!(validate(&cfg(r#"{"anki":{"ttsVoice":"en-US-AriaNeural"}}"#)).is_ok());
+        assert!(validate(&cfg(r#"{"ffmpeg":{"vaapiDevice":""}}"#)).is_ok());
+        assert!(validate(&cfg(r#"{"ffmpeg":{"vaapiDevice":"/dev/dri/renderD129"}}"#)).is_ok());
+        assert!(validate(&cfg(r#"{"ffmpeg":{"vaapiDevice":"/dev/dri/renderD128,format=nv12"}}"#)).is_err());
+        assert!(validate(&cfg(r#"{"ffmpeg":{"vaapiDevice":"/tmp/evil"}}"#)).is_err());
+        assert!(validate(&cfg(r#"{"tutor":{"root":"relative/path"}}"#)).is_err());
+        assert!(validate(&cfg(r#"{"tutor":{"root":"/opt/tutor/../etc"}}"#)).is_err());
+        assert!(validate(&cfg(r#"{"tutor":{"root":""}}"#)).is_ok());
+        assert!(validate(&cfg(r#"{"tutor":{"root":"/opt/tutor"}}"#)).is_ok());
     }
 
     #[test]

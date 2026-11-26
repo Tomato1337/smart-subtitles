@@ -8,7 +8,6 @@
   "permissions": [
     "core:default",
     "dialog:default",
-    "deep-link:default",
     "core:window:allow-set-fullscreen",
     "core:window:allow-show",
     "core:window:allow-set-focus"

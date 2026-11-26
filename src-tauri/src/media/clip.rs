@@ -32,7 +32,9 @@ pub fn clip_args(c: &ClipSpec, out: &Path) -> Vec<String> {
     let vf = if c.hdr { format!("zscale=t=linear:npl=100,tonemap=hable,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,{scale}") } else { scale.to_string() };
     let mut a: Vec<String> = ["-hide_banner", "-v", "error", "-y", "-xerror", "-ss"].map(String::from).to_vec();
     // Limit the output timeline, not how long the demuxer is allowed to read around the seek.
-    a.extend([format!("{ss:.3}"), "-i".into(), super::input(c.src), "-t".into(), format!("{t:.3}")]);
+    a.push(format!("{ss:.3}"));
+    super::push_input(&mut a, c.src);
+    a.extend(["-t".into(), format!("{t:.3}")]);
     a.extend(["-map".into(), format!("0:{}", c.video_index), "-map".into(), format!("0:{}", c.audio_index), "-vf".into(), vf]);
     a.extend(["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "40", "-deadline", "good", "-cpu-used", "5", "-row-mt", "1", "-c:a", "libopus", "-b:a", "32k", "-ac", "1"].map(String::from));
     a.push(out.to_string_lossy().into_owned());
@@ -319,6 +321,8 @@ mod tests {
         let h = clip_args(&ClipSpec { hdr: true, start: 0.2, end: 60.0, ..c }, Path::new("/o.webm")).join(" ");
         assert!(h.contains("-ss 0.000 -i U -t 12.000"));
         assert!(h.contains("-vf zscale=t=linear:npl=100,tonemap=hable,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,fps="));
+        let remote = clip_args(&ClipSpec { src: "https://cdn.example/v.mkv", ..c }, Path::new("/o.webm")).join(" ");
+        assert!(remote.contains("-ss 99.500 -protocol_whitelist http,https,tcp,tls -i https://cdn.example/v.mkv -t 4.000"));
     }
 
     #[test]

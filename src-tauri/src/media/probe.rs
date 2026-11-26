@@ -77,10 +77,22 @@ pub fn parse_probe(json: &[u8]) -> anyhow::Result<Probe> {
     Ok(Probe { duration, video: video.ok_or_else(|| anyhow!("В файле нет видео"))?, audio })
 }
 
+pub fn probe_args(url: &str) -> Vec<String> {
+    let mut a = vec![
+        "-v".into(),
+        "error".into(),
+        "-show_format".into(),
+        "-show_streams".into(),
+        "-of".into(),
+        "json".into(),
+    ];
+    super::push_input(&mut a, url);
+    a
+}
+
 pub async fn probe(url: &str) -> anyhow::Result<Probe> {
     let fut = crate::proc::command("ffprobe")
-        .args(["-v", "error", "-show_format", "-show_streams", "-of", "json"])
-        .arg(super::input(url))
+        .args(probe_args(url))
         .kill_on_drop(true)
         .output();
     let out = tokio::time::timeout(Duration::from_secs(120), fut)
@@ -122,5 +134,12 @@ mod tests {
     fn no_video_is_error() {
         let e = parse_probe(br#"{"streams":[],"format":{}}"#).unwrap_err();
         assert_eq!(e.to_string(), "В файле нет видео");
+    }
+    #[test]
+    fn remote_probe_includes_protocol_whitelist() {
+        assert_eq!(
+            probe_args("http://127.0.0.1:8095/stream?link=a&index=0"),
+            vec!["-v", "error", "-show_format", "-show_streams", "-of", "json", "-protocol_whitelist", "http,https,tcp,tls", "-i", "http://127.0.0.1:8095/stream?link=a&index=0"]
+        );
     }
 }

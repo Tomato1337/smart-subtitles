@@ -29,6 +29,7 @@ pub async fn llm_providers() -> Vec<crate::llm::providers::ProviderInfo> {
 /// Live model list for an unsaved draft, so a manual baseUrl/key can be listed before saving.
 #[tauri::command]
 pub async fn llm_models(st: St<'_>, llm: crate::config::Llm) -> Res<Vec<String>> {
+    crate::setup::validate_llm_conn(&llm, true)?;
     crate::llm::providers::list_models(&st.llm_http, &crate::llm::providers::Roots::from_env(), &llm).await
 }
 
@@ -44,6 +45,7 @@ pub async fn llm_ping(st: St<'_>, llm: crate::config::Llm, model: String) -> Res
     if model.trim().is_empty() {
         return Err("Выберите модель".into());
     }
+    crate::setup::validate_llm_conn(&llm, true)?;
     let roots = crate::llm::providers::Roots::from_env();
     let endpoint = crate::llm::providers::endpoint_for_async(roots, llm.clone())
         .await
@@ -212,6 +214,7 @@ pub async fn session_current(st: St<'_>) -> Res<Option<SessionState>> {
 
 #[tauri::command]
 pub async fn session_close(st: St<'_>) -> Res<()> {
+    let _open_guard = st.session_open_lock.lock().await;
     st.sessions.close().await;
     Ok(())
 }
@@ -243,10 +246,23 @@ pub async fn session_open_playlist_item(st: St<'_>, index: usize) -> Res<String>
 
 #[tauri::command]
 pub async fn media_open_stream(st: St<'_>, session_id: String, at: f64, audio_index: u32) -> Res<OpenStream> {
+    if !at.is_finite() {
+        return Err("некорректная позиция".into());
+    }
     let s = st.sessions.get(&session_id).ok_or("сессия закрыта")?;
     s.mode(st.vaapi_ok.load(Ordering::Relaxed)).ok_or("ffprobe ещё не завершён")?;
     let gen = s.gen.fetch_add(1, Ordering::Relaxed) + 1;
-    Ok(OpenStream { url: format!("http://127.0.0.1:{}/media/{}/stream?start={}&audio={}&gen={}", st.cfg().server.port, s.id, at.max(0.0), audio_index, gen) })
+    Ok(OpenStream {
+        url: format!(
+            "http://127.0.0.1:{}/media/{}/stream?start={}&audio={}&gen={}&t={}",
+            st.listen_port,
+            s.id,
+            at.max(0.0),
+            audio_index,
+            gen,
+            crate::server::media_token(),
+        ),
+    })
 }
 
 /// Peers, speed and buffer health of a TorrServer stream; `None` for other sources and while the
@@ -258,8 +274,16 @@ pub async fn media_torrent_health(st: St<'_>, session_id: String) -> Res<Option<
     Ok(crate::subs::torrserver::health(&st, &s.src).await)
 }
 
+fn valid_position(t: f64) -> Res<f64> {
+    if !t.is_finite() || t < 0.0 {
+        return Err("некорректная позиция".into());
+    }
+    Ok(t)
+}
+
 #[tauri::command]
 pub async fn media_save_position(st: St<'_>, media_id: String, t: f64) -> Res<()> {
+    let t = valid_position(t)?;
     st.db(move |c| { c.execute("UPDATE media SET last_position=?1, updated_at=?2 WHERE id=?3", rusqlite::params![t, now(), media_id])?; Ok(()) }).await
 }
 
@@ -273,6 +297,9 @@ pub async fn media_set_audio(st: St<'_>, media_id: String, index: u32) -> Res<()
 
 #[tauri::command]
 pub async fn media_set_sub_offset(st: St<'_>, media_id: String, sec: f64) -> Res<()> {
+    if !sec.is_finite() {
+        return Err("некорректное смещение".into());
+    }
     st.db(move |c| { c.execute("UPDATE media SET sub_offset=?1 WHERE id=?2", rusqlite::params![sec, media_id])?; Ok(()) }).await
 }
 
@@ -414,10 +441,30 @@ pub async fn subs_list(st: St<'_>, media_id: String) -> Res<SubsList> {
     st.db(move |c| crate::subs::store::list(c, &media_id)).await
 }
 
+const MAX_SUB_FILE_BYTES: u64 = 25 * 1024 * 1024;
+
+fn read_bounded_file(path: &str, max_bytes: u64) -> Res<Vec<u8>> {
+    use std::io::Read;
+    let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{path}: не является файлом"));
+    }
+    if meta.len() > max_bytes {
+        return Err(format!("файл слишком большой (максимум {} МБ)", max_bytes / (1024 * 1024)));
+    }
+    let f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut bytes = Vec::with_capacity((meta.len() as usize).min(1024 * 1024));
+    f.take(max_bytes + 1).read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!("файл слишком большой (максимум {} МБ)", max_bytes / (1024 * 1024)));
+    }
+    Ok(bytes)
+}
+
 #[tauri::command]
 pub async fn subs_load_file(st: St<'_>, media_id: String, path: String) -> Res<()> {
     let s = current_for(&st, &media_id)?;
-    let bytes = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
+    let bytes = read_bounded_file(&path, MAX_SUB_FILE_BYTES)?;
     let label = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     crate::subs::acquire::install(
         &st,
@@ -493,12 +540,13 @@ pub async fn annot_cost(st: St<'_>, media_id: String) -> Res<crate::llm::cost::A
 pub async fn annot_set(st: St<'_>, media_id: String, on: bool, remember: bool) -> Res<()> {
     let _ = current_for(&st, &media_id)?;
     if on && remember {
-        // A config change, saved before the per-film consent it replaces.
+        // A config change, saved under config_lock before the per-film consent it replaces.
+        let _guard = st.config_lock.lock().await;
         let mut cfg = (*st.cfg()).clone();
         let key = cfg.annot_model_key();
         cfg.annot.remembered_model = key;
         cfg.annot.auto = true;
-        let _ = crate::setup::apply(st.inner(), cfg, crate::setup::By::App).await?;
+        let _ = crate::setup::apply_locked(st.inner(), cfg, crate::setup::By::App, true).await?;
     }
     let value = if on { "on" } else { "off" };
     let mid = media_id.clone();
@@ -714,6 +762,7 @@ pub async fn anki_status(st: St<'_>) -> Res<AnkiStatus> {
 
 #[tauri::command]
 pub async fn tts_preview(voice: String, text: Option<String>) -> Res<String> {
+    crate::setup::validate_tts_voice(&voice)?;
     let text = text.unwrap_or_else(|| "It'll bring him joy.".into());
     crate::anki::tts::preview(&voice, &text).await
 }
@@ -773,6 +822,9 @@ pub async fn cards_preview(
     let draft = draft.unwrap_or_else(sample_draft);
     let images_cfg = images.unwrap_or_else(|| cfg.images.clone());
     let tutor_cfg = tutor.unwrap_or_else(|| cfg.tutor.clone());
+    crate::setup::validate_anki(&anki)?;
+    crate::setup::validate_tutor(&tutor_cfg)?;
+    crate::setup::validate_images(&images_cfg, &tutor_cfg)?;
     let client = crate::anki::connect::Client::new(&st.http, &anki.url);
     let route = crate::anki::images::resolve_route(&st, &images_cfg, &tutor_cfg).await.map_err(|e| e.public_text())?;
     let media = match (media_id, cue_idx) {
@@ -803,6 +855,8 @@ pub async fn images_route(
     let cfg = st.cfg();
     let images = images.unwrap_or_else(|| cfg.images.clone());
     let tutor = tutor.unwrap_or_else(|| cfg.tutor.clone());
+    crate::setup::validate_tutor(&tutor)?;
+    crate::setup::validate_images(&images, &tutor)?;
     let route = crate::anki::images::resolve_route(&st, &images, &tutor).await.map_err(|e| e.public_text())?;
     Ok(crate::anki::images::ImageRouteView::of(&route))
 }
@@ -828,6 +882,8 @@ pub async fn images_generate(
     let cfg = st.cfg();
     let images = images.unwrap_or_else(|| cfg.images.clone());
     let tutor = tutor.unwrap_or_else(|| cfg.tutor.clone());
+    crate::setup::validate_tutor(&tutor)?;
+    crate::setup::validate_images(&images, &tutor)?;
     if prompt.trim().is_empty() {
         return Err("Укажите промпт картинки".into());
     }
@@ -1098,5 +1154,27 @@ mod tests {
         assert_eq!(items[2].sub_source, None);
 
         assert_eq!(count_queued_cards(&c).unwrap(), 1);
+    }
+
+    #[test]
+    fn valid_position_rejects_non_finite_and_negative() {
+        assert_eq!(super::valid_position(0.0).unwrap(), 0.0);
+        assert_eq!(super::valid_position(42.5).unwrap(), 42.5);
+        for bad in [-0.01, -100.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(super::valid_position(bad).is_err(), "expected {bad} to fail");
+        }
+    }
+
+    #[test]
+    fn read_bounded_file_rejects_oversized_files() {
+        let dir = std::env::temp_dir().join(format!("ss-cmd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let small = dir.join("ok.srt");
+        let big = dir.join("big.srt");
+        std::fs::write(&small, b"1\n00:00:00,000 --> 00:00:01,000\nHi\n").unwrap();
+        std::fs::write(&big, vec![b'a'; 1024]).unwrap();
+        assert!(super::read_bounded_file(small.to_str().unwrap(), 100).is_ok());
+        assert!(super::read_bounded_file(big.to_str().unwrap(), 100).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

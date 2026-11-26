@@ -2,11 +2,11 @@
 
 Smart Subtitles is a Linux, macOS and Windows desktop player for learning English from films and series. It shows English subtitles with a Russian translation, highlights idioms, phrasal verbs and grammar patterns, explains any phrase in context, runs a tutor chat about the film and writes Anki cards with a movie clip, audio and an AI picture. This guide explains how the app works and lets you, an agent, inspect and change its settings on behalf of the user.
 
-The API works only while the app is running; if a request fails with a connection error, ask the user to start Smart Subtitles. Base URL: `http://127.0.0.1:{port}`. Send requests without an `Origin` header (plain `curl`), otherwise they are rejected with 403; the `Host` must be `127.0.0.1:{port}` or `localhost:{port}`.
+The API works only while the app is running; if a request fails with a connection error, ask the user to start Smart Subtitles. Base URL: `http://127.0.0.1:{port}`. Send requests without an `Origin` header (plain `curl`), otherwise they are rejected with 403; the `Host` must be `127.0.0.1:{port}` or `localhost:{port}`, and browser `Sec-Fetch-*` headers (except `Sec-Fetch-Site: none`) are rejected. `GET /llms.txt` and `GET /api/health` work without a token; every `/api/setup*` endpoint requires `Authorization: Bearer <token>` where `<token>` is read from `agent.token` (mode `0600`, next to `config.json`).
 
 ## How to help the user
 
-1. Run `curl -s http://127.0.0.1:{port}/api/setup` and show the user which steps are missing (`steps[].done == false`), starting with `importance: "required"`.
+1. Read the token from `agent.token` next to `config.json` (e.g. `~/.config/smart-subtitle/agent.token` on Linux) and run `curl -s -H "Authorization: Bearer $(cat ~/.config/smart-subtitle/agent.token)" http://127.0.0.1:{port}/api/setup` to see which steps are missing (`steps[].done == false`), starting with `importance: "required"`.
 2. For the LLM step, first call `GET /api/setup/llm/providers`. If a provider has `hasKey: true`, offer to use it and send `PATCH {"llm":{"source":"<source>","provider":"<id>","model":"<one of models>"}}`. Otherwise ask the user for an API key and send `{"llm":{"source":"","baseUrl":"…","apiKey":"…","api":"openai"|"anthropic","model":"…"}}`. Defaults: DeepSeek at `https://api.deepseek.com`, model `deepseek-flash`.
 3. After every LLM patch, check `GET /api/setup/llm/models`: a 502 means the key or the base URL is wrong.
 4. Talk to the user in their language (the app UI is Russian). Ask for secrets, never repeat them in your answers and never log them. `***` in a GET response means "a value is set".
@@ -38,39 +38,40 @@ The `deps` step of `/api/setup` reports the tools the app shells out to. If it i
 
 | Method and path | Purpose |
 |---|---|
-| `GET /llms.txt` | This guide. |
-| `GET /api/setup` | Setup status: `steps` (`id`, `title`, `importance`, `done`, `hint`, `fields`), `complete`, `port`, `guideUrl`, `configPath`, and the current `config` with secrets masked. |
-| `PATCH /api/setup/config` | Merge-patch the config; returns `restartRequired` and the new `status`. Errors are 400 with `{"error": "…"}`. |
-| `GET /api/setup/llm/providers` | LLM providers already configured in other coding agents, without keys: `source`, `id`, `label`, `api`, `baseUrl`, `hasKey`, `file`, `models`. |
-| `GET /api/setup/llm/models` | Live model list for the main `llm` connection (`{"models": […]}`); 502 when the provider rejects the request. |
-| `GET /api/health` | `{"ok": true}` while the app runs. |
+| `GET /llms.txt` | This guide (no Bearer token required). |
+| `GET /api/setup` | Setup status: `steps` (`id`, `title`, `importance`, `done`, `hint`, `fields`), `complete`, `port`, `guideUrl`, `configPath`, and the current `config` with secrets masked. Requires `Authorization: Bearer <agent.token>`. |
+| `PATCH /api/setup/config` | Merge-patch the config; returns `restartRequired` and the new `status`. Errors are 400 with `{"error": "…"}`. Requires `Authorization: Bearer <agent.token>`. |
+| `GET /api/setup/llm/providers` | LLM providers already configured in other coding agents, without keys: `source`, `id`, `label`, `api`, `baseUrl`, `hasKey`, `file`, `models`. Requires `Authorization: Bearer <agent.token>`. |
+| `GET /api/setup/llm/models` | Live model list for the main `llm` connection (`{"models": […]}`); 502 when the provider rejects the request. Requires `Authorization: Bearer <agent.token>`. |
+| `GET /api/health` | `{"ok": true}` while the app runs (no Bearer token required). |
 
 ```sh
-curl -s http://127.0.0.1:{port}/api/setup
-curl -s http://127.0.0.1:{port}/api/setup/llm/providers
-curl -s http://127.0.0.1:{port}/api/setup/llm/models
-curl -s -X PATCH -H 'Content-Type: application/json' -d '{"opensubtitles":{"apiKey":"…"}}' http://127.0.0.1:{port}/api/setup/config
+TOKEN=$(cat ~/.config/smart-subtitle/agent.token)
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:{port}/api/setup
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:{port}/api/setup/llm/providers
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:{port}/api/setup/llm/models
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"opensubtitles":{"apiKey":"…"}}' http://127.0.0.1:{port}/api/setup/config
 ```
 
 Setup steps, in wizard order: `deps` and `llm` are required; `opensubtitles` and `lampa` are recommended; `anki` is optional. `complete` is true when every required step is done.
 
 ## Patch rules
 
-JSON Merge Patch (RFC 7386): objects merge key by key, arrays are replaced as a whole, `null` resets a field to its default value. An unknown field is rejected with 400 and its dotted path. The string `***` in a secret field means "keep the stored value", so a config object from GET can be sent back. `restartRequired: true` appears only when `server.port` changed. Every change applies immediately and the app's UI updates itself.
+JSON Merge Patch (RFC 7386): objects merge key by key, arrays are replaced as a whole, `null` resets a field to its default value. An unknown field is rejected with 400 and its dotted path. The string `***` in a secret field means "keep the stored value", except when you change the corresponding `baseUrl` or `source` (`llm.apiKey` for `llm.baseUrl`/`llm.source`, `images.openai.apiKey` for `images.openai.baseUrl`, `torrserver.password` for `torrserver.baseUrl`) without supplying a new non-masked secret — in that case the stored secret is cleared so it cannot leak to the new endpoint. `restartRequired: true` appears only when `server.port` changed. Every change applies immediately and the app's UI updates itself.
 
-The patch is validated as a whole; a rejected patch changes nothing. Checked: `server.port` 1–65535; `learner.cefr` one of A1–C2; `lampa.origins` entries are bare origins; `anki.url` is http(s); `anki.deck` and `anki.noteType` are not empty; `anki.fields` values are known sources; `anki.sentenceAudio` and `images.backend` are known values; `images.fallbacks` entries are known, unique and not the app-owned primary; `subtitles.sources` entries are known and unique; `subtitles.idleOpacity` is 0–1; a task with its own `source` names a `model`.
+The patch is validated as a whole; a rejected patch changes nothing. Checked: `server.port` 1–65535; `learner.cefr` one of A1–C2; `lampa.origins` entries are bare origins; non-empty `llm.baseUrl`, `images.openai.baseUrl`, `torrserver.baseUrl`, `tutor.apiUrl`, and `anki.url` are http(s) URLs; `llm.provider` and `llmTasks.<task>.provider` are non-empty when `source` is set; a task with its own `source` names a `model`; `anki.deck` and `anki.noteType` are not empty; `anki.fields` values are known sources; `anki.ttsVoice` matches `[A-Za-z0-9_-]{1,64}` (not starting with `-`); `anki.sentenceAudio` and `images.backend` are known values; `images.fallbacks` entries are known, unique and not the app-owned primary; `subtitles.sources` entries are known and unique; `subtitles.idleOpacity` is 0–1; `ffmpeg.vaapiDevice` is empty or a safe `/dev/dri/*` device path; `tutor.root` is empty or an absolute path without `..`.
 
 Examples:
 
 ```sh
 # Use a provider from omp for the chat only, with medium reasoning
-curl -s -X PATCH -H 'Content-Type: application/json' \
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"llmTasks":{"chat":{"source":"omp","provider":"anthropic","model":"claude-sonnet-4-5","effort":"medium"}}}' \
   http://127.0.0.1:{port}/api/setup/config
 # Send the chat back to the main connection
-curl -s -X PATCH -H 'Content-Type: application/json' -d '{"llmTasks":{"chat":null}}' http://127.0.0.1:{port}/api/setup/config
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"llmTasks":{"chat":null}}' http://127.0.0.1:{port}/api/setup/config
 # Allow a Lampa instance and prefer OpenSubtitles over files inside the torrent
-curl -s -X PATCH -H 'Content-Type: application/json' \
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"lampa":{"origins":["https://lampa.example.com"]},"subtitles":{"sources":["opensubtitles","torrserver","sidecar","embedded"]}}' \
   http://127.0.0.1:{port}/api/setup/config
 ```
@@ -158,6 +159,7 @@ Settings that live in the UI only (browser `localStorage`, not reachable through
 | File | Contents |
 |---|---|
 | `config.json` | Settings; mode 600 on Linux and macOS. |
+| `agent.token` | Per-install Bearer token for `/api/setup*` (and token-authed `/api/session`); mode 600 on Linux and macOS. |
 | `data.db` | SQLite: films and positions, subtitles, analysis, explanations, chat, card proposals, notifications, LLM usage. |
 | `logs/app.log` | Sessions, subtitles, Anki, settings. |
 | `logs/llm.log` | LLM requests and errors (bodies are logged with secrets redacted). |
