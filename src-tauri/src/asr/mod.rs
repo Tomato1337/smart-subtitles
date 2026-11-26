@@ -112,7 +112,7 @@ fn extract_pcm_args(src: &str, audio_index: u32, start: f64, dur: f64, out: &Pat
     a.extend(["-t".into(), format!("{dur:.3}")]);
     let lower = src.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
-        a.extend(["-protocol_whitelist".into(), "http,https,tcp,tls".into()]);
+        a.extend(["-protocol_whitelist".into(), crate::media::REMOTE_PROTOCOL_WHITELIST.into()]);
     }
     a.extend(["-i".into(), crate::media::input(src)]);
     a.extend(["-map".into(), format!("0:{audio_index}"), "-vn".into()]);
@@ -199,7 +199,7 @@ mod tests {
         let out = Path::new("/tmp/out.f32");
         let http_args = extract_pcm_args("https://example.com/stream.mkv", 1, 10.0, 5.0, out);
         let pos = http_args.iter().position(|a| a == "-protocol_whitelist").expect("whitelist flag");
-        assert_eq!(http_args[pos + 1], "http,https,tcp,tls");
+        assert_eq!(http_args[pos + 1], crate::media::REMOTE_PROTOCOL_WHITELIST);
         assert!(pos < http_args.iter().position(|a| a == "-i").unwrap());
 
         let file_args = extract_pcm_args("file:///tmp/movie.mkv", 1, 10.0, 5.0, out);

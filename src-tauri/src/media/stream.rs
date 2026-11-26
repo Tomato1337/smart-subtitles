@@ -97,12 +97,12 @@ mod tests {
     fn odd_widths_round_to_even_and_http_gets_protocol_whitelist() {
         let p_odd = probe("hevc", "yuv420p", 853, false);
         let x264 = stream_args("https://cdn.example/v.mkv", 0.0, 1, &p_odd, VideoMode::X264, "/dev/dri/renderD128").join(" ");
-        assert!(x264.contains("-protocol_whitelist http,https,tcp,tls -i https://cdn.example/v.mkv"));
+        assert!(x264.contains(&format!("-protocol_whitelist {} -i https://cdn.example/v.mkv", crate::media::REMOTE_PROTOCOL_WHITELIST)));
         assert!(x264.contains("-vf scale=852:-2,format=yuv420p"));
 
         let p_tiny = probe("hevc", "yuv420p10le", 1, true);
         let vaapi = stream_args("http://127.0.0.1:8095/s", 0.0, 1, &p_tiny, VideoMode::Vaapi, "/dev/dri/renderD128").join(" ");
         assert!(vaapi.contains("scale_vaapi=w=2:h=-2:format=nv12"));
-        assert!(vaapi.contains("-protocol_whitelist http,https,tcp,tls -i http://127.0.0.1:8095/s"));
+        assert!(vaapi.contains(&format!("-protocol_whitelist {} -i http://127.0.0.1:8095/s", crate::media::REMOTE_PROTOCOL_WHITELIST)));
     }
 }

@@ -23,11 +23,14 @@ pub fn input(src: &str) -> String {
     src.to_string()
 }
 
-/// Appends `-protocol_whitelist http,https,tcp,tls` before `-i <input>` when the input is remote
-/// HTTP(S), preventing playlist/demuxer dereferencing of `file://`, `concat:`, or `subfile:`.
+pub const REMOTE_PROTOCOL_WHITELIST: &str = "http,https,httpproxy,tcp,tls,crypto";
+
+/// Appends `-protocol_whitelist http,https,httpproxy,tcp,tls,crypto` before `-i <input>` when the
+/// input is remote HTTP(S), allowing system `http_proxy` tunneling while preventing playlist/demuxer
+/// dereferencing of `file://`, `concat:`, or `subfile:`.
 pub fn push_input(args: &mut Vec<String>, src: &str) {
     if is_http(src) {
-        args.extend(["-protocol_whitelist".into(), "http,https,tcp,tls".into()]);
+        args.extend(["-protocol_whitelist".into(), REMOTE_PROTOCOL_WHITELIST.into()]);
     }
     args.extend(["-i".into(), input(src)]);
 }
@@ -46,7 +49,10 @@ mod tests {
     fn http_inputs_get_protocol_whitelist() {
         let mut a = Vec::new();
         super::push_input(&mut a, "https://cdn.example/video.m3u8");
-        assert_eq!(a, vec!["-protocol_whitelist", "http,https,tcp,tls", "-i", "https://cdn.example/video.m3u8"]);
+        assert_eq!(
+            a,
+            vec!["-protocol_whitelist", super::REMOTE_PROTOCOL_WHITELIST, "-i", "https://cdn.example/video.m3u8"]
+        );
     }
 }
 

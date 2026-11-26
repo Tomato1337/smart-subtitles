@@ -139,7 +139,18 @@ mod tests {
     fn remote_probe_includes_protocol_whitelist() {
         assert_eq!(
             probe_args("http://127.0.0.1:8095/stream?link=a&index=0"),
-            vec!["-v", "error", "-show_format", "-show_streams", "-of", "json", "-protocol_whitelist", "http,https,tcp,tls", "-i", "http://127.0.0.1:8095/stream?link=a&index=0"]
+            vec![
+                "-v",
+                "error",
+                "-show_format",
+                "-show_streams",
+                "-of",
+                "json",
+                "-protocol_whitelist",
+                crate::media::REMOTE_PROTOCOL_WHITELIST,
+                "-i",
+                "http://127.0.0.1:8095/stream?link=a&index=0",
+            ]
         );
     }
 }

@@ -322,7 +322,7 @@ mod tests {
         assert!(h.contains("-ss 0.000 -i U -t 12.000"));
         assert!(h.contains("-vf zscale=t=linear:npl=100,tonemap=hable,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,fps="));
         let remote = clip_args(&ClipSpec { src: "https://cdn.example/v.mkv", ..c }, Path::new("/o.webm")).join(" ");
-        assert!(remote.contains("-ss 99.500 -protocol_whitelist http,https,tcp,tls -i https://cdn.example/v.mkv -t 4.000"));
+        assert!(remote.contains(&format!("-ss 99.500 -protocol_whitelist {} -i https://cdn.example/v.mkv -t 4.000", crate::media::REMOTE_PROTOCOL_WHITELIST)));
     }
 
     #[test]
