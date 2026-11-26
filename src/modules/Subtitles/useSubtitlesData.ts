@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { notify } from '@/common/api/notify'
 import { api, errorText, onEvent } from '@/common/api/tauri'
+import type { CueAnnotation } from '@/common/types/ipc'
 import { useSubsStore } from './store/subsStore'
 
 /** Loads cues for a media and keeps them in sync with backend events. */
@@ -9,15 +10,25 @@ export function useSubtitlesData(mediaId: string, subOffset: number) {
     const st = useSubsStore.getState()
     st.reset(mediaId, subOffset)
     let alive = true
-    const load = () =>
-      api.subsList(mediaId).then((l) => {
-        if (!alive) return
-        useSubsStore.getState().setCues(l.cues, l.annotations)
+    let loadSeq = 0
+    let inFlightAnnots: CueAnnotation[] = []
+    let inFlightFailed: number[] = []
+    const load = () => {
+      const seq = ++loadSeq
+      inFlightAnnots = []
+      inFlightFailed = []
+      return api.subsList(mediaId).then((l) => {
+        if (!alive || seq !== loadSeq) return
+        const store = useSubsStore.getState()
+        store.setCues(l.cues, l.annotations)
+        if (inFlightAnnots.length > 0) store.applyAnnotations(inFlightAnnots)
+        for (const firstIdx of inFlightFailed) store.markFailed(firstIdx)
         // Consent and batch counters: the gate and the progress chip read them from the store.
-        api.annotStatus(mediaId).then((a) => { if (alive) useSubsStore.getState().setAnnot(a) }).catch(() => { })
+        api.annotStatus(mediaId).then((a) => { if (alive && seq === loadSeq) useSubsStore.getState().setAnnot(a) }).catch(() => { })
         // Embedded subtitles: a load in progress, or the confirmation dialog waiting for an answer.
-        void api.subsEmbeddedState(mediaId).then((e) => { if (alive) useSubsStore.getState().setEmbedded(e) }).catch(() => { })
-      }).catch((e) => notify('error', errorText(e)))
+        void api.subsEmbeddedState(mediaId).then((e) => { if (alive && seq === loadSeq) useSubsStore.getState().setEmbedded(e) }).catch(() => { })
+      }).catch((e) => { if (alive && seq === loadSeq) notify('error', errorText(e)) })
+    }
 
     const un = [
       onEvent('subs:status', (e) => { if (e.mediaId === mediaId) useSubsStore.getState().setStatus(e) }),
@@ -25,8 +36,16 @@ export function useSubtitlesData(mediaId: string, subOffset: number) {
       // The backend matched the subtitle timing to the speech: shift without reloading the cues.
       onEvent('subs:offset', (e) => { if (e.mediaId === mediaId) useSubsStore.getState().setOffset(e.offset) }),
       onEvent('subs:embedded', (e) => { if (e.mediaId === mediaId) useSubsStore.getState().setEmbedded(e.state) }),
-      onEvent('annot:updated', (e) => { if (e.mediaId === mediaId) useSubsStore.getState().applyAnnotations(e.cues) }),
-      onEvent('annot:failed', (e) => { if (e.mediaId === mediaId) useSubsStore.getState().markFailed(e.firstIdx) }),
+      onEvent('annot:updated', (e) => {
+        if (e.mediaId !== mediaId) return
+        if (loadSeq > 0) inFlightAnnots.push(...e.cues)
+        useSubsStore.getState().applyAnnotations(e.cues)
+      }),
+      onEvent('annot:failed', (e) => {
+        if (e.mediaId !== mediaId) return
+        if (loadSeq > 0) inFlightFailed.push(e.firstIdx)
+        useSubsStore.getState().markFailed(e.firstIdx)
+      }),
       onEvent('annot:progress', (e) => { if (e.mediaId === mediaId) useSubsStore.getState().setAnnot(e) }),
     ]
     void load()

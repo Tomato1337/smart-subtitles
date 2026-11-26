@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { Chunk, ChunkKind, Cue } from '@/common/types/ipc'
 import { tokenize, type Token } from '../lib/tokens'
 import { useHoverWord, wordKey } from '../store/hoverWordStore'
@@ -42,6 +42,12 @@ export function CueText({ cue, chunks, karaoke, onPick, onHover, decorate, share
  const tokens = useMemo(() => tokenize(cue.text), [cue.text])
  const [hoverChunk, setHoverChunk] = useState<Chunk | null>(null)
  const dragFrom = useRef<number | null>(null)
+ const dragCleanup = useRef<(() => void) | null>(null)
+ const clearDrag = useCallback(() => {
+  dragFrom.current = null
+  dragCleanup.current?.()
+  dragCleanup.current = null
+ }, [])
  const total = cue.text.length
  // Only texts that contain the hovered word re-render (every dialog row used to, on every hover).
  const words = useMemo(() => new Set(tokens.filter((t) => t.isWord).map((t) => wordKey(t.text))), [tokens])
@@ -49,7 +55,10 @@ export function CueText({ cue, chunks, karaoke, onPick, onHover, decorate, share
  const setShared = useHoverWord((s) => s.setWord)
  // The overlay unmounts a cue under a resting pointer without mouseleave: drop the word it published.
  const published = useRef(false)
- useEffect(() => () => { if (published.current) setShared(null) }, [setShared])
+ useEffect(() => () => {
+  clearDrag()
+  if (published.current) setShared(null)
+ }, [clearDrag, setShared])
 
  const pick = (a: number, b: number, el: HTMLElement) => {
   const lo = Math.min(a, b)
@@ -104,10 +113,20 @@ export function CueText({ cue, chunks, karaoke, onPick, onHover, decorate, share
        if (shareHover) { published.current = false; setShared(null) }
        onHover?.(null)
       }}
-      onMouseDown={() => { dragFrom.current = i }}
+      onMouseDown={() => {
+       clearDrag()
+       dragFrom.current = i
+       const onWin = () => clearDrag()
+       window.addEventListener('mouseup', onWin)
+       window.addEventListener('blur', onWin)
+       dragCleanup.current = () => {
+        window.removeEventListener('mouseup', onWin)
+        window.removeEventListener('blur', onWin)
+       }
+      }}
       onMouseUp={(e) => {
        const from = dragFrom.current
-       dragFrom.current = null
+       clearDrag()
        if (from !== null) pick(from, i, e.currentTarget)
       }}
      >

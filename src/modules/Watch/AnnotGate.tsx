@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Dialog, Spinner } from '@tomato1337/m3e-react'
+import { Button, Dialog, Spinner } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { SessionState } from '@/common/types/ipc'
@@ -99,8 +99,6 @@ export function AnnotGate({ session, open, resumeOnClose, onOpenChange }: Props)
   if (ready || (annot && (annot.failure?.blocked || annot.done + annot.failed >= annot.total))) onOpenChange(null)
  }, [open, ready, annot, onOpenChange])
 
- const outlined = 'state-layer state-on-surface type-label-large relative rounded-full border border-[var(--md-sys-color-outline)] px-5 py-2'
- const filled = 'state-layer state-on-primary type-label-large relative rounded-full bg-[var(--md-sys-color-primary)] px-5 py-2 text-[var(--md-sys-color-on-primary)]'
  const e = estimate.data
  const c = cost.data
 
@@ -138,15 +136,15 @@ export function AnnotGate({ session, open, resumeOnClose, onOpenChange }: Props)
       </div>
      )}
      <div className="flex flex-col gap-2">
-      <button
-       type="button"
+      <Button
+       variant="text"
        disabled={!e || cost.isPending}
        onClick={() => cost.mutate()}
-       className="state-layer state-on-surface type-label-large relative flex w-fit items-center gap-2 rounded-full px-3 py-1.5 text-[var(--md-sys-color-primary)] disabled:opacity-50"
+       className="w-fit"
       >
        {cost.isPending && <Spinner size={16} width={2} />}
        Рассчитать стоимость
-      </button>
+      </Button>
       {cost.isError && <p className="type-body-medium text-[var(--md-sys-color-error)]">{errorText(cost.error)}</p>}
       {c && (
        <div className="flex flex-col gap-1">
@@ -165,16 +163,16 @@ export function AnnotGate({ session, open, resumeOnClose, onOpenChange }: Props)
        </div>
       )}
      </div>
-     <div className="flex justify-end gap-2">
-      <button type="button" data-autofocus disabled={busy} className={outlined} onClick={() => void decide(false)}>
+     <div className="flex flex-wrap justify-end gap-2">
+      <Button variant="outlined" data-autofocus disabled={busy} onClick={() => void decide(false)}>
        Смотреть без разбора
-      </button>
-      <button type="button" disabled={busy || !model.data} className={outlined} onClick={() => void decide(true, true)}>
+      </Button>
+      <Button variant="outlined" disabled={busy || !model.data} onClick={() => void decide(true, true)}>
        Запомнить для этой модели
-      </button>
-      <button type="button" disabled={busy} className={filled} onClick={() => void decide(true)}>
+      </Button>
+      <Button variant="filled" disabled={busy} onClick={() => void decide(true)}>
        Разобрать
-      </button>
+      </Button>
      </div>
     </>
    ) : (
@@ -187,9 +185,9 @@ export function AnnotGate({ session, open, resumeOnClose, onOpenChange }: Props)
       </span>
      </div>
      <div className="flex justify-end">
-      <button type="button" data-autofocus className={outlined} onClick={() => onOpenChange(null)}>
+      <Button variant="outlined" data-autofocus onClick={() => onOpenChange(null)}>
        Пропустить
-      </button>
+      </Button>
      </div>
     </>
    )}

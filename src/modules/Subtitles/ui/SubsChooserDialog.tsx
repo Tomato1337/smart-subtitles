@@ -1,16 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useState } from 'react'
-import { Dialog, Icon, IconButton, toast } from '@tomato1337/m3e-react'
+import { Button, Dialog, Icon, IconButton, toast } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { SubCandidate, SubtitleSource } from '@/common/types/ipc'
 import { formatBytes } from '@/common/utilities/bytes'
 import { useSubsStore } from '../store/subsStore'
 
-const PRIMARY =
- 'state-layer state-on-primary type-label-large relative flex items-center gap-2 rounded-full bg-[var(--md-sys-color-primary)] px-5 py-2 text-[var(--md-sys-color-on-primary)] disabled:opacity-40'
-const TEXT_BUTTON = 'state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-primary)] disabled:opacity-40'
 const HINT = 'type-body-small text-[var(--md-sys-color-on-surface-variant)]'
 
 const GROUPS: [SubtitleSource, string][] = [
@@ -60,12 +57,14 @@ function itemHint(c: SubCandidate): string | null {
 export function SubsChooserDialog({ mediaId, onClose }: { mediaId: string; onClose: () => void }) {
  const q = useQuery({ queryKey: ['subs-candidates', mediaId], queryFn: () => api.subsCandidates(mediaId), staleTime: 0, gcTime: 0 })
  const hasAnalysis = useSubsStore((s) => s.annotations.size > 0 || (s.annot?.done ?? 0) > 0)
+ const busy = useSubsStore((s) => s.choosingByMedia[mediaId] ?? null)
+ const setChoosing = useSubsStore((s) => s.setChoosing)
  const [pending, setPending] = useState<Action | null>(null)
- const [busy, setBusy] = useState<string | null>(null)
 
  const execute = async (a: Action) => {
+  if (useSubsStore.getState().choosingByMedia[mediaId]) return
   setPending(null)
-  setBusy(a.kind === 'candidate' ? a.key : `file:${a.path}`)
+  setChoosing(mediaId, a.kind === 'candidate' ? a.key : `file:${a.path}`)
   try {
    if (a.kind === 'candidate') await api.subsSelect(mediaId, a.candidate)
    else await api.subsLoadFile(mediaId, a.path)
@@ -74,19 +73,25 @@ export function SubsChooserDialog({ mediaId, onClose }: { mediaId: string; onClo
   } catch (e) {
    notify('error', errorText(e))
   } finally {
-   setBusy(null)
+   setChoosing(mediaId, null)
   }
  }
 
  // Replacing the subtitles deletes the analysis: ask first when there is something to lose.
  const start = (a: Action) => {
+  if (busy !== null) return
   if (hasAnalysis) setPending(a)
   else void execute(a)
  }
 
  const chooseFile = async () => {
-  const path = await open({ multiple: false, filters: [{ name: 'Субтитры', extensions: ['srt', 'vtt', 'ass', 'ssa'] }] })
-  if (typeof path === 'string') start({ kind: 'file', path })
+  if (busy !== null) return
+  try {
+   const path = await open({ multiple: false, filters: [{ name: 'Субтитры', extensions: ['srt', 'vtt', 'ass', 'ssa'] }] })
+   if (typeof path === 'string') start({ kind: 'file', path })
+  } catch (e) {
+   notify('error', errorText(e))
+  }
  }
 
  const data = q.data
@@ -112,8 +117,8 @@ export function SubsChooserDialog({ mediaId, onClose }: { mediaId: string; onClo
     {q.isPending && <p className={HINT}>Ищу варианты…</p>}
     {q.error && (
      <div className="flex items-center gap-3">
-      <p className={`${HINT} min-w-0 flex-1 text-[var(--md-sys-color-error)]`}>{errorText(q.error)}</p>
-      <button type="button" className={TEXT_BUTTON} onClick={() => void q.refetch()}>Повторить</button>
+      <p className={`${HINT} min-w-0 flex-1 break-words text-[var(--md-sys-color-error)]`}>{errorText(q.error)}</p>
+      <Button variant="text" onClick={() => void q.refetch()}>Повторить</Button>
      </div>
     )}
     {data &&
@@ -161,14 +166,14 @@ export function SubsChooserDialog({ mediaId, onClose }: { mediaId: string; onClo
      <div className="flex flex-col gap-1 rounded-[var(--md-sys-shape-corner-medium)] bg-[var(--md-sys-color-error-container)] px-4 py-3 text-[var(--md-sys-color-on-error-container)]">
       <p className="type-body-medium">Разбор диалогов этого фильма будет удалён, новый придётся запускать заново.</p>
       <div className="flex items-center justify-end gap-2">
-       <button type="button" className={TEXT_BUTTON} onClick={() => setPending(null)}>Отмена</button>
-       <button type="button" className={PRIMARY} onClick={() => void execute(pending)}>Сменить субтитры</button>
+       <Button variant="text" onClick={() => setPending(null)}>Отмена</Button>
+       <Button variant="filled" onClick={() => void execute(pending)}>Сменить субтитры</Button>
       </div>
      </div>
     )}
     <div className="flex items-center justify-between gap-2">
-     <button type="button" className={TEXT_BUTTON} disabled={idle} onClick={() => void chooseFile()}>Загрузить файл…</button>
-     <button type="button" className={PRIMARY} onClick={onClose}>Закрыть</button>
+     <Button variant="text" disabled={idle} onClick={() => void chooseFile()}>Загрузить файл…</Button>
+     <Button variant="filled" onClick={onClose}>Закрыть</Button>
     </div>
    </div>
   </Dialog>

@@ -18,7 +18,7 @@ import { PatternBadges, PatternCard, usePatternExposure } from '@/modules/Patter
 import { ControlBar, PlayerProvider, TopBar, usePlayer, usePlaybackStore, VideoSurface } from '@/modules/Player'
 import { useSessionStore } from '@/modules/Session'
 import {
- AnalysisLine, lastStartedBefore, nextCueIndex, prevCueIndex, Sidebar, startReveal, SubsChooserDialog, SubsLoadLine, SubsStatusBanner, SubtitleOverlay, useActiveCueIndex, useAnnotPriority, useSubsStore,
+ AnalysisLine, findCueByIdx, lastStartedBefore, nextCueIndex, prevCueIndex, Sidebar, startReveal, SubsChooserDialog, SubsLoadLine, SubsStatusBanner, SubtitleOverlay, useActiveCueIndex, useAnnotPriority, useSubsStore,
  useSubtitlesData,
  type SpanPick,
 } from '@/modules/Subtitles'
@@ -36,6 +36,54 @@ import { useMediaSession } from './useMediaSession'
 async function toggleFullscreen() {
  const w = getCurrentWindow()
  await w.setFullscreen(!(await w.isFullscreen()))
+}
+
+const INTERACTIVE_OVERLAY_SELECTOR =
+ 'dialog[open], [role="dialog"]:not([data-closing]), [role="menu"]:not([data-closing]), [role="listbox"]:not([data-closing]), [popover]:popover-open:not(.card-island):not(.m3e-snackbar):not([data-app-warning-stack]):not([data-closing])'
+
+const INTERACTIVE_SPACE_TARGET_SELECTOR =
+ 'button, a[href], summary, [role="button"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="switch"], [role="slider"], [role="checkbox"], [role="radio"], [role="combobox"], [role="option"], [role="tab"]'
+
+const SLIDER_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'])
+
+export function isImeKeyEvent(e: Pick<KeyboardEvent, 'isComposing' | 'key' | 'keyCode'>): boolean {
+ return e.isComposing || e.key === 'Process' || e.keyCode === 229
+}
+
+export function shouldIgnorePlayerHotkey(
+ e: Pick<KeyboardEvent, 'isComposing' | 'key' | 'keyCode' | 'code' | 'target'>,
+ options: { explainOpen: boolean; doc?: Document },
+): boolean {
+ if (isImeKeyEvent(e)) return true
+ const targetEl = typeof Element !== 'undefined' && e.target instanceof Element ? e.target : null
+ if (targetEl?.closest('input,textarea,select,[contenteditable]')) return true
+ const doc = options.doc ?? (typeof document !== 'undefined' ? document : null)
+ if (doc?.querySelector(INTERACTIVE_OVERLAY_SELECTOR)) return true
+ if (options.explainOpen) return true
+ if ((e.code === 'Space' || e.key === ' ') && targetEl?.closest(INTERACTIVE_SPACE_TARGET_SELECTOR)) return true
+ if (SLIDER_KEYS.has(e.key) && targetEl?.closest('[role="slider"]')) return true
+ return false
+}
+
+export function cardDedupKey(mediaId: string, cueIdx: number, span: string | null): string {
+ return `${mediaId}:${cueIdx}:${span ?? ''}`
+}
+
+export function shouldFinishSessionClose(currentSessionId: string | null | undefined, closingSessionId: string): boolean {
+ return !currentSessionId || currentSessionId === closingSessionId
+}
+
+function useMediaQuery(query: string): boolean {
+ const [matches, setMatches] = useState(() => (typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(query).matches : false))
+ useEffect(() => {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+  const mql = window.matchMedia(query)
+  setMatches(mql.matches)
+  const onChange = (e: MediaQueryListEvent) => setMatches(e.matches)
+  mql.addEventListener('change', onChange)
+  return () => mql.removeEventListener('change', onChange)
+ }, [query])
+ return matches
 }
 
 /** "Where am I" line of the agent chat: film time and the last started cue. */
@@ -64,7 +112,7 @@ function useDomOverlayOpen() {
   let raf = 0
   const check = () => {
    raf = 0
-   setOpen(Boolean(document.querySelector('dialog[open], [role="dialog"], [role="menu"]:not([data-closing])')))
+   setOpen(Boolean(document.querySelector(INTERACTIVE_OVERLAY_SELECTOR)))
   }
   const schedule = () => {
    if (!raf) raf = requestAnimationFrame(check)
@@ -114,9 +162,12 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
  /** Position sent with every agent message: the given cue, or the last cue started at the playhead. */
  const locate = useCallback((cueIdx?: number) => {
   const { cues, offset } = useSubsStore.getState()
-  if (cueIdx !== undefined && cues[cueIdx]) return { cueIdx, at: cues[cueIdx].start + offset }
+  if (cueIdx !== undefined) {
+   const cue = findCueByIdx(cues, cueIdx)
+   if (cue) return { cueIdx: cue.idx, at: cue.start + offset }
+  }
   const i = lastStartedBefore(cues, p.now(), offset)
-  return { cueIdx: i >= 0 ? i : null, at: p.now() }
+  return { cueIdx: i >= 0 ? cues[i].idx : null, at: p.now() }
  }, [p])
  const agent = useAgentActions(session.mediaId, locate)
  const chatOpen = useAgentStore((s) => s.open)
@@ -130,6 +181,8 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
  const hotkey = useHotkeysStore((s) => s.bindings)
  // The actions only: the popover target changes on every hover, which must not re-render this screen.
  const explain = useExplainStore(useShallow((s) => ({ pinOpen: s.pinOpen, hoverOpen: s.hoverOpen, hoverLeave: s.hoverLeave })))
+ useEffect(() => () => useExplainStore.getState().close(), [session.mediaId])
+ const cardInFlight = useRef(new Set<string>())
  const config = useQuery({ queryKey: ['config'], queryFn: api.configGet, staleTime: 60_000 })
  const [guide, setGuide] = useState(false)
  const [hotkeysOpen, setHotkeysOpen] = useState(false)
@@ -214,7 +267,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
   }
  }, [annot, hasCues, session, hold])
 
- const cueByIdx = (i: number) => useSubsStore.getState().cues[i]
+ const cueByIdx = (i: number) => findCueByIdx(useSubsStore.getState().cues, i)
  // Stable callbacks: the dialog rows and subtitle lines are memoized on them.
  const { pinOpen, hoverOpen, hoverLeave } = explain
  const { askOnce } = agent
@@ -223,6 +276,9 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
  // The one entry point of every card click: quick mode never pauses or opens a dialog; review mode
  // pauses explicitly and opens the durable job's editor.
  const cardFor = useCallback((cueIdx: number, span: string | null) => {
+  const key = cardDedupKey(session.mediaId, cueIdx, span)
+  if (cardInFlight.current.has(key)) return
+  cardInFlight.current.add(key)
   const quick = config.data?.anki.quickAdd === true
   if (!quick) p.pause()
   const offset = useSubsStore.getState().offset
@@ -234,6 +290,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
     store.openEditor(await api.cardsJobEdit(job.id, true))
    })
    .catch((e) => notify('error', errorText(e)))
+   .finally(() => { cardInFlight.current.delete(key) })
  }, [config.data?.anki.quickAdd, p, session.mediaId])
  const cardForCue = useCallback((cue: Cue) => cardFor(cue.idx, null), [cardFor])
  const explainCue = useCallback((cue: Cue) => { p.pause(); void askOnce(cueExplainPrompt(cue.text), cue.idx) }, [p, askOnce])
@@ -348,6 +405,35 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
   p.seek(cues[i].start + offset)
  }, [p])
 
+ const narrow = useMediaQuery('(max-width: 1159px)')
+ const showSidebar = subs.sidebarOpen && !subs.hideMode
+ const effectiveShowSidebar = showSidebar && (!narrow || !chatOpen)
+ useEffect(() => {
+  if (narrow && showSidebar && chatOpen) useSubsStore.getState().set({ sidebarOpen: false })
+ }, [narrow, showSidebar, chatOpen])
+
+ const toggleSidebar = useCallback(() => {
+  const s = useSubsStore.getState()
+  if (narrow) {
+   const visibleNow = s.sidebarOpen && !s.hideMode && !useAgentStore.getState().open
+   if (!visibleNow) {
+    if (!s.sidebarOpen) s.set({ sidebarOpen: true })
+    if (useAgentStore.getState().open) useAgentStore.getState().toggle()
+    return
+   }
+  }
+  s.set({ sidebarOpen: !s.sidebarOpen })
+ }, [narrow])
+
+ const toggleChat = useCallback(() => {
+  const opening = !useAgentStore.getState().open
+  useAgentStore.getState().toggle()
+  if (narrow && opening) {
+   const s = useSubsStore.getState()
+   if (s.sidebarOpen) s.set({ sidebarOpen: false })
+  }
+ }, [narrow])
+
  useEffect(() => {
   const run: Record<HotkeyAction, () => void> = {
    playPause: () => p.togglePlay(),
@@ -359,12 +445,12 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
    // active window and would pick the next phrase when replay is pressed at the end of a line.
    replay: () => { const { cues, offset } = useSubsStore.getState(); const i = lastStartedBefore(cues, p.now(), offset); if (i >= 0) replay(cues[i]) },
    reveal,
-   sidebar: () => { const s = useSubsStore.getState(); s.set({ sidebarOpen: !s.sidebarOpen }) },
+   sidebar: toggleSidebar,
    showEn: () => { const s = useSubsStore.getState(); s.set({ showEn: !s.showEn }) },
    showRu: () => { const s = useSubsStore.getState(); s.set({ showRu: !s.showRu }) },
    patterns: () => { const s = useSubsStore.getState(); s.set({ patterns: !s.patterns }) },
    guide: openGuide,
-   chat: () => useAgentStore.getState().toggle(),
+   chat: toggleChat,
    offsetMinus: () => shiftOffset(-0.1),
    offsetPlus: () => shiftOffset(0.1),
    slower: () => p.setRate(usePlaybackStore.getState().rate - 0.05),
@@ -372,9 +458,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
    fullscreen: () => void toggleFullscreen(),
   }
   const onKey = (e: KeyboardEvent) => {
-   if (e.target instanceof Element && e.target.closest('input,textarea,select,[contenteditable]')) return
-   // A modal dialog owns the keyboard (Esc included): the film behind it is inert.
-   if (document.querySelector('dialog[open]')) return
+   if (shouldIgnorePlayerHotkey(e, { explainOpen: useExplainStore.getState().target !== null })) return
    // Escape is not rebindable: it always leaves fullscreen.
    if (e.code === 'Escape') { void getCurrentWindow().setFullscreen(false); return }
    const combo = comboOf(e)
@@ -387,28 +471,32 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
   }
   window.addEventListener('keydown', onKey)
   return () => window.removeEventListener('keydown', onKey)
- }, [p, cueStep, reveal, replay, shiftOffset, openGuide])
+ }, [p, cueStep, reveal, replay, shiftOffset, openGuide, toggleSidebar, toggleChat])
 
  const [, force] = useState(0)
  const openEpisode = (i: number) => api.sessionOpenPlaylistItem(i).catch((e) => notify('error', errorText(e)))
  useMediaSession(session, p, openEpisode)
 
- const showSidebar = subs.sidebarOpen && !subs.hideMode
  const idleOpacity = config.data?.subtitles.idleOpacity ?? 0.36
  const modalOpen = settingsMenuOpen || guide || hotkeysOpen || subsOpen || gate !== null || hold !== null || tourShown
  // The side panels slide out before their grid column goes away.
  const sidebarRef = useRef<HTMLElement>(null)
  const chatRef = useRef<HTMLElement>(null)
- const sidebar = usePresence(showSidebar, sidebarRef)
+ const sidebar = usePresence(effectiveShowSidebar, sidebarRef)
  const chat = usePresence(chatOpen, chatRef)
  return (
   <div
-   className="grid size-full bg-black"
-   style={{ gridTemplateColumns: [sidebar.mounted && '360px', 'minmax(0,1fr)', chat.mounted && '400px'].filter(Boolean).join(' ') }}
+   className="relative grid size-full overflow-hidden bg-black"
+   style={{
+    gridTemplateColumns: narrow
+     ? 'minmax(0,1fr)'
+     : [sidebar.mounted && 'clamp(260px, 26vw, 360px)', 'minmax(0,1fr)', chat.mounted && 'clamp(280px, 28vw, 400px)'].filter(Boolean).join(' '),
+   }}
   >
    {sidebar.mounted && (
     <SidebarDock
      ref={sidebarRef}
+     className={narrow ? 'absolute inset-y-0 left-0 z-30 w-[min(360px,calc(100vw-32px))] shadow-2xl' : undefined}
      mediaId={session.mediaId}
      onReplay={replay}
      onSlowReplay={slowReplay}
@@ -422,7 +510,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
    )}
    {/* Flush against the dialog list (no gutter, square corners on that side); rounded only on the side
        of the agent panel. Alone it fills the window edge to edge, so fullscreen has no corner cut-outs. */}
-   <div className={`relative min-w-0 overflow-hidden bg-black ${chat.mounted ? 'rounded-r-[var(--md-sys-shape-corner-extra-large)]' : ''}`} style={{ cursor: visible ? 'default' : 'none' }}>
+   <div className={`relative min-w-0 overflow-hidden bg-black ${!narrow && chat.mounted ? 'rounded-r-[var(--md-sys-shape-corner-extra-large)]' : ''}`} style={{ cursor: visible ? 'default' : 'none' }}>
     <PatternExposure mediaId={session.mediaId} />
     <VideoSurface />
     <SubsStatusBanner mediaId={session.mediaId} llmEnabled={session.llmEnabled} onChoose={() => setSubsOpen(true)} />
@@ -434,7 +522,11 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
      above={overlayAbove}
      renderEn={overlayEn}
     />
-    <div ref={topBarRef} className={`absolute inset-x-0 top-0 transition-opacity duration-200 ${visible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
+    <div
+     ref={topBarRef}
+     className={`absolute inset-x-0 top-0 transition-opacity duration-200 ${visible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+     style={{ containerType: 'inline-size', containerName: 'topbar' }}
+    >
      <TopBar
       session={session}
       onBack={onBack}
@@ -443,7 +535,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
        <>
         <CardsActivityButton />
         <NotificationButton className="relative size-12" />
-        <IconButton icon="forum" label={withKey('Чат с агентом', hotkey.chat)} data-tour="chat" variant="tonal" size="lg" selected={chatOpen} onClick={() => useAgentStore.getState().toggle()} />
+        <IconButton icon="forum" label={withKey('Чат с агентом', hotkey.chat)} data-tour="chat" variant="tonal" size="lg" selected={chatOpen} onClick={toggleChat} />
        </>
       )}
      />
@@ -466,7 +558,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
       )}
       leftSlot={
        <>
-        <IconButton icon="menu" label={withKey('Диалоги', hotkey.sidebar)} data-tour="dialogs" selected={subs.sidebarOpen} onClick={() => subs.set({ sidebarOpen: !subs.sidebarOpen })} />
+        <IconButton icon="menu" label={withKey('Диалоги', hotkey.sidebar)} data-tour="dialogs" selected={effectiveShowSidebar} onClick={toggleSidebar} />
         <ButtonGroup label="Языки субтитров" connected data-tour="subs-lang" className="mx-1">
          <ToggleButton selected={subs.showEn} className="px-3 font-semibold" onClick={() => subs.set({ showEn: !subs.showEn })}>EN</ToggleButton>
          <ToggleButton selected={subs.showRu} className="px-3 font-semibold" onClick={() => subs.set({ showRu: !subs.showRu })}>РУ</ToggleButton>
@@ -494,6 +586,7 @@ function WatchLayout({ session, onBack }: { session: SessionState; onBack: () =>
    <AgentPanel
     ref={chatRef}
     mounted={chat.mounted}
+    className={narrow ? 'absolute inset-y-0 right-0 z-30 w-[min(400px,calc(100vw-32px))] shadow-2xl' : undefined}
     mediaId={session.mediaId}
     locate={locate}
     here={<AgentHere />}
@@ -524,12 +617,17 @@ export function WatchScreen({ onClose }: { onClose: () => void }) {
  const qc = useQueryClient()
  if (!session) return null
  const back = () => {
-  void api.sessionClose().finally(() => {
-   useSessionStore.getState().setSession(null)
-   onClose()
-   // The analysis went on in the background: the home screen's badges are stale by now.
-   void qc.invalidateQueries({ queryKey: ['recent'] })
-  })
+  const closingId = session.sessionId
+  void api.sessionClose()
+   .catch((e) => notify('error', errorText(e)))
+   .finally(() => {
+    const cur = useSessionStore.getState().session
+    if (!shouldFinishSessionClose(cur?.sessionId, closingId)) return
+    useSessionStore.getState().setSession(null)
+    onClose()
+    // The analysis went on in the background: the home screen's badges are stale by now.
+    void qc.invalidateQueries({ queryKey: ['recent'] })
+   })
  }
  return (
   <PlayerProvider key={session.sessionId} session={session}>

@@ -184,4 +184,34 @@ describe('MseStream recovery', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(applied).toEqual(['pause', 'resume'])
   })
+
+  test('isFatal flips true after exceeding MAX_ERRORS decode failures and resets on restart', async () => {
+    const { video, error, stream } = await player()
+    expect(stream.isFatal()).toBe(false)
+    for (let i = 0; i < 7; i++) {
+      video.error = { code: 3 }
+      video.dispatchEvent(new Event('error'))
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    expect(stream.isFatal()).toBe(true)
+    expect(error).toHaveBeenCalledWith('Раздача отдаёт битые данные — видео не декодируется')
+    stream.restart(0, true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stream.isFatal()).toBe(false)
+  })
+
+  test('0 new bytes near EOF ends MediaSource cleanly without looping errors', async () => {
+    const { video, open, error, stream } = await player(5950)
+    video.buffered = sources[0].buffer.buffered = ranges(5980)
+    readers[0].close()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(open).toHaveBeenCalledTimes(2)
+    expect(sources[0].endOfStream).not.toHaveBeenCalled()
+    readers[1].close()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(sources[0].endOfStream).toHaveBeenCalledOnce()
+    expect(open).toHaveBeenCalledTimes(2)
+    expect(error).not.toHaveBeenCalled()
+    expect(stream.isFatal()).toBe(false)
+  })
 })

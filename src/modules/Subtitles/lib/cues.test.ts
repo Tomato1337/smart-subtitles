@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { Cue } from '@/common/types/ipc'
-import { findCueIndex, focusEnd, focusedCueIndex, lastStartedBefore, nextCueIndex, prevCueIndex } from './cues'
+import { findCueByIdx, findCueIndex, focusEnd, focusedCueIndex, lastStartedBefore, nextCueIndex, prevCueIndex } from './cues'
 
 const c = (idx: number, start: number, end: number): Cue => ({ idx, start, end, text: String(idx), ru: null })
 const cues = [c(0, 1, 3), c(1, 5, 7), c(2, 10, 12)]
@@ -53,5 +53,18 @@ describe('focusedCueIndex', () => {
     expect(focusedCueIndex(cues, 11.9, 0)).toBe(2)
     expect(focusedCueIndex(cues, 12, 0)).toBe(-1)
     expect(focusEnd(cues, 2, 1)).toBe(13)
+  })
+  test('finds a long active cue across more than three intervening cues', () => {
+    const overlapping = [c(0, 1, 15), c(1, 2, 4), c(2, 5, 7), c(3, 8, 10), c(4, 11, 12)]
+    expect(findCueIndex(overlapping, 13, 0)).toBe(0)
+  })
+  test('findCueByIdx resolves sparse cue idx values without assuming contiguous positions', () => {
+    const sparse = [c(10, 1, 2), c(25, 3, 4), c(40, 5, 6)]
+    expect(findCueByIdx(sparse, 25)?.start).toBe(3)
+    expect(findCueByIdx(sparse, 99)).toBeUndefined()
+  })
+  test('focusEnd seeks to the next strictly later start when cues share start time', () => {
+    const simultaneous = [c(0, 5, 7), c(1, 5, 8), c(2, 10, 12)]
+    expect(focusEnd(simultaneous, 0, 1)).toBe(11)
   })
 })

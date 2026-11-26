@@ -88,6 +88,8 @@ export class MseStream {
  /** WebKit may reset currentTime before firing a decode error; keep the last usable media time. */
  private position = 0
  private lastDataAt = 0
+ /** Set when a stream error is unrecoverable without a manual seek/restart. */
+ private fatal = false
 
  constructor(
   video: HTMLVideoElement,
@@ -100,13 +102,23 @@ export class MseStream {
   this.openUrl = openUrl
   this.onError = onError
   if (typeof MediaSource === 'undefined') {
-   onError('MSE недоступен в WebView')
+   this.failFatal('MSE недоступен в WebView')
    return
   }
   this.video.addEventListener('loadedmetadata', this.onLoadedMetadata)
   this.video.addEventListener('error', this.onVideoError)
   this.video.addEventListener('timeupdate', this.rememberTime)
   this.open()
+ }
+
+ /** True once the stream hit an unrecoverable error (e.g. too many decode errors or silent retries). */
+ isFatal(): boolean {
+  return this.fatal
+ }
+
+ private failFatal(msg: string): void {
+  this.fatal = true
+  this.onError(msg)
  }
 
  /** Attaches a fresh MediaSource to the element; the SourceBuffer is created by the first load. */
@@ -139,7 +151,7 @@ export class MseStream {
   this.errorTimes = [...this.errorTimes.filter((x) => now - x < ERROR_WINDOW_MS), now]
   if (this.errorTimes.length > MAX_ERRORS) {
    this.stopReading()
-   this.onError('Раздача отдаёт битые данные — видео не декодируется')
+   this.failFatal('Раздача отдаёт битые данные — видео не декодируется')
    return
   }
   this.rebuild(Math.min(this.position + ERROR_SKIP, Math.max(0, this.duration - 1)), true)
@@ -147,6 +159,7 @@ export class MseStream {
 
  /** Drops the dead MediaSource and starts a new stream at t. */
  private rebuild(t: number, autoplay: boolean): void {
+  this.fatal = false
   this.stopReading()
   clearTimeout(this.retry)
   this.retry = undefined
@@ -193,6 +206,7 @@ export class MseStream {
 
  /** Forces a new ffmpeg stream from t (after clear()). */
  restart(t: number, autoplay: boolean): void {
+  this.fatal = false
   this.fails = 0
   void this.load(t, autoplay)
  }
@@ -226,7 +240,7 @@ export class MseStream {
    // In the 'ended' state the removal itself moves the MediaSource back to 'open'.
    sb.remove(0, ms.duration)
   } catch (e) {
-   this.onError(errorText(e))
+   this.failFatal(errorText(e))
    return
   }
   await updated
@@ -322,7 +336,7 @@ export class MseStream {
   if (this.sb && this.streaming && !this.video.paused && Date.now() - this.lastDataAt > LANDING_TIMEOUT) {
    if (++this.fails > MAX_FAILS) {
     this.stopReading()
-    this.onError('Поток завис: новые данные не приходят в плеер')
+    this.failFatal('Поток завис: новые данные не приходят в плеер')
    } else {
     void this.load(ct, true, false)
    }
@@ -393,6 +407,7 @@ export class MseStream {
    this.pendingSeek = { t, autoplay }
    this.position = t
   }
+  const startEnd = this.liveRange()?.[1] ?? t
   let appended = 0
   try {
    const res = await this.connect(g, t, ctrl)
@@ -418,7 +433,7 @@ export class MseStream {
     const codec = codecFromInit(head)
     if (!codec) {
      if (head.length > INIT_LIMIT) {
-      this.onError('В потоке нет avcC')
+      this.failFatal('В потоке нет avcC')
       ctrl.abort()
       return
      }
@@ -435,10 +450,10 @@ export class MseStream {
    if (e instanceof Error && e.name === 'AbortError') return
    if (g !== this.gen) return
    this.stopReading()
-   this.onError(errorText(e))
+   this.failFatal(errorText(e))
    return
   }
-  await this.finish(g, appended)
+  await this.finish(g, appended, startEnd)
  }
 
  /** Abandons the current fetch and anything queued for it. */
@@ -465,7 +480,7 @@ export class MseStream {
   }).catch((e: unknown) => {
    if (g !== this.gen) return
    this.stopReading()
-   this.onError(errorText(e))
+   this.failFatal(errorText(e))
   })
  }
 
@@ -477,7 +492,7 @@ export class MseStream {
   } catch (e) {
    if (g === this.gen) {
     this.streaming = false
-    this.onError(errorText(e))
+    this.failFatal(errorText(e))
    }
    return null
   }
@@ -488,7 +503,7 @@ export class MseStream {
   const body = (await res.json().catch(() => null)) as { error?: string } | null
   if (g !== this.gen) return null
   this.streaming = false
-  this.onError(body?.error ?? `HTTP ${res.status}`)
+  this.failFatal(body?.error ?? `HTTP ${res.status}`)
   return null
  }
 
@@ -500,7 +515,7 @@ export class MseStream {
    this.sb = ms.addSourceBuffer(codec)
   } catch (e) {
    this.streaming = false
-   this.onError(errorText(e))
+   this.failFatal(errorText(e))
    return false
   }
   this.sb.addEventListener('updateend', () => this.pump())
@@ -508,18 +523,25 @@ export class MseStream {
  }
 
  /** The stream stopped by itself: either the media ended or the torrent read failed. */
- private async finish(g: number, appended: number): Promise<void> {
+ private async finish(g: number, appended: number, startEnd: number): Promise<void> {
   this.streaming = false
   while ((this.pending.length > 0 || this.sb?.updating) && g === this.gen) await sleep(100)
   if (g !== this.gen) return
   const live = this.liveRange()
-  if (live && live[1] >= this.duration - 1) {
+  const atDurationEnd = Boolean(live && this.duration > 0 && live[1] >= this.duration - 1)
+  const nearEofNoNewBytes = Boolean(
+   live &&
+   this.duration > 0 &&
+   this.duration - live[1] <= 30 &&
+   (appended === 0 || (this.sb !== null && appended < INIT_LIMIT && live[1] <= startEnd + 0.1)),
+  )
+  if (atDurationEnd || nearEofNoNewBytes) {
    if (this.ms && this.ms.readyState === 'open') this.ms.endOfStream()
    return
   }
   this.fails = appended >= INIT_LIMIT ? 1 : this.fails + 1
   if (this.fails > MAX_FAILS) {
-   this.onError('Поток оборвался: TorrServer не отдаёт данные')
+   this.failFatal('Поток оборвался: TorrServer не отдаёт данные')
    return
   }
   // Continue reading where the data stopped; the playhead stays where it is and plays the buffer out first.
@@ -544,7 +566,7 @@ export class MseStream {
    try {
     sb.remove(rm[0], rm[1])
    } catch (e) {
-    this.onError(errorText(e))
+    this.failFatal(errorText(e))
    }
    return
   }
@@ -558,7 +580,7 @@ export class MseStream {
    if (!(e instanceof DOMException && e.name === 'QuotaExceededError')) {
     // A failed append leaves the SourceBuffer unusable: keeping the fetch running would only repeat the error.
     this.stopReading()
-    this.onError(errorText(e))
+    this.failFatal(errorText(e))
     return
    }
    this.pending.unshift(buf)

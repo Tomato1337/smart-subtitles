@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { Virtuoso, type ListProps } from 'react-virtuoso'
 import { useShallow } from 'zustand/react/shallow'
 import {
   Button,
@@ -6,7 +7,6 @@ import {
   Dialog,
   Icon,
   IconButton,
-  ListGroup,
   Presence,
   Segmented,
   ShapeBadge,
@@ -174,7 +174,15 @@ export function CardsActivityButton({ variant = 'player', className = '' }: Card
   )
 }
 
-function JobRow({ job }: { job: CardJob }) {
+function CardsList({ style, children, ref, ...props }: ListProps<HTMLDivElement>) {
+  return (
+    <div ref={ref} role="list" style={style} {...props} className="px-6 pb-4">
+      {children}
+    </div>
+  )
+}
+
+function JobRow({ job, isFirst, isLast }: { job: CardJob; isFirst: boolean; isLast: boolean }) {
   const openEditor = useCardsStore((s) => s.openEditor)
   const upsert = useCardsStore((s) => s.upsert)
   const grace = useCardsStore((s) => (job.state === 'grace' ? s.grace[job.id] : undefined))
@@ -233,13 +241,22 @@ function JobRow({ job }: { job: CardJob }) {
   const timeLabel = Number.isFinite(job.cueStart) && job.cueStart >= 0 ? formatTime(job.cueStart) : ''
   const meta = [job.title, timeLabel].filter(Boolean).join(' · ')
   const hasActions = !muted && (actions.canEdit || actions.canCancel || actions.canRetry || actions.canDelete)
+  const corners =
+    isFirst && isLast
+      ? 'rounded-[22px]'
+      : isFirst
+        ? 'rounded-t-[22px] rounded-b-[4px]'
+        : isLast
+          ? 'rounded-t-[4px] rounded-b-[22px]'
+          : 'rounded-[4px]'
 
   return (
-    <li
-      className={`flex items-start gap-3.5 px-4 py-3.5 ${
-        muted ? 'bg-[var(--md-sys-color-surface-container-lowest)]' : 'bg-[var(--md-sys-color-surface-container)]'
-      }`}
-    >
+    <div role="listitem" className={isLast ? undefined : 'pb-[2px]'}>
+      <div
+        className={`flex items-start gap-3.5 px-4 py-3.5 ${corners} ${
+          muted ? 'bg-[var(--md-sys-color-surface-container-lowest)]' : 'bg-[var(--md-sys-color-surface-container)]'
+        }`}
+      >
       <div className="shrink-0 pt-0.5">
         <JobBadge kind={jobBadgeKind(job.state)} />
       </div>
@@ -376,7 +393,8 @@ function JobRow({ job }: { job: CardJob }) {
           </div>
         )}
       </div>
-    </li>
+    </div>
+  </div>
   )
 }
 
@@ -395,6 +413,7 @@ function Panel() {
   const [tab, setTab] = useState<ActivityTab>('all')
   const [hideCancelled, setHideCancelled] = useState(true)
   const [query, setQuery] = useState('')
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null)
 
   const allRows = useMemo(
     () => order.map((id) => jobs[id]).filter((j): j is CardJob => !!j),
@@ -527,7 +546,7 @@ function Panel() {
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <div ref={setScrollEl} className="stats-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {allRows.length === 0 ? (
           loading && !pageError ? (
             <div className="flex justify-center py-12">
@@ -574,17 +593,18 @@ function Panel() {
                   : 'Показать все'}
             </Button>
           </div>
-        ) : (
-          <ListGroup
-            as="ul"
-            className="px-6 pb-4"
-            style={{ '--m3e-list-outer-radius': '22px' } as CSSProperties}
-          >
-            {visibleRows.map((job) => (
-              <JobRow key={job.id} job={job} />
-            ))}
-          </ListGroup>
-        )}
+        ) : scrollEl ? (
+          <Virtuoso
+            customScrollParent={scrollEl}
+            data={visibleRows}
+            computeItemKey={(_, job) => job.id}
+            overscan={200}
+            components={{ List: CardsList }}
+            itemContent={(index, job) => (
+              <JobRow job={job} isFirst={index === 0} isLast={index === visibleRows.length - 1} />
+            )}
+          />
+        ) : null}
 
         {allRows.length > 0 && pageError && (
           <div className="mx-6 mb-4 flex flex-wrap items-center justify-between gap-2 rounded-[var(--md-sys-shape-corner-medium)] bg-[var(--md-sys-color-error-container)] px-4 py-2.5 text-[var(--md-sys-color-on-error-container)]">

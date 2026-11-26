@@ -10,7 +10,7 @@ export function PatternChip({ children, onClick }: { children: ReactNode; onClic
     <button
       type="button"
       onClick={onClick}
-      className="type-label-medium rounded-full bg-[color-mix(in_srgb,var(--app-kind-grammar)_22%,var(--md-sys-color-surface-container))] px-3 py-1 text-[var(--app-kind-grammar)]"
+      className="state-layer type-label-medium relative rounded-full bg-[var(--app-grammar-container)] px-3 py-1 text-[var(--app-grammar-on-container)]"
     >
       {children}
     </button>
@@ -23,7 +23,13 @@ export function PatternBadges({ ann }: { ann: CueAnnotation | undefined }) {
   const open = usePatternStore((s) => s.open)
   if (!ann || ann.patterns.length === 0) return null
   const byId = new Map(stats.data?.map((s) => [s.id, s]))
-  const shown = ann.patterns.filter((p) => byId.get(p.patternId)?.status !== 'known' && patternById(p.patternId))
+  const seen = new Set<string>()
+  const shown = ann.patterns.filter((p) => {
+    if (seen.has(p.patternId)) return false
+    if (byId.get(p.patternId)?.status === 'known' || !patternById(p.patternId)) return false
+    seen.add(p.patternId)
+    return true
+  })
   if (shown.length === 0) return null
   return (
     <div data-tour="patterns" className="mb-2 flex flex-wrap justify-center gap-2">

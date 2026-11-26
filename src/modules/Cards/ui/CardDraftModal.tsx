@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
-import { Dialog, Presence, Spinner, toast } from '@tomato1337/m3e-react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { Button, Dialog, Presence, Spinner, TextField, toast } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { CardJobEditor, CardPreview as CardPreviewData, WordDraft } from '@/common/types/ipc'
@@ -21,16 +21,23 @@ const FIELDS: [keyof WordDraft, string][] = [
   ['image_prompt', 'Картинка (промпт)'],
 ]
 
-type Props = { editor: CardJobEditor }
+export type CardDraftModalProps = {
+  /** Called when the modal is dismissed without saving or cancelling (for `cards_job_close_edit` wiring). */
+  onDismissModal?: (jobId: string) => Promise<void> | void
+}
+
+type Props = { editor: CardJobEditor; onDismissModal?: (jobId: string) => Promise<void> | void }
+
+const DESTRUCTIVE_TEXT_STYLE = { '--m3e-button-content': 'var(--md-sys-color-error)' } as CSSProperties
 
 function PreviewPane({ preview, error, loading }: { preview: CardPreviewData | null; error: string | null; loading: boolean }) {
   if (preview) return <CardPreview preview={preview} />
-  if (error) return <p className="type-body-medium text-[var(--md-sys-color-error)]">{error}</p>
+  if (error) return <p role="alert" className="type-body-medium text-[var(--md-sys-color-error)]">{error}</p>
   if (loading) return <Spinner label="Загружаю предпросмотр" className="m-6" />
   return <p className="type-body-medium py-6 text-[var(--md-sys-color-on-surface-variant)]">Превью пока недоступно.</p>
 }
 
-function EditorDialog({ editor }: Props) {
+function EditorDialog({ editor, onDismissModal }: Props) {
   const closeEditor = useCardsStore((s) => s.closeEditor)
   const setEditor = useCardsStore((s) => s.setEditor)
   const upsert = useCardsStore((s) => s.upsert)
@@ -205,6 +212,14 @@ function EditorDialog({ editor }: Props) {
     }
   }
 
+  const dismiss = () => {
+    if (busy) return
+    closeEditor()
+    if (onDismissModal) {
+      void Promise.resolve(onDismissModal(job.id)).catch((e) => notify('error', errorText(e)))
+    }
+  }
+
   const rows = view === 'added' ? textFieldRows(shownPreview, fields) : []
   const mediaOnly = view === 'added' && !!fields && !!shownPreview && rows.length === 0
   // Keep a definite height for WebKit's scroll panes. The preview sets the preferred height;
@@ -213,14 +228,14 @@ function EditorDialog({ editor }: Props) {
 
   return (
     <Dialog
-      onClose={closeEditor}
-      dismissible
+      onClose={dismiss}
+      dismissible={!busy}
       aria-labelledby="card-editor-title"
       className="max-h-[90vh] w-[1040px] max-w-[95vw]"
       style={{ blockSize, userSelect: 'text' }}
     >
       <h2 id="card-editor-title" className="type-headline-small mb-1 shrink-0">{added ? 'Карточка в Anki' : 'Новая карточка'}</h2>
-      <p className="type-body-small mb-4 shrink-0 text-[var(--md-sys-color-on-surface-variant)]">
+      <p className="type-body-small mb-4 shrink-0 min-w-0 break-words [overflow-wrap:anywhere] text-[var(--md-sys-color-on-surface-variant)]">
         {job.title}{job.cueText ? ` · ${job.cueText.replace(/\s+/g, ' ').trim()}` : ''}
       </p>
       {view === 'loading' ? (
@@ -229,11 +244,11 @@ function EditorDialog({ editor }: Props) {
             <Spinner size={32} width={3} />
             <span className="type-body-medium">Составляю карточку…</span>
           </div>
-          {job.error && <p className="type-body-small text-[var(--md-sys-color-error)]">{job.error}</p>}
-          {error && <p className="type-body-small text-[var(--md-sys-color-error)]">{error}</p>}
+          {job.error && <p role="alert" className="type-body-small text-[var(--md-sys-color-error)]">{job.error}</p>}
+          {error && <p role="alert" className="type-body-small text-[var(--md-sys-color-error)]">{error}</p>}
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={closeEditor} className="state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-primary)]">Закрыть</button>
-            <button type="button" disabled={busy} onClick={() => void cancel()} className="state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-error)] disabled:opacity-50">Отменить добавление</button>
+            <Button variant="text" disabled={busy} onClick={dismiss}>Закрыть</Button>
+            <Button variant="text" disabled={busy} style={DESTRUCTIVE_TEXT_STYLE} onClick={() => void cancel()}>Отменить добавление</Button>
           </div>
         </div>
       ) : (
@@ -248,43 +263,45 @@ function EditorDialog({ editor }: Props) {
                     ) : mediaOnly ? (
                       <p className="type-body-medium">В этой заметке нет текстовых полей для правки.</p>
                     ) : (
-                      <p className="type-body-medium text-[var(--md-sys-color-error)]">
+                      <p role="alert" className="type-body-medium text-[var(--md-sys-color-error)]">
                         Не удалось загрузить поля карточки. Закройте и откройте её снова.
                       </p>
                     ))}
                     {rows.map(({ field, value }) => (
-                      <label key={field} className="flex flex-col gap-1">
-                        <span className="type-label-medium text-[var(--md-sys-color-on-surface-variant)]">{field}</span>
-                        <textarea
-                          rows={field.toLowerCase().includes('cloze') || field.toLowerCase().includes('sentence') ? 2 : 1}
-                          value={value}
-                          onChange={(e) => setFields((current) => (current ? { ...current, [field]: e.target.value } : current))}
-                          className="type-body-medium resize-none rounded-[var(--md-sys-shape-corner-small)] border border-[var(--md-sys-color-outline)] bg-transparent px-3 py-2 outline-hidden focus:border-[var(--md-sys-color-primary)] focus:ring-1 focus:ring-[var(--md-sys-color-primary)]"
-                        />
-                      </label>
+                      <TextField
+                        key={field}
+                        multiline
+                        variant="outlined"
+                        label={field}
+                        rows={field.toLowerCase().includes('cloze') || field.toLowerCase().includes('sentence') ? 2 : 1}
+                        value={value}
+                        onChange={(e) => setFields((current) => (current ? { ...current, [field]: e.target.value } : current))}
+                      />
                     ))}
                     <p className="type-body-small text-[var(--md-sys-color-on-surface-variant)]">
                       Медиа-поля показаны в предпросмотре и не редактируются.
                     </p>
-                    <label className="flex flex-col gap-1">
-                      <span className="type-label-medium text-[var(--md-sys-color-on-surface-variant)]">Картинка (промпт)</span>
-                      <textarea
+                    <div className="flex flex-col gap-1">
+                      <TextField
+                        multiline
+                        variant="outlined"
+                        label="Картинка (промпт)"
                         rows={2}
                         value={draft?.image_prompt ?? ''}
                         disabled={!draft}
                         onChange={(e) => setDraft((current) => (current ? { ...current, image_prompt: e.target.value } : current))}
-                        className="type-body-medium resize-none rounded-[var(--md-sys-shape-corner-small)] border border-[var(--md-sys-color-outline)] bg-transparent px-3 py-2 outline-hidden focus:border-[var(--md-sys-color-primary)] focus:ring-1 focus:ring-[var(--md-sys-color-primary)] disabled:opacity-50"
                       />
-                      <button
-                        type="button"
+                      <Button
+                        variant="tonal"
+                        size="sm"
                         disabled={generating || busy || !draft}
                         onClick={() => void generate()}
-                        className="state-layer type-label-large relative mt-1 flex items-center gap-2 self-start rounded-full bg-[var(--md-sys-color-secondary-container)] px-4 py-1.5 text-[var(--md-sys-color-on-secondary-container)] disabled:opacity-50"
+                        className="mt-1 self-start"
                       >
                         {generating && <Spinner size={16} width={2} />}
                         {generating ? 'Генерирую картинку…' : 'Сгенерировать картинку'}
-                      </button>
-                    </label>
+                      </Button>
+                    </div>
                   </>
                 ) : (
                   <>
@@ -295,31 +312,33 @@ function EditorDialog({ editor }: Props) {
                       </div>
                     )}
                     {FIELDS.map(([k, label]) => (
-                      <label key={k} className="flex flex-col gap-1">
-                        <span className="type-label-medium text-[var(--md-sys-color-on-surface-variant)]">{label}</span>
-                        <textarea
+                      <div key={k} className="flex flex-col gap-1">
+                        <TextField
+                          multiline
+                          variant="outlined"
+                          label={label}
                           rows={k === 'cloze_sentence' || k === 'full_sentence' || k === 'image_prompt' ? 2 : 1}
                           value={draft?.[k] ?? ''}
                           onChange={(e) => setDraft((current) => (current ? { ...current, [k]: e.target.value } : current))}
-                          className="type-body-medium resize-none rounded-[var(--md-sys-shape-corner-small)] border border-[var(--md-sys-color-outline)] bg-transparent px-3 py-2 outline-hidden focus:border-[var(--md-sys-color-primary)] focus:ring-1 focus:ring-[var(--md-sys-color-primary)]"
                         />
                         {k === 'image_prompt' && (
-                          <button
-                            type="button"
+                          <Button
+                            variant="tonal"
+                            size="sm"
                             disabled={generating || busy || !draft}
                             onClick={() => void generate()}
-                            className="state-layer type-label-large relative mt-1 flex items-center gap-2 self-start rounded-full bg-[var(--md-sys-color-secondary-container)] px-4 py-1.5 text-[var(--md-sys-color-on-secondary-container)] disabled:opacity-50"
+                            className="mt-1 self-start"
                           >
                             {generating && <Spinner size={16} width={2} />}
                             {generating ? 'Генерирую картинку…' : 'Сгенерировать картинку'}
-                          </button>
+                          </Button>
                         )}
-                      </label>
+                      </div>
                     ))}
                   </>
                 )}
-                {job.error && <p className="type-body-small text-[var(--md-sys-color-error)]">{job.error}</p>}
-                {error && <p className="type-body-small text-[var(--md-sys-color-error)]">{error}</p>}
+                {job.error && <p role="alert" className="type-body-small text-[var(--md-sys-color-error)]">{job.error}</p>}
+                {error && <p role="alert" className="type-body-small text-[var(--md-sys-color-error)]">{error}</p>}
               </div>
             </div>
             <div className="min-h-0 md:overflow-y-auto">
@@ -331,16 +350,16 @@ function EditorDialog({ editor }: Props) {
             </div>
           </div>
           <div className="mt-4 flex shrink-0 flex-wrap justify-end gap-2">
-            <button type="button" onClick={closeEditor} className="state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-primary)]">Закрыть</button>
+            <Button variant="text" disabled={busy} onClick={dismiss}>Закрыть</Button>
             {view === 'added' ? (
-              <button type="button" disabled={busy || generating} onClick={() => void remove()} className="state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-error)] disabled:opacity-50">Удалить из Anki</button>
+              <Button variant="text" disabled={busy || generating} style={DESTRUCTIVE_TEXT_STYLE} onClick={() => void remove()}>Удалить из Anki</Button>
             ) : (
-              <button type="button" disabled={busy || generating} onClick={() => void cancel()} className="state-layer state-on-surface type-label-large relative rounded-full px-4 py-2 text-[var(--md-sys-color-error)] disabled:opacity-50">Отменить добавление</button>
+              <Button variant="text" disabled={busy || generating} style={DESTRUCTIVE_TEXT_STYLE} onClick={() => void cancel()}>Отменить добавление</Button>
             )}
-            <button type="button" disabled={busy || generating || !draft || (view === 'added' && !fields)} onClick={() => void save()} className="state-layer state-on-primary type-label-large relative flex items-center gap-2 rounded-full bg-[var(--md-sys-color-primary)] px-6 py-2 text-[var(--md-sys-color-on-primary)] disabled:opacity-50">
+            <Button variant="filled" disabled={busy || generating || !draft || (view === 'added' && !fields)} onClick={() => void save()}>
               {busy && <Spinner size={16} width={2} />}
               {view === 'added' ? 'Сохранить изменения' : 'Сохранить и добавить'}
-            </button>
+            </Button>
           </div>
         </>
       )}
@@ -349,7 +368,7 @@ function EditorDialog({ editor }: Props) {
 }
 
 /** MD3 dialog for one durable card job: edit the draft before the add, or the actual fields after it. */
-export function CardDraftModal() {
+export function CardDraftModal({ onDismissModal }: CardDraftModalProps = {}) {
   const editor = useCardsStore((s) => s.editor)
-  return <Presence>{editor && <EditorDialog key={editor.job.id} editor={editor} />}</Presence>
+  return <Presence>{editor && <EditorDialog key={editor.job.id} editor={editor} onDismissModal={onDismissModal} />}</Presence>
 }

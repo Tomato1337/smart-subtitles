@@ -18,6 +18,13 @@ function chipTone(tone: BadgeTone): StatusTone {
   return tone === 'success' || tone === 'warning' ? 'neutral' : tone
 }
 
+export function pluralTimesRu(n: number): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'раза'
+  return 'раз'
+}
+
 /** Compact M3 StatusChip row: frequency tier, CEFR level (with above-level warning), and film count. */
 export function VocabBadges({
   vocab,
@@ -65,7 +72,7 @@ export function VocabBadges({
         <StatusChip
           size="sm"
           tone="neutral"
-          title={`Встречается в этом фильме ${filmCount} раз(а)`}
+          title={`Встречается в этом фильме ${filmCount} ${pluralTimesRu(filmCount)}`}
         >
           {compact ? `×${filmCount}` : `×${filmCount} в фильме`}
         </StatusChip>

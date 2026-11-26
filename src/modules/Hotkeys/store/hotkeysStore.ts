@@ -14,11 +14,23 @@ type HotkeysStore = {
 
 /** Only the overrides are saved, so a new action still starts with its own default key. */
 function save(bindings: Bindings): void {
-  localStorage.setItem(KEY, JSON.stringify(overridesOf(bindings)))
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(KEY, JSON.stringify(overridesOf(bindings)))
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+function loadRaw(): string | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage.getItem(KEY)
+  } catch {
+    return null
+  }
 }
 
 export const useHotkeysStore = create<HotkeysStore>((set, get) => ({
-  bindings: parseOverrides(localStorage.getItem(KEY)),
+  bindings: parseOverrides(loadRaw()),
   bind: (action, combo) => {
     const { bindings, stolen } = rebind(get().bindings, action, combo)
     save(bindings)

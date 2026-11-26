@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import { IconButton, Presence } from '@tomato1337/m3e-react'
+import { Button, IconButton, Presence } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import { keyLabel, useHotkeysStore } from '@/modules/Hotkeys'
@@ -90,9 +90,9 @@ export function SubsStatusBanner({ mediaId, llmEnabled, onChoose }: { mediaId: s
     items.push(
       <div key="none" className={`${chip} flex items-center gap-3`}>
         <span>Английские субтитры не найдены</span>
-        <button type="button" onClick={onChoose} className="state-layer state-on-primary relative rounded-full bg-[var(--md-sys-color-primary)] px-4 py-1 text-[var(--md-sys-color-on-primary)]">
+        <Button variant="filled" size="xs" onClick={onChoose}>
           Выбрать субтитры…
-        </button>
+        </Button>
       </div>,
     )
   }
@@ -123,21 +123,17 @@ export function SubsStatusBanner({ mediaId, llmEnabled, onChoose }: { mediaId: s
     } else if (annot.failed > 0 || failure) {
       items.push(
         <div key="annot" className={`${chip} mx-3 flex max-w-md flex-wrap items-center gap-3`}>
-          <div role="status">
+          <div role="status" className="min-w-0">
             <p>Не разобрано частей: {annot.total - annot.done}</p>
-            {failure && <p className="type-body-medium">{failure.message}</p>}
+            {failure && <p className="type-body-medium break-words [overflow-wrap:anywhere]">{failure.message}</p>}
             {failure?.blocked && (
               <p className="type-body-small">Проверьте провайдера в «Настройки → Модели ИИ», затем откройте фильм заново.</p>
             )}
           </div>
           {!failure?.blocked && (
-            <button
-              type="button"
-              onClick={() => retry.mutate()}
-              className="state-layer state-on-primary relative rounded-full bg-[var(--md-sys-color-primary)] px-4 py-1 text-[var(--md-sys-color-on-primary)]"
-            >
+            <Button variant="filled" size="xs" onClick={() => retry.mutate()}>
               Повторить
-            </button>
+            </Button>
           )}
         </div>,
       )

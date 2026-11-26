@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Button } from '@tomato1337/m3e-react'
 import { placeCard, resolveStep, visibleSteps, type Rect, type TourStep } from '../lib/tour'
 
 /** Ring of the spotlight around the target, px. */
@@ -6,10 +7,7 @@ const SPOT_PAD = 6
 /** Repaint period of the spotlight: the bars and the subtitle line it points at move and fade in 200 ms. */
 const TICK_MS = 250
 const SCRIM = 'color-mix(in srgb, var(--md-sys-color-scrim) 60%, transparent)'
-const BUTTON = 'state-layer type-label-large relative rounded-full px-4 py-2'
-const TEXT_BUTTON = `${BUTTON} state-on-surface whitespace-nowrap text-[var(--md-sys-color-primary)] disabled:cursor-default disabled:opacity-40`
-const TONAL_BUTTON = `${BUTTON} state-on-surface flex w-full items-center justify-center bg-[var(--md-sys-color-secondary-container)] text-center text-[var(--md-sys-color-on-secondary-container)]`
-const FILLED_BUTTON = `${BUTTON} state-on-primary whitespace-nowrap bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)]`
+const FOCUSABLE = 'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
 
 /** Box of the element marked `data-tour="<id>"`; `null` while it is absent or has no size (a hidden panel). */
 function boxOf(id: string | null): Rect | null {
@@ -36,8 +34,16 @@ export function TourOverlay({ steps, onClose }: { steps: readonly TourStep[]; on
  const [view, setView] = useState(0)
  const card = useRef<HTMLDivElement>(null)
  const next = useRef<HTMLButtonElement>(null)
+ const opener = useRef<HTMLElement | null>(null)
  const step = steps[index]
  const action = step.action
+
+ useEffect(() => {
+  opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  return () => {
+   opener.current?.focus({ preventScroll: true })
+  }
+ }, [])
 
  // The step on screen may lose its element (the subtitles went away, a panel closed): move on to the
  // next showable step instead of pointing at nothing. The same pass keeps the cut-out glued to bars
@@ -109,8 +115,19 @@ export function TourOverlay({ steps, onClose }: { steps: readonly TourStep[]; on
     onClose()
     return
    }
-   // Enter and Space press the focused button, Tab moves the focus on.
-   if (e.key === 'Enter' || e.key === ' ' || e.key === 'Tab') return
+   if (e.key === 'Tab') {
+    e.preventDefault()
+    const focusables = Array.from(card.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])
+    if (focusables.length === 0) return
+    const cur = focusables.indexOf(document.activeElement as HTMLElement)
+    const targetIdx = e.shiftKey
+     ? (cur <= 0 ? focusables.length - 1 : cur - 1)
+     : (cur < 0 || cur >= focusables.length - 1 ? 0 : cur + 1)
+    focusables[targetIdx]?.focus()
+    return
+   }
+   // Enter and Space press the focused button.
+   if (e.key === 'Enter' || e.key === ' ') return
    e.preventDefault()
   }
   window.addEventListener('keydown', onKey, true)
@@ -143,6 +160,7 @@ export function TourOverlay({ steps, onClose }: { steps: readonly TourStep[]; on
    <div
     ref={card}
     role="dialog"
+    aria-modal="true"
     aria-label="Обзор возможностей"
     className="m3e-motion-pop absolute w-[380px] max-w-[calc(100vw-16px)] bg-[var(--md-sys-color-surface-container-high)] p-5 shadow-xl"
     style={{
@@ -158,13 +176,13 @@ export function TourOverlay({ steps, onClose }: { steps: readonly TourStep[]; on
     <h2 className="type-title-large mt-1">{step.title}</h2>
     {step.body.map((text) => <p key={text} className="type-body-medium mt-2">{text}</p>)}
     {action && (
-     <button type="button" onClick={() => { onClose(); action.run() }} className={`mt-4 ${TONAL_BUTTON}`}>{action.label}</button>
+     <Button variant="tonal" onClick={() => { onClose(); action.run() }} className="mt-4 w-full">{action.label}</Button>
     )}
     <div className="mt-4 flex flex-wrap items-center gap-2">
-     {last ? null : <button type="button" onClick={onClose} className={TEXT_BUTTON}>Пропустить</button>}
+     {last ? null : <Button variant="text" onClick={onClose}>Пропустить</Button>}
      <div className="ml-auto flex items-center gap-2">
-      <button type="button" disabled={visible[0] === index} onClick={() => go(-1)} className={TEXT_BUTTON}>Назад</button>
-      <button ref={next} type="button" onClick={() => go(1)} className={FILLED_BUTTON}>{last ? 'Готово' : 'Далее'}</button>
+      <Button variant="text" disabled={visible[0] === index} onClick={() => go(-1)}>Назад</Button>
+      <Button ref={next} variant="filled" onClick={() => go(1)}>{last ? 'Готово' : 'Далее'}</Button>
      </div>
     </div>
    </div>

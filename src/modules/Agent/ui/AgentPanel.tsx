@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
-import { Icon, IconButton, shapeClip } from '@tomato1337/m3e-react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type Ref } from 'react'
+import { Button, Checkbox, Icon, IconButton, shapeClip } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { CardJobState, ChatMessage } from '@/common/types/ipc'
@@ -80,10 +80,23 @@ function Proposal({ mediaId, m }: { mediaId: string; m: ChatMessage }) {
  // Only queues the jobs; status moves to 'adding' and `cards:result` refreshes it when they end.
  const add = async () => {
   const indices = [...picked].filter((i) => selectable.has(i)).sort((a, b) => a - b)
-  if (indices.length === 0) return
+  if (indices.length === 0 || busy) return
   setBusy(true)
   try {
    await api.cardsAdd(m.proposalId!, indices)
+  } catch (e) {
+   notify('error', errorText(e))
+  } finally {
+   setBusy(false)
+   void refresh()
+  }
+ }
+
+ const dismiss = async () => {
+  if (busy || m.proposalId == null) return
+  setBusy(true)
+  try {
+   await api.cardsDismiss(m.proposalId)
   } catch (e) {
    notify('error', errorText(e))
   } finally {
@@ -105,34 +118,35 @@ function Proposal({ mediaId, m }: { mediaId: string; m: ChatMessage }) {
      ? (current ? phaseLabel(current) : '') || JOB_NOTE[state] || 'в работе'
      : null
     return (
-     <label key={i} className="flex items-start gap-2 py-1">
-      <input
-       type="checkbox"
-       disabled={!canPick}
-       checked={done || (canPick && picked.has(i))}
-       onChange={() => toggle(i)}
-       className="mt-1 accent-[var(--md-sys-color-primary)]"
-      />
-      <span className="type-body-medium min-w-0 flex-1">
-       <b>{w.word}</b> — {w.translation}
-       {done && <span className="type-label-small text-[var(--md-sys-color-primary)]"> · в Anki</span>}
-       {note && <span className="type-label-small text-[var(--md-sys-color-on-surface-variant)]"> · {note}</span>}
-       {vocabQuery.data?.[i] && (
-        <div className="my-1">
-         <VocabBadges vocab={vocabQuery.data[i]} compact />
-        </div>
-       )}
-       <span className="type-body-small block text-[var(--md-sys-color-on-surface-variant)]">{w.full_sentence}</span>
-      </span>
-     </label>
+     <Checkbox
+      key={i}
+      disabled={!canPick}
+      checked={done || (canPick && picked.has(i))}
+      onChange={() => toggle(i)}
+      label={(
+       <span className="type-body-medium block min-w-0 break-words">
+        <b>{w.word}</b> — {w.translation}
+        {done && <span className="type-label-small text-[var(--md-sys-color-primary)]"> · в Anki</span>}
+        {note && <span className="type-label-small text-[var(--md-sys-color-on-surface-variant)]"> · {note}</span>}
+        {vocabQuery.data?.[i] && (
+         <span className="my-1 block">
+          <VocabBadges vocab={vocabQuery.data[i]} compact />
+         </span>
+        )}
+        <span className="type-body-small block text-[var(--md-sys-color-on-surface-variant)]">{w.full_sentence}</span>
+       </span>
+      )}
+     />
     )
    })}
    {open ? (
-    <div className="mt-2 flex gap-2">
-     <button type="button" disabled={busy || picked.size === 0} onClick={() => void add()} className="state-layer state-on-primary type-label-large relative rounded-full bg-[var(--md-sys-color-primary)] px-4 py-1.5 text-[var(--md-sys-color-on-primary)] disabled:opacity-50">
+    <div className="mt-2 flex flex-wrap gap-2">
+     <Button variant="filled" size="xs" disabled={busy || picked.size === 0} onClick={() => void add()}>
       {m.status === 'failed' || m.status === 'partial' || jobs.length > 0 ? 'Повторить выбранные' : 'Добавить выбранные'}
-     </button>
-     <button type="button" onClick={() => void api.cardsDismiss(m.proposalId!).then(refresh)} className="type-label-large rounded-full px-3 py-1.5 text-[var(--md-sys-color-primary)]">Отклонить</button>
+     </Button>
+     <Button variant="text" size="xs" disabled={busy} onClick={() => void dismiss()}>
+      Отклонить
+     </Button>
     </div>
    ) : (
     <div className="type-label-medium mt-2 text-[var(--md-sys-color-on-surface-variant)]">{m.status === 'added' ? 'Добавлено в Anki' : m.status === 'dismissed' ? 'Отклонено' : 'Добавляется в фоне…'}</div>
@@ -159,12 +173,14 @@ type PanelProps = {
  mounted: boolean
  /** The panel root, for that presence. */
  ref?: Ref<HTMLElement>
+ /** Extra layout classes (e.g. overlay drawer positioning below 1160 px). */
+ className?: string
 }
 
 const BUBBLE = 'type-body-medium break-words'
 
 /** Film chat with the agent (480 px, extra-large corners, level-3 surface): one thread per film, every message carries the learner's position. */
-export function AgentPanel({ mounted, mediaId, locate, here, cueTime, cueText, onSeekCue, onSeekTime, ref }: PanelProps) {
+export function AgentPanel({ mounted, mediaId, locate, here, cueTime, cueText, onSeekCue, onSeekTime, ref, className }: PanelProps) {
  const { open, setOpen, live: l } = useAgentStore()
  const hotkey = useHotkeysStore((s) => s.bindings)
  const { ask } = useAgentActions(mediaId, locate)
@@ -190,7 +206,7 @@ export function AgentPanel({ mounted, mediaId, locate, here, cueTime, cueText, o
  }
 
  return (
-  <aside ref={ref} className="m3e-motion-from-right ml-2 flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--md-sys-shape-corner-extra-large)] bg-[var(--md-sys-color-surface-container-low)]" style={{ userSelect: 'text' }} aria-label="Агент">
+  <aside ref={ref} className={`m3e-motion-from-right flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--md-sys-shape-corner-extra-large)] bg-[var(--md-sys-color-surface-container-low)] ${className ?? 'ml-2'}`} style={{ userSelect: 'text' }} aria-label="Агент">
    <div className="flex items-center gap-3 pl-4 pr-2 pt-4 pb-3">
     <span aria-hidden="true" className="grid size-11 shrink-0 place-items-center bg-[var(--md-sys-color-tertiary-container)] text-[var(--md-sys-color-on-tertiary-container)]" style={{ clipPath: shapeClip.burst12, WebkitClipPath: shapeClip.burst12 }}>
      <Icon name="auto_awesome" fill />
@@ -233,12 +249,26 @@ export function AgentPanel({ mounted, mediaId, locate, here, cueTime, cueText, o
     <textarea
      value={text}
      rows={1}
+     aria-label="Спросить про фильм или эту сцену"
      placeholder="Спросить про фильм или эту сцену…"
      onChange={(e) => setText(e.target.value)}
-     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }}
-     className="type-body-medium max-h-32 min-h-[52px] min-w-0 flex-1 resize-none rounded-[26px] bg-[var(--md-sys-color-surface-container-highest)] px-6 py-3.5"
+     onKeyDown={(e) => {
+      if (e.nativeEvent.isComposing || e.key === 'Process' || e.keyCode === 229) return
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() }
+     }}
+     className="m3e-input max-h-32 min-h-[52px] min-w-0 flex-1 resize-none"
+     style={{ '--m3e-input-radius': '26px', '--m3e-input-padding-block': '14px', '--m3e-input-padding-inline': '24px' } as CSSProperties}
     />
-    <IconButton icon="arrow_upward" fill variant="filled" shape="cookie9" className="!size-[52px]" label="Отправить" disabled={!text.trim() || l.busy} onClick={submit} />
+    <IconButton
+     icon="arrow_upward"
+     fill
+     variant="filled"
+     shape="cookie9"
+     label="Отправить"
+     disabled={!text.trim() || l.busy}
+     onClick={submit}
+     style={{ '--m3e-icon-button-size': '52px', '--m3e-icon-button-radius': '26px' } as CSSProperties}
+    />
    </div>
    <ChatUsageBar mediaId={mediaId} />
   </aside>

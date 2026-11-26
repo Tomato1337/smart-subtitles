@@ -5,8 +5,13 @@ import { buildIndex } from '../lib/matcher'
 const KEY = 'smartsubs.ankiLabelMode'
 
 function loadMode(): AnkiLabelMode {
-  const v = localStorage.getItem(KEY)
-  return v === 'unlearned' || v === 'off' ? v : 'fresh'
+  try {
+    if (typeof localStorage === 'undefined') return 'fresh'
+    const v = localStorage.getItem(KEY)
+    return v === 'unlearned' || v === 'off' ? v : 'fresh'
+  } catch {
+    return 'fresh'
+  }
 }
 
 type AnkiStore = {
@@ -23,7 +28,11 @@ export const useAnkiStore = create<AnkiStore>((set) => ({
   labelMode: loadMode(),
   setCards: (cards) => set({ cards, index: buildIndex(cards) }),
   setLabelMode: (labelMode) => {
-    localStorage.setItem(KEY, labelMode)
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem(KEY, labelMode)
+    } catch {
+      /* storage unavailable */
+    }
     set({ labelMode })
   },
 }))

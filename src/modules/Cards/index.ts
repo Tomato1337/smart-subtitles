@@ -1,7 +1,7 @@
 export { autoSource, SOURCE_IDS, SOURCE_LABELS } from './lib/fieldMap'
 export { ACTIVE_STATES, graceRemaining, useCardsStore } from './store/cardsStore'
 export { phaseLabel } from './lib/task'
-export { CardDraftModal } from './ui/CardDraftModal'
+export { CardDraftModal, type CardDraftModalProps } from './ui/CardDraftModal'
 export { CardIsland, useCardIslandDock } from './ui/CardIsland'
 export { CardsActivityButton, CardsActivityPanel, type CardsActivityButtonProps } from './ui/CardsActivity'
 export { CardPreview } from './ui/CardPreview'

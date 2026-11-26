@@ -39,32 +39,44 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const mseRef = useRef<MseStream | null>(null)
   const audioRef = useRef(session.audioIndex)
+  const opNonce = useRef(0)
+  const audioChain = useRef(Promise.resolve())
   const debounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const patch = usePlaybackStore.getState().patch
   const { sessionId, mediaId, duration } = session
 
   const now = useCallback(() => mseRef.current?.currentTime() ?? 0, [])
 
+  const sanitizeSeek = useCallback(
+    (t: number) => {
+      if (!Number.isFinite(t)) return 0
+      if (Number.isFinite(duration) && duration > 0) return clamp(t, 0, Math.max(0, duration - 0.1))
+      return Math.max(0, t)
+    },
+    [duration],
+  )
+
   const seek = useCallback(
     (t: number) => {
       const v = videoRef.current
       if (!v || !mseRef.current) return
-      const target = clamp(t, 0, Math.max(0, duration - 0.1))
+      opNonce.current++
+      const target = sanitizeSeek(t)
       patch({ absTime: target, lastSeekAt: Date.now() })
       if (mseRef.current.seek(target, !v.paused || usePlaybackStore.getState().playing) === 'stream') {
         patch({ buffering: true })
       }
     },
-    [duration, patch],
+    [sanitizeSeek, patch],
   )
 
   const seekDebounced = useCallback(
     (t: number) => {
-      patch({ absTime: t })
+      patch({ absTime: sanitizeSeek(t) })
       clearTimeout(debounce.current)
       debounce.current = setTimeout(() => seek(t), 250)
     },
-    [seek, patch],
+    [sanitizeSeek, seek, patch],
   )
 
   // Initial open + element events + ticker.
@@ -97,9 +109,10 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
         patch({ playing: false })
         flushWatch()
       }),
-      off('waiting', () => patch({ buffering: true })),
+      off('waiting', () => { if (!mse.isFatal()) patch({ buffering: true }) }),
       off('canplay', () => patch({ buffering: false })),
       off('error', () => {
+        if (mse.isFatal()) return patch({ buffering: false })
         // MseStream handles decode errors first and may already have cleared video.error by rebuilding.
         if (!v.error || v.error.code === MediaError.MEDIA_ERR_DECODE) return patch({ buffering: true })
         if (v.getAttribute('src')) notify('error', `Ошибка видео (код ${v.error.code}): ${v.error.message}`)
@@ -172,13 +185,24 @@ export function useStreamingPlayer(session: SessionState): PlayerController {
         patch({ muted: v.muted })
       },
       changeAudio: (index) => {
+        const nonce = ++opNonce.current
         audioRef.current = index
         void api.mediaSetAudio(mediaId, index)
+        const mse = mseRef.current
+        if (!mse) return
         // now() is 0 until the first stream is attached: fall back to the position the UI shows.
-        const t = now() || usePlaybackStore.getState().absTime
-        const play = !(videoRef.current?.paused ?? true)
-        void mseRef.current?.clear().then(() => mseRef.current?.restart(t, play))
+        const fallbackT = now() || usePlaybackStore.getState().absTime
+        const fallbackPlay = !(videoRef.current?.paused ?? true)
         patch({ buffering: true })
+        audioChain.current = audioChain.current.then(async () => {
+          if (mseRef.current !== mse || opNonce.current !== nonce) return
+          await mse.clear()
+          if (mseRef.current !== mse || opNonce.current !== nonce) return
+          const latestT = usePlaybackStore.getState().absTime
+          const t = Number.isFinite(latestT) && latestT > 0 ? latestT : fallbackT
+          const play = videoRef.current ? !videoRef.current.paused : fallbackPlay
+          mse.restart(Number.isFinite(t) ? t : 0, play)
+        })
       },
     }),
     [now, seek, seekDebounced, mediaId, patch],

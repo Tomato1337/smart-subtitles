@@ -32,23 +32,23 @@ export function TopBar({ session, onBack, onOpenEpisode, rightSlot }: Props) {
     session.episodeTitle,
   ].filter(Boolean).join(' · ')
   return (
-    <div data-app-topbar className="flex items-start gap-3 px-4 pb-10 pt-4" style={{ ...OVER_VIDEO, background: 'linear-gradient(to bottom, color-mix(in srgb, var(--md-sys-color-scrim) 80%, transparent), transparent)' }}>
+    <div data-app-topbar className="topbar-bar flex items-start gap-3 px-4 pb-10 pt-4" style={{ ...OVER_VIDEO, background: 'linear-gradient(to bottom, color-mix(in srgb, var(--md-sys-color-scrim) 80%, transparent), transparent)' }}>
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <IconButton icon="arrow_back" label="Закрыть" data-tour="close" variant="tonal" size="lg" tipPos="bottom-start" onClick={onBack} />
-        <Cover src={session.posterUrl} title={session.title} className="h-[66px] w-11 shadow-[0_2px_10px_rgb(0_0_0/0.5)]" />
-        <div className="min-w-0">
+        <Cover src={session.posterUrl} title={session.title} className="topbar-cover h-[66px] w-11 shrink-0 shadow-[0_2px_10px_rgb(0_0_0/0.5)]" />
+        <div className="min-w-0 flex-1">
           <h1 className="type-headline-medium type-emph truncate text-[var(--app-on-video)]">{session.title}</h1>
           {meta && (
             <p className="type-body-medium truncate text-[color-mix(in_srgb,var(--app-on-video)_75%,transparent)]">{meta}</p>
           )}
           {session.torrent && (
-            <div className="mt-1">
+            <div className="mt-1 min-w-0">
               <TorrentSignalLine sessionId={session.sessionId} enabled />
             </div>
           )}
         </div>
       </div>
-      <div className="flex flex-1 items-center justify-end gap-2">
+      <div className="flex shrink-0 items-center justify-end gap-2">
         {hasList && (
           <div className="relative">
             <IconButton icon="format_list_bulleted" label="Эпизоды" data-tour="episodes" aria-haspopup="menu" aria-expanded={episodes} variant="tonal" size="lg" tipPos="bottom" onClick={() => setEpisodes((v) => !v)} />
@@ -71,12 +71,8 @@ export function TopBar({ session, onBack, onOpenEpisode, rightSlot }: Props) {
             data-variant="secondary"
             data-size="lg"
             onClick={() => p.setRate(1)}
-            className="m3e-icon-button type-label-large font-semibold tabular-nums"
-            style={{
-              '--m3e-icon-button-width': '64px',
-              '--m3e-icon-button-radius': 'var(--md-sys-shape-corner-extra-small)',
-              ...rateTip,
-            } as CSSProperties}
+            className="m3e-icon-button topbar-rate-reset type-label-large font-semibold tabular-nums"
+            style={rateTip as CSSProperties}
           >
             <span aria-hidden="true" data-part="surface" />
             <span aria-hidden="true" data-part="state" />

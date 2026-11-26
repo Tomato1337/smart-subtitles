@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Dialog, Spinner } from '@tomato1337/m3e-react'
+import { Button, Dialog, Spinner } from '@tomato1337/m3e-react'
 import { notify } from '@/common/api/notify'
 import { api, errorText } from '@/common/api/tauri'
 import type { SessionState } from '@/common/types/ipc'
@@ -62,9 +62,6 @@ export function EmbeddedGate({ session, open, onSkip }: Props) {
   }
  }
 
- const outlined = 'state-layer state-on-surface type-label-large relative rounded-full border border-[var(--md-sys-color-outline)] px-5 py-2'
- const filled = 'state-layer state-on-primary type-label-large relative rounded-full bg-[var(--md-sys-color-primary)] px-5 py-2 text-[var(--md-sys-color-on-primary)]'
-
  if (!shown) return null
  const { info } = shown
 
@@ -91,12 +88,12 @@ export function EmbeddedGate({ session, open, onSkip }: Props) {
       загрузится, остальное догрузится во время просмотра.
      </p>
      <div className="flex justify-end gap-2">
-      <button type="button" data-autofocus disabled={busy} className={outlined} onClick={() => void decide(false)}>
+      <Button variant="outlined" data-autofocus disabled={busy} onClick={() => void decide(false)}>
        Не загружать
-      </button>
-      <button type="button" disabled={busy} className={filled} onClick={() => void decide(true)}>
+      </Button>
+      <Button variant="filled" disabled={busy} onClick={() => void decide(true)}>
        Загрузить
-      </button>
+      </Button>
      </div>
     </>
    ) : (
@@ -109,9 +106,9 @@ export function EmbeddedGate({ session, open, onSkip }: Props) {
       </span>
      </div>
      <div className="flex justify-end">
-      <button type="button" data-autofocus className={outlined} onClick={onSkip}>
+      <Button variant="outlined" data-autofocus onClick={onSkip}>
        Смотреть без ожидания
-      </button>
+      </Button>
      </div>
     </>
    )}

@@ -1,6 +1,6 @@
 import { beforeEach, expect, it } from 'vitest'
 import type { AppNotification } from '@/common/types/ipc'
-import { useNotifications } from './notify'
+import { localizeNotifyMessage, useNotifications } from './notify'
 
 const row = (id: number): AppNotification => ({ id, level: 'error', message: `m${id}`, createdAt: id })
 
@@ -43,4 +43,11 @@ it('freezes the countdown while a popup is hovered and resumes it after', () => 
   const resumed = useNotifications.getState().live[0]
   expect(resumed.paused).toBe(false)
   expect(resumed.until - Date.now()).toBeGreaterThan(900)
+})
+
+it('localizes generic WebKit/browser network failure strings', () => {
+  expect(localizeNotifyMessage('Load failed')).toBe('Не удалось загрузить данные: нет ответа от сервера')
+  expect(localizeNotifyMessage('TypeError: Load failed')).toBe('Не удалось загрузить данные: нет ответа от сервера')
+  expect(localizeNotifyMessage('Failed to fetch')).toBe('Не удалось загрузить данные: нет ответа от сервера')
+  expect(localizeNotifyMessage('Ошибка AnkiConnect')).toBe('Ошибка AnkiConnect')
 })

@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { notify } from '@/common/api/notify'
 import { api, errorText, onEvent } from '@/common/api/tauri'
 import type { ChatMessage } from '@/common/types/ipc'
@@ -38,6 +38,7 @@ export function useAgentEvents(mediaId: string) {
 
 export function useAgentActions(mediaId: string, locate: Locate) {
   const qc = useQueryClient()
+  const onceInFlight = useRef(new Set<string>())
 
   /** Opens the chat and sends `text` tagged with the position (of `cueIdx` if given, else of the playhead). */
   const ask = useCallback(async (text: string, cueIdx?: number) => {
@@ -56,10 +57,21 @@ export function useAgentActions(mediaId: string, locate: Locate) {
 
   /** Opens the chat and sends the prompt unless the same user message is already in the film's thread. */
   const askOnce = useCallback(async (text: string, cueIdx?: number) => {
-    useAgentStore.getState().setOpen(true)
-    const history = await qc.fetchQuery({ queryKey: agentKey(mediaId), queryFn: () => api.agentHistory(mediaId), staleTime: 0 })
-    if (history.some((m: ChatMessage) => m.role === 'user' && m.text === text)) return
-    await ask(text, cueIdx)
+    const st = useAgentStore.getState()
+    st.setOpen(true)
+    const key = `${mediaId}:${text}`
+    if (st.live.busy || onceInFlight.current.has(key)) return
+    onceInFlight.current.add(key)
+    try {
+      const history = await qc.fetchQuery({ queryKey: agentKey(mediaId), queryFn: () => api.agentHistory(mediaId), staleTime: 0 })
+      if (useAgentStore.getState().live.busy) return
+      if (history.some((m: ChatMessage) => m.role === 'user' && m.text === text)) return
+      await ask(text, cueIdx)
+    } catch (e) {
+      notify('error', errorText(e))
+    } finally {
+      onceInFlight.current.delete(key)
+    }
   }, [mediaId, qc, ask])
 
   return { ask, askOnce }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
-import { Chip, Dialog, Icon, IconButton, Kbd, Presence } from '@tomato1337/m3e-react'
+import { Chip, Dialog, Icon, IconButton, Kbd, Presence, Slider } from '@tomato1337/m3e-react'
 import type { AnkiCard, AnkiLabelMode, Chunk, ChunkKind, Cue } from '@/common/types/ipc'
 import { ankiTokenDecor, isLabelVisible, labelText, STATUS_RU } from '@/modules/Anki'
 import { keyLabel, useHotkeysStore } from '@/modules/Hotkeys'
@@ -257,7 +257,7 @@ function GuideDialog({ onClose }: { onClose: () => void }) {
       <div className="min-h-0 flex-auto overflow-y-auto overscroll-contain">
         <div className="grid grid-cols-1 gap-6 px-6 pb-6 md:grid-cols-[minmax(0,1fr)_380px]">
         <section className="flex min-w-0 flex-col gap-4">
-          <div className="flex flex-col gap-5 rounded-[var(--md-sys-shape-corner-large)] bg-black px-6 py-6 text-center">
+          <div data-app-on-video="" className="flex flex-col gap-5 rounded-[var(--md-sys-shape-corner-large)] bg-black px-6 py-6 text-center">
             {samples.map((b, si) => {
               const pats = showPatterns ? b.patterns.map((p) => patternById(p.id)).filter((p) => !!p) : []
               return (
@@ -269,8 +269,8 @@ function GuideDialog({ onClose }: { onClose: () => void }) {
                       ))}
                     </div>
                   )}
-                  <div className="type-headline-medium text-[var(--md-sys-color-on-surface)]">{renderSample(b, si)}</div>
-                  <div className="type-body-large mt-1 text-[var(--md-sys-color-on-surface-variant)]">{b.ru}</div>
+                  <div className="type-headline-medium text-[var(--app-on-video)]">{renderSample(b, si)}</div>
+                  <div className="type-body-large mt-1 text-[color-mix(in_srgb,var(--app-on-video)_78%,transparent)]">{b.ru}</div>
                 </div>
               )
             })}
@@ -296,12 +296,20 @@ function GuideDialog({ onClose }: { onClose: () => void }) {
           <div className="rounded-[var(--md-sys-shape-corner-large)] bg-[var(--md-sys-color-surface-container)] p-4">
             <div className="type-label-large mb-2 text-[var(--md-sys-color-primary)]">Уже произнесённое</div>
             <p className="type-body-medium mb-3">Слова загораются по мере того, как их произносят, остальные приглушены. Так подсвечиваются и субтитры на видео, и активная реплика в «Диалогах». В режиме «Скрывать субтитры» текст появляется только по <Kbd>{keyLabel(hotkey.reveal)}</Kbd>: фильм отмотается на 5 секунд и покажет фразу.</p>
-            <div className="rounded-[var(--md-sys-shape-corner-medium)] bg-black px-4 py-3 text-center">
-              <div className="type-title-large">{renderSample(samples[1], 1, karaoke)}</div>
+            <div data-app-on-video="" className="rounded-[var(--md-sys-shape-corner-medium)] bg-black px-4 py-3 text-center">
+              <div className="type-title-large text-[var(--app-on-video)]">{renderSample(samples[1], 1, karaoke)}</div>
             </div>
             <div className="mt-3 flex items-center gap-3">
               <IconButton icon={playing ? 'pause' : 'play_arrow'} label={playing ? 'Пауза' : 'Проиграть'} onClick={() => setPlaying((v) => !v)} />
-              <input type="range" min={0} max={1} step={0.01} value={karaoke} onChange={(e) => { setPlaying(false); setKaraoke(Number(e.target.value)) }} className="flex-1 accent-[var(--md-sys-color-primary)]" aria-label="Сколько фразы уже произнесено" />
+              <Slider
+                min={0}
+                max={1}
+                step={0.01}
+                value={karaoke}
+                label="Сколько фразы уже произнесено"
+                onChange={(v) => { setPlaying(false); setKaraoke(v) }}
+                className="flex-1"
+              />
             </div>
           </div>
         </section>

@@ -38,6 +38,7 @@ export const Markdown = memo(function Markdown({ text, cueTime, cueText, onCue }
       <blockquote className="mb-2 border-l-2 border-[var(--md-sys-color-primary)] pl-3 text-[var(--md-sys-color-on-surface-variant)] last:mb-0 [&>p]:mb-1">{children}</blockquote>
     ),
     hr: () => <hr className="my-3 border-[var(--md-sys-color-outline-variant)]" />,
+    img: () => null,
     code: ({ children, className }) =>
       className ? (
         <code className={`${className} block`}>{children}</code>

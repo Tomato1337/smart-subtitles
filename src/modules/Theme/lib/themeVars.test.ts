@@ -1,6 +1,21 @@
 import { describe, expect, test } from 'vitest'
 import { themeVars } from './themeVars'
 
+function luminance(hex: string): number {
+  const n = parseInt(hex.slice(1), 16)
+  const [r, g, b] = [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff].map((v) => {
+    const s = v / 255
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+function contrast(a: string, b: string): number {
+  const la = luminance(a)
+  const lb = luminance(b)
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+}
+
 const input = {
   seed: '#062FEE',
   mode: 'dark',
@@ -75,5 +90,29 @@ describe('themeVars', () => {
     })
     expect(v['--md-sys-color-on-surface']).toBe('#24213f')
     expect(v['--md-sys-color-on-primary-container']).toBe('#1f2a7a')
+  })
+
+  test('emits dark-polarity over-video tokens and AA grammar/badge pairs in both modes', () => {
+    const dark = themeVars({ seed: '#4d58aa', mode: 'dark', colors: {} })
+    const light = themeVars({ seed: '#4d58aa', mode: 'light', colors: {} })
+    for (const key of [
+      '--app-on-video-kind-idiom',
+      '--app-on-video-kind-phrasal-verb',
+      '--app-on-video-kind-collocation',
+      '--app-on-video-kind-slang',
+      '--app-on-video-kind-reduction',
+      '--app-on-video-kind-grammar',
+      '--app-on-video-anki-label',
+    ]) {
+      expect(light[key]).toBe(dark[key])
+      expect(contrast(light[key], '#000000')).toBeGreaterThanOrEqual(7)
+    }
+    expect(contrast(light['--app-grammar-on-container'], light['--app-grammar-container'])).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(dark['--app-grammar-on-container'], dark['--app-grammar-container'])).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(light['--app-on-warning'], light['--app-warning'])).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(dark['--app-on-warning'], dark['--app-warning'])).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(light['--app-on-error-badge'], light['--app-error-badge'])).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(dark['--app-on-error-badge'], dark['--app-error-badge'])).toBeGreaterThanOrEqual(4.5)
+    expect(dark['--app-error-badge']).not.toBe(dark['--app-warning'])
   })
 })
