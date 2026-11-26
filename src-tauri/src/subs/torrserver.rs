@@ -15,6 +15,7 @@ pub struct Track {
     pub index: u32,
     pub title: String,
     pub lang: String,
+    #[allow(dead_code)]
     pub format: String,
 }
 

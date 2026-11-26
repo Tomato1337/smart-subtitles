@@ -6,7 +6,21 @@ use sha1::{Digest, Sha1};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+const EDGE_TTS_PKG: &str = "edge-tts==7.3.1";
+
 static PREVIEW_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Strict voice allowlist for `edge-tts` invocation (`^[A-Za-z0-9_-]{1,64}$`, no leading `-`).
+pub(crate) fn validate_voice(voice: &str) -> Result<&str, String> {
+    if voice.is_empty()
+        || voice.len() > 64
+        || voice.starts_with('-')
+        || !voice.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+    {
+        return Err("Некорректное имя голоса".into());
+    }
+    Ok(voice)
+}
 
 fn validate_preview_args<'a>(voice: &'a str, text: &'a str) -> Result<(&'a str, &'a str), String> {
     let voice = voice.trim();
@@ -29,7 +43,7 @@ fn speak_args(voice: &str, text: &str) -> [String; 5] {
     [
         "tool".into(),
         "run".into(),
-        "edge-tts".into(),
+        EDGE_TTS_PKG.into(),
         format!("--voice={voice}"),
         format!("--text={text}"),
     ]
@@ -72,6 +86,7 @@ pub async fn preview(voice: &str, text: &str) -> Result<String, String> {
 
 /// Writes one MP3 to `out`; the caller picks the file name the card will reference.
 pub async fn speak(text: &str, voice: &str, out: &Path, cancel: &tokio_util::sync::CancellationToken) -> Result<(), String> {
+    let voice = validate_voice(voice)?;
     let uv = find_uv().ok_or_else(|| "нет uv — озвучка выключена".to_string())?;
     let out = out.to_path_buf();
     let mut cmd = crate::proc::command(&uv);
@@ -124,7 +139,20 @@ mod tests {
         assert_eq!(validate_preview_args(&"a:b_c-1".repeat(10), &"ж".repeat(500)).map(|(v, t)| (v.len(), t.chars().count())), Ok((70, 500)));
         assert_eq!(
             speak_args("en-US-GuyNeural", "- Wait!"),
-            ["tool", "run", "edge-tts", "--voice=en-US-GuyNeural", "--text=- Wait!"]
+            ["tool", "run", EDGE_TTS_PKG, "--voice=en-US-GuyNeural", "--text=- Wait!"]
         );
+    }
+
+    #[tokio::test]
+    async fn speak_enforces_strict_voice_allowlist() {
+        for ok in ["en-US-GuyNeural", "en_GB_Ryan", "a", &"a".repeat(64)] {
+            assert_eq!(validate_voice(ok), Ok(ok));
+        }
+        for bad in ["", " ", "-GuyNeural", "en US", "en:US", "en/US", "en;id", "en%PATH%", &"a".repeat(65)] {
+            assert!(validate_voice(bad).is_err(), "expected {bad:?} to be rejected");
+            let out = std::env::temp_dir().join("never-written.mp3");
+            let cancel = tokio_util::sync::CancellationToken::new();
+            assert!(speak("Hello", bad, &out, &cancel).await.is_err());
+        }
     }
 }

@@ -190,8 +190,14 @@ pub async fn send(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: Option<u32>, at
     save(st, &s.media_id, "user", json!({ "text": text, "cue": cue_idx, "at": at }), cue_idx).await;
     let (st2, s2) = (st.clone(), s.clone());
     tauri::async_runtime::spawn(async move {
-        let res = run(&st2, &s2, cue_idx).await;
+        let res = tokio::select! {
+            r = run(&st2, &s2, cue_idx) => r,
+            _ = s2.cancel.cancelled() => Ok(()),
+        };
         st2.agent_busy.lock().unwrap().remove(&s2.media_id);
+        if s2.cancel.is_cancelled() {
+            return;
+        }
         match res {
             Ok(()) => emit(&st2, "agent:done", json!({ "mediaId": s2.media_id })),
             Err(e) => {
@@ -201,6 +207,78 @@ pub async fn send(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: Option<u32>, at
         }
     });
     Ok(())
+}
+
+fn parse_tool_args(name: &str, raw: &str) -> Result<Value, String> {
+    serde_json::from_str::<Value>(raw).map_err(|e| {
+        json!({
+            "error": format!("Invalid JSON arguments for tool '{name}': {e}. Return valid JSON arguments.")
+        })
+        .to_string()
+    })
+}
+
+async fn run_agent_loop<F, Fut, C, CFut>(
+    cancel: &tokio_util::sync::CancellationToken,
+    messages: &mut Vec<Value>,
+    tool_defs: &[Value],
+    mut step: F,
+    mut on_tool: C,
+) -> Result<String, String>
+where
+    F: FnMut(Vec<Value>, Vec<Value>) -> Fut,
+    Fut: std::future::Future<Output = Result<client::Turn, String>>,
+    C: FnMut(String, Value) -> CFut,
+    CFut: std::future::Future<Output = String>,
+{
+    let mut final_text = String::new();
+    let mut ended_with_tools = false;
+    for _ in 0..MAX_ITERATIONS {
+        if cancel.is_cancelled() {
+            return Ok(String::new());
+        }
+        let turn = tokio::select! {
+            r = step(messages.clone(), tool_defs.to_vec()) => r?,
+            _ = cancel.cancelled() => return Ok(String::new()),
+        };
+        final_text.push_str(&turn.content);
+        if turn.tool_calls.is_empty() {
+            ended_with_tools = false;
+            break;
+        }
+        ended_with_tools = true;
+        let mut assistant = json!({
+            "role": "assistant",
+            "content": turn.content,
+            "tool_calls": turn.tool_calls.iter().map(|c| json!({ "id": c.id, "type": "function", "function": { "name": c.name, "arguments": c.arguments } })).collect::<Vec<_>>(),
+        });
+        // DeepSeek needs its own reasoning back in the tool loop; Anthropic needs the thinking blocks.
+        if !turn.reasoning.is_empty() { assistant["reasoning_content"] = json!(turn.reasoning); }
+        if !turn.thinking.is_empty() { assistant["anthropic_thinking"] = json!(turn.thinking); }
+        messages.push(assistant);
+        for c in &turn.tool_calls {
+            if cancel.is_cancelled() {
+                return Ok(String::new());
+            }
+            let out = match parse_tool_args(&c.name, &c.arguments) {
+                Ok(args) => on_tool(c.name.clone(), args).await,
+                Err(err_json) => err_json,
+            };
+            messages.push(json!({ "role": "tool", "tool_call_id": c.id, "content": out }));
+        }
+        final_text.push_str("\n\n");
+    }
+    if ended_with_tools && !cancel.is_cancelled() {
+        let turn = tokio::select! {
+            r = step(messages.clone(), Vec::new()) => r?,
+            _ = cancel.cancelled() => return Ok(String::new()),
+        };
+        final_text.push_str(&turn.content);
+    }
+    if cancel.is_cancelled() {
+        return Ok(String::new());
+    }
+    Ok(final_text.trim().to_string())
 }
 
 /// Lines `[i] mm:ss text` of the cues up to and including `cue_idx`.
@@ -239,32 +317,43 @@ async fn run(st: &Arc<AppState>, s: &Arc<Session>, cue_idx: Option<u32>) -> Resu
     }
     let tool_defs = tools::openai_tools();
     let ctx = tools::ToolCtx { st: st.clone(), session: s.clone(), cue_idx: cue_idx.unwrap_or(0) };
-    let mut final_text = String::new();
-    for _ in 0..MAX_ITERATIONS {
-        let mid = s.media_id.clone();
-        let st2 = st.clone();
-        let turn = client::chat_stream(st, super::tasks::Task::Chat, &s.media_id, "agent", &messages, &tool_defs, move |t| emit(&st2, "agent:delta", json!({ "mediaId": mid, "text": t }))).await.map_err(|e| e.to_string())?;
-        final_text.push_str(&turn.content);
-        if turn.tool_calls.is_empty() { break; }
-        let mut assistant = json!({
-            "role": "assistant",
-            "content": turn.content,
-            "tool_calls": turn.tool_calls.iter().map(|c| json!({ "id": c.id, "type": "function", "function": { "name": c.name, "arguments": c.arguments } })).collect::<Vec<_>>(),
-        });
-        // DeepSeek needs its own reasoning back in the tool loop; Anthropic needs the thinking blocks.
-        if !turn.reasoning.is_empty() { assistant["reasoning_content"] = json!(turn.reasoning); }
-        if !turn.thinking.is_empty() { assistant["anthropic_thinking"] = json!(turn.thinking); }
-        messages.push(assistant);
-        for c in &turn.tool_calls {
-            emit(st, "agent:tool", json!({ "mediaId": s.media_id, "name": c.name }));
-            let args: Value = serde_json::from_str(&c.arguments).unwrap_or(json!({}));
-            let out = tools::call_tool(&ctx, &c.name, args).await;
-            messages.push(json!({ "role": "tool", "tool_call_id": c.id, "content": out }));
-        }
-        final_text.push_str("\n\n");
+    let text = run_agent_loop(
+        &s.cancel,
+        &mut messages,
+        &tool_defs,
+        |msgs, defs| {
+            let st2 = st.clone();
+            let mid = s.media_id.clone();
+            async move {
+                let st_emit = st2.clone();
+                let mid_emit = mid.clone();
+                client::chat_stream(
+                    &st2,
+                    super::tasks::Task::Chat,
+                    &mid,
+                    "agent",
+                    &msgs,
+                    &defs,
+                    move |t| emit(&st_emit, "agent:delta", json!({ "mediaId": mid_emit, "text": t })),
+                )
+                .await
+                .map_err(|e| e.to_string())
+            }
+        },
+        |name, args| {
+            let st2 = st.clone();
+            let mid = s.media_id.clone();
+            let ctx2 = &ctx;
+            async move {
+                emit(&st2, "agent:tool", json!({ "mediaId": mid, "name": name }));
+                tools::call_tool(ctx2, &name, args).await
+            }
+        },
+    )
+    .await?;
+    if !text.is_empty() && !s.cancel.is_cancelled() {
+        save(st, &s.media_id, "assistant", json!({ "text": text }), cue_idx).await;
     }
-    let text = final_text.trim().to_string();
-    if !text.is_empty() { save(st, &s.media_id, "assistant", json!({ "text": text }), cue_idx).await; }
     Ok(())
 }
 
@@ -340,5 +429,84 @@ mod tests {
         c.execute("UPDATE proposal SET status='failed' WHERE id=1", []).unwrap();
         let h = load_history(&c, "film").unwrap();
         assert_eq!(h[0].status.as_deref(), Some("added"), "durable jobs win over a stale aggregate status");
+    }
+
+    #[tokio::test]
+    async fn loop_runs_final_summary_turn_after_max_tool_iterations_and_reports_bad_json_args() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut msgs = vec![json!({ "role": "user", "content": "explain" })];
+        let tool_defs = vec![json!({ "type": "function", "function": { "name": "vocab_lookup" } })];
+
+        let mut step_calls = 0usize;
+        let mut observed_summary_tools = None;
+        let mut observed_bad_json_msg = None;
+
+        let out = run_agent_loop(
+            &cancel,
+            &mut msgs,
+            &tool_defs,
+            |passed_msgs, passed_tools| {
+                step_calls += 1;
+                let n = step_calls;
+                if n == 2 {
+                    observed_bad_json_msg = passed_msgs.last().cloned();
+                }
+                if n == MAX_ITERATIONS + 1 {
+                    observed_summary_tools = Some(passed_tools.len());
+                }
+                async move {
+                    if n <= MAX_ITERATIONS {
+                        let args = if n == 1 { "{bad json" } else { "{\"words\":[\"hi\"]}" };
+                        Ok(client::Turn {
+                            content: String::new(),
+                            tool_calls: vec![client::ToolCall {
+                                id: format!("call_{n}"),
+                                name: "vocab_lookup".into(),
+                                arguments: args.into(),
+                            }],
+                            ..Default::default()
+                        })
+                    } else {
+                        Ok(client::Turn {
+                            content: "Final summary reply".into(),
+                            ..Default::default()
+                        })
+                    }
+                }
+            },
+            |name, _args| async move { format!("ok:{name}") },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(step_calls, MAX_ITERATIONS + 1);
+        assert_eq!(observed_summary_tools, Some(0));
+        assert_eq!(out, "Final summary reply");
+        let err_msg = observed_bad_json_msg.unwrap();
+        assert_eq!(err_msg["role"], "tool");
+        assert!(err_msg["content"].as_str().unwrap().contains("Invalid JSON arguments"));
+    }
+
+    #[tokio::test]
+    async fn loop_cancels_immediately_on_token_cancellation() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut msgs = vec![json!({ "role": "user", "content": "hi" })];
+        let cancel_clone = cancel.clone();
+        let out = run_agent_loop(
+            &cancel,
+            &mut msgs,
+            &[],
+            move |_, _| {
+                let c = cancel_clone.clone();
+                async move {
+                    c.cancel();
+                    std::future::pending::<Result<client::Turn, String>>().await
+                }
+            },
+            |_, _| async { unreachable!() },
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, "");
     }
 }

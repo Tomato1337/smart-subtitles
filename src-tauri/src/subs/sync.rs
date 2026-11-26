@@ -32,6 +32,9 @@ pub fn spawn(st: &Arc<AppState>, s: &Arc<Session>) {
 
 pub async fn run(st: Arc<AppState>, s: Arc<Session>) {
     if let Err(e) = once(&st, &s).await {
+        if s.cancel.is_cancelled() {
+            return;
+        }
         logs::log("asr", &format!("sync: failed: {e}"));
         let _ = notify::push(&st, Level::Warn, format!("Автоподгонка субтитров не удалась: {e}"));
     }
@@ -78,7 +81,10 @@ async fn once(st: &Arc<AppState>, s: &Arc<Session>) -> anyhow::Result<()> {
             return Ok(());
         }
         let t = asr::pcm_temp()?;
-        asr::extract_pcm(&s.src, audio_index, *w, WINDOW, &t.0).await?;
+        asr::extract_pcm_cancellable(&s.src, audio_index, *w, WINDOW, &t.0, &s.cancel).await?;
+        if s.cancel.is_cancelled() {
+            return Ok(());
+        }
         // The torrent stream sometimes answers with zeros; that must stay a transient failure, not a
         // "weak" verdict recorded for this subtitle file forever.
         if silent(&t.0) {
@@ -87,8 +93,14 @@ async fn once(st: &Arc<AppState>, s: &Arc<Session>) -> anyhow::Result<()> {
         files.push(t.0.clone());
         temps.push(t);
     }
-    let heard = asr::transcribe(st, &files).await?;
+    if s.cancel.is_cancelled() {
+        return Ok(());
+    }
+    let heard = asr::transcribe_cancellable(st, &files, &s.cancel).await?;
     drop(temps);
+    if s.cancel.is_cancelled() {
+        return Ok(());
+    }
     let fragments: Vec<Vec<asr::Word>> = heard
         .into_iter()
         .zip(&starts)

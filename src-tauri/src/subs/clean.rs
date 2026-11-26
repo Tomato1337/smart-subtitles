@@ -9,12 +9,22 @@ fn re(cell: &'static OnceLock<Regex>, pat: &str) -> &'static Regex {
 pub fn clean(text: &str) -> String {
     static ASS: OnceLock<Regex> = OnceLock::new();
     static HTML: OnceLock<Regex> = OnceLock::new();
+    static HTML_UNCLOSED: OnceLock<Regex> = OnceLock::new();
     static BRACKET: OnceLock<Regex> = OnceLock::new();
     static SPEAKER: OnceLock<Regex> = OnceLock::new();
     static SPACES: OnceLock<Regex> = OnceLock::new();
 
     let t = re(&ASS, r"\{[^}]*\}").replace_all(text, "");
-    let t = re(&HTML, r"<[^>]+>").replace_all(&t, "");
+    let html_re = re(&HTML, r"<[^<>]*>");
+    let mut cur = t.into_owned();
+    loop {
+        let next = html_re.replace_all(&cur, "");
+        if next == cur {
+            break;
+        }
+        cur = next.into_owned();
+    }
+    let t = re(&HTML_UNCLOSED, r"<(?:\s*[!/a-zA-Z?<][^>]*|\s*$)").replace_all(&cur, "");
     let t = t.replace("\\N", "\n").replace("\\n", "\n").replace('\r', "");
     let t = re(&BRACKET, r"\[[^\]]*\]").replace_all(&t, "");
     let lines: Vec<String> = t
@@ -50,5 +60,14 @@ mod tests {
     #[test]
     fn keeps_lowercase_colon_and_inline_parens() {
         assert_eq!(clean("Note: it works (mostly)"), "Note: it works (mostly)");
+    }
+    #[test]
+    fn strips_nested_and_unclosed_html_tags() {
+        assert_eq!(clean("<scr<script>ipt>alert(1)</scr</script>ipt>"), "alert(1)");
+        assert_eq!(clean("<<script>alert(1)</script>"), "");
+        assert_eq!(clean("Hello <<script>"), "Hello");
+        assert_eq!(clean("Hello <img src=x onerror=alert(1)"), "Hello");
+        assert_eq!(clean("Hi < <img src=x"), "Hi");
+        assert_eq!(clean("2 < 3"), "2 < 3");
     }
 }

@@ -159,7 +159,7 @@ pub async fn select(st: &Arc<AppState>, s: &Arc<Session>, c: SubCandidate) -> Re
             if !s.req.subtitles.iter().any(|r| &r.url == url) {
                 return Err("этого файла нет среди субтитров от Lampa".into());
             }
-            let bytes = sidecar::read_ref(st, url).await.map_err(|e| format!("субтитры от Lampa: {e}"))?;
+            let bytes = sidecar::read_ref(st, &s.src, url).await.map_err(|e| format!("субтитры от Lampa: {e}"))?;
             ("sidecar", label.clone(), true, bytes)
         }
         SubCandidate::Opensubtitles { file_id, release, exact, .. } => {

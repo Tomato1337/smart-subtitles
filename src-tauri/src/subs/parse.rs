@@ -54,10 +54,15 @@ fn secs(h: Option<&str>, m: &str, s: &str, frac: &str) -> f64 {
     h * 3600.0 + m * 60.0 + s + ms
 }
 
+fn block_sep_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"\r?\n[ \t]*\r?\n+").unwrap())
+}
+
 /// SRT and VTT share the block layout: optional id line, time line, text lines, blank line.
 fn parse_blocks(text: &str) -> Vec<RawCue> {
     let mut out = vec![];
-    for block in text.split("\n\n") {
+    for block in block_sep_re().split(text) {
         let lines: Vec<&str> = block.lines().collect();
         let first = lines.first().map(|l| l.trim_start_matches('\u{feff}').trim()).unwrap_or("");
         if first.starts_with("NOTE") || first.starts_with("STYLE") || first.starts_with("WEBVTT") { continue; }
@@ -144,5 +149,15 @@ mod tests {
         let c = parse("00:00:01.5 --> 00:00:02.0\nHi\n");
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].start, 1.5);
+    }
+
+    #[test]
+    fn splits_blocks_with_spaces_or_tabs_on_blank_lines() {
+        let srt = "1\n00:00:01,000 --> 00:00:02,000\nFirst\n   \n2\n00:00:03,000 --> 00:00:04,000\nSecond\n\t \n\n3\n00:00:05,000 --> 00:00:06,000\nThird\n";
+        let cues = parse(srt);
+        assert_eq!(cues.len(), 3);
+        assert_eq!(cues[0].text, "First");
+        assert_eq!(cues[1].text, "Second");
+        assert_eq!(cues[2].text, "Third");
     }
 }

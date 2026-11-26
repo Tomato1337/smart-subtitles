@@ -92,7 +92,8 @@ pub fn vint(b: &[u8], i: usize, keep_marker: bool) -> Option<(u64, usize)> {
         return None;
     }
     let len = first.leading_zeros() as usize + 1;
-    if len > 8 || i + len > b.len() {
+    let end = i.checked_add(len)?;
+    if len > 8 || end > b.len() {
         return None;
     }
     let mut v = if keep_marker { first as u64 } else { (first as u64) & (0xFF >> len) };
@@ -117,8 +118,10 @@ struct Header {
 
 fn header(b: &[u8], i: usize) -> Option<Header> {
     let (id, n) = vint(b, i, true)?;
-    let (size, m) = vint(b, i + n, false)?;
-    Some(Header { id, body: i + n + m, size, known: !unknown_size(size, m) })
+    let size_at = i.checked_add(n)?;
+    let (size, m) = vint(b, size_at, false)?;
+    let body = size_at.checked_add(m)?;
+    Some(Header { id, body, size, known: !unknown_size(size, m) })
 }
 
 /// Complete child elements of `b` as `(id, body)`; walking stops at a truncated or unknown-size one.
@@ -130,7 +133,8 @@ fn kids(b: &[u8]) -> Vec<(u64, &[u8])> {
         if !h.known {
             break;
         }
-        let Some(end) = h.body.checked_add(h.size as usize) else { break };
+        let Some(size) = usize::try_from(h.size).ok() else { break };
+        let Some(end) = h.body.checked_add(size) else { break };
         let Some(body) = b.get(h.body..end) else { break };
         out.push((h.id, body));
         i = end;
@@ -159,23 +163,27 @@ pub fn parse_head(buf: &[u8]) -> anyhow::Result<Head> {
         if !h.known {
             return Err(not_mkv());
         }
-        i = h.body + h.size as usize;
+        let h_size = usize::try_from(h.size).map_err(|_| not_mkv())?;
+        i = h.body.checked_add(h_size).ok_or_else(not_mkv)?;
     }
     let (id, n) = vint(buf, i, true).ok_or_else(not_mkv)?;
     if id != SEGMENT {
         return Err(not_mkv());
     }
-    let (_, m) = vint(buf, i + n, false).ok_or_else(not_mkv)?;
-    let seg_data = (i + n + m) as u64;
+    let size_at = i.checked_add(n).ok_or_else(not_mkv)?;
+    let (_, m) = vint(buf, size_at, false).ok_or_else(not_mkv)?;
+    let seg_off = size_at.checked_add(m).ok_or_else(not_mkv)?;
+    let seg_data = u64::try_from(seg_off).map_err(|_| not_mkv())?;
 
     let mut head = Head { seg_data, ..Default::default() };
-    let mut i = seg_data as usize;
+    let mut i = seg_off;
     while i < buf.len() {
         let Some(h) = header(buf, i) else { break };
         if !h.known {
             break;
         }
-        let Some(end) = h.body.checked_add(h.size as usize) else { break };
+        let Some(size) = usize::try_from(h.size).ok() else { break };
+        let Some(end) = h.body.checked_add(size) else { break };
         let Some(body) = buf.get(h.body..end) else { break };
         match h.id {
             CLUSTER => break,
@@ -206,7 +214,7 @@ pub fn merge_seek_head(head: &mut Head, body: &[u8]) {
         else {
             continue;
         };
-        let at = head.seg_data + pos;
+        let Some(at) = head.seg_data.checked_add(pos) else { continue };
         let slot = match want.0 {
             INFO => &mut head.info,
             TRACKS => &mut head.tracks,
@@ -300,10 +308,11 @@ pub fn parse_cues(cues_body: &[u8], seg_data: u64, track: u64, scale: f64) -> Ve
                 continue;
             }
             let (Some(cluster), Some(rel)) = (get(CUE_CLUSTER_POSITION), get(CUE_RELATIVE_POSITION)) else { continue };
+            let Some(abs_cluster) = seg_data.checked_add(cluster) else { continue };
             out.push(CueRef {
                 time: time as f64 * scale,
                 duration: get(CUE_DURATION).map(|d| d as f64 * scale),
-                cluster: seg_data + cluster,
+                cluster: abs_cluster,
                 rel,
             });
         }
@@ -335,13 +344,14 @@ fn locate<'a>(win: &'a [u8], track: u64) -> Option<Located<'a>> {
         if id != BLOCK_GROUP && id != SIMPLE_BLOCK {
             continue;
         }
-        let Some((size, m)) = vint(win, i + n, false) else { continue };
+        let Some(size_at) = i.checked_add(n) else { continue };
+        let Some((size, m)) = vint(win, size_at, false) else { continue };
         // The offsets before the real one can land on video payload, where a stray 0xA0/0xA3 and a
         // matching track byte would be a false match; a text block is never this big.
         if size == 0 || size > MAX_BLOCK {
             continue;
         }
-        let body = i + n + m;
+        let Some(body) = size_at.checked_add(m) else { continue };
         let Some(avail) = win.get(body..) else { continue };
         let group = id == BLOCK_GROUP;
         // Track number: the block's first vint, inside the group's Block child when there is one.
@@ -354,7 +364,9 @@ fn locate<'a>(win: &'a [u8], track: u64) -> Option<Located<'a>> {
             Some((t, _)) if t == track => {}
             _ => continue,
         }
-        return Some(Located { l, total: (n + m) as u64 + size, size, avail, group });
+        let Some(hdr_len) = u64::try_from(n + m).ok() else { continue };
+        let Some(total) = hdr_len.checked_add(size) else { continue };
+        return Some(Located { l, total, size, avail, group });
     }
     None
 }
@@ -365,12 +377,14 @@ fn find_child(b: &[u8], want: u64) -> Option<usize> {
     let mut i = 0;
     while i < b.len() {
         let (id, n) = vint(b, i, true)?;
-        let (size, m) = vint(b, i + n, false)?;
-        let body = i + n + m;
+        let size_at = i.checked_add(n)?;
+        let (size, m) = vint(b, size_at, false)?;
+        let body = size_at.checked_add(m)?;
         if id == want {
             return Some(body);
         }
-        i = body.checked_add(size as usize)?;
+        let step = usize::try_from(size).ok()?;
+        i = body.checked_add(step)?;
     }
     None
 }
@@ -385,10 +399,8 @@ pub fn block_span(win: &[u8], track: u64) -> Option<(usize, u64)> {
 /// The line stored at the cue position: `(cluster size vint length, BlockDuration ticks, text)`.
 pub fn block_in_window(win: &[u8], track: u64) -> Option<(usize, Option<u64>, String)> {
     let e = locate(win, track)?;
-    if e.size > e.avail.len() as u64 {
-        return None;
-    }
-    let body = &e.avail[..e.size as usize];
+    let size = usize::try_from(e.size).ok()?;
+    let body = e.avail.get(..size)?;
     let (block, duration) = if e.group {
         let k = kids(body);
         let block = k.iter().find(|(i, _)| *i == BLOCK).map(|(_, b)| *b)?;
@@ -707,6 +719,45 @@ mod tests {
         body.extend(el(BLOCK_DUR_ID, &uint(10)));
         let mut win = vec![0u8; 7];
         win.extend(el(GROUP_ID, &body));
+        assert_eq!(block_in_window(&win, 3), None);
+    }
+
+    #[test]
+    fn malformed_ebml_sizes_and_offsets_do_not_overflow_or_panic() {
+        assert_eq!(vint(&[0x80], usize::MAX, true), None);
+
+        let mut huge_ebml = EBML_ID.to_vec();
+        huge_ebml.extend_from_slice(&[0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE]);
+        huge_ebml.extend_from_slice(SEG_ID);
+        huge_ebml.push(0x80);
+        assert!(parse_head(&huge_ebml).is_err());
+
+        let point = el(
+            POINT_ID,
+            &[
+                el(TIME_ID, &uint(10)),
+                el(
+                    POS_ID,
+                    &[el(TRACK_ID, &uint(3)), el(CLUSTER_POS, &[0xFF; 8]), el(REL_POS, &uint(0))]
+                        .concat(),
+                ),
+            ]
+            .concat(),
+        );
+        assert!(parse_cues(&point, 100, 3, 0.001).is_empty());
+
+        let seek_head_body = el(
+            &[0x4D, 0xBB],
+            &[el(SEEK_WANT, CUES_ID), el(SEEK_POS, &[0xFF; 8])].concat(),
+        );
+        let mut head = Head { seg_data: 64, ..Default::default() };
+        merge_seek_head(&mut head, &seek_head_body);
+        assert!(head.cues.is_none());
+
+        let mut win = vec![0u8; 7];
+        win.extend_from_slice(GROUP_ID);
+        win.push(0x8A);
+        win.extend_from_slice(&[0x42, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0x00]);
         assert_eq!(block_in_window(&win, 3), None);
     }
 }

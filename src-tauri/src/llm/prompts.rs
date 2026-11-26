@@ -47,13 +47,43 @@ fn system_text(cefr: &str) -> String {
     s
 }
 
+fn cue_signature_db(c: &rusqlite::Connection, media_id: &str) -> rusqlite::Result<(i64, i64, i64)> {
+    c.query_row(
+        "SELECT count(*), coalesce(max(idx), -1), coalesce(sum(length(text)), 0) FROM cue WHERE media_id=?1",
+        [media_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+}
+
+async fn cue_signature(st: &AppState, media_id: &str) -> anyhow::Result<(i64, i64, i64)> {
+    let mid = media_id.to_string();
+    st.db(move |c| cue_signature_db(c, &mid))
+        .await
+        .map_err(anyhow::Error::msg)
+}
+
+fn cache_prefix_if_unchanged(
+    slot: &std::sync::Mutex<Option<Arc<Vec<Value>>>>,
+    before: (i64, i64, i64),
+    after: (i64, i64, i64),
+    built: &Arc<Vec<Value>>,
+) -> bool {
+    if before != after {
+        return false;
+    }
+    *slot.lock().unwrap() = Some(built.clone());
+    true
+}
+
 /// The byte-for-byte stable prefix (system, film+script, "OK") shared by every request for one media,
 /// which lets DeepSeek's automatic prefix cache hit. Built once per subtitle set.
 pub async fn prefix(st: &AppState, s: &Session) -> anyhow::Result<Arc<Vec<Value>>> {
     if let Some(p) = s.prefix.lock().unwrap().clone() { return Ok(p); }
+    let before = cue_signature(st, &s.media_id).await?;
     let media = media_context(st, s).await?;
     let p = prefix_for_media(st, &media).await?;
-    *s.prefix.lock().unwrap() = Some(p.clone());
+    let after = cue_signature(st, &s.media_id).await?;
+    cache_prefix_if_unchanged(&s.prefix, before, after, &p);
     Ok(p)
 }
 
@@ -126,5 +156,34 @@ mod tests {
         let t = system_text("B1");
         assert!(t.contains("уровня B1"));
         assert_eq!(t.lines().filter(|l| l.contains(" — ") && l.chars().next().is_some_and(|c| c.is_ascii_uppercase()) && l.split(' ').next().unwrap().contains('_') || l.starts_with("REDUCTIONS") || l.starts_with("ELLIPSIS") || l.starts_with("PASSIVE") || l.starts_with("WISH") || l.starts_with("INVERSION")).count() >= 40, true);
+    }
+
+    #[test]
+    fn cache_prefix_skips_stale_build_when_cue_signature_changes() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init(&c).unwrap();
+        c.execute("INSERT INTO media(id,kind,source_url,title,updated_at) VALUES('m1','file','u','t',0)", []).unwrap();
+        c.execute("INSERT INTO cue(media_id,idx,start,end,text) VALUES('m1',0,0.0,1.0,'Hello')", []).unwrap();
+
+        let before = cue_signature_db(&c, "m1").unwrap();
+        // Simulate concurrent embedded cues growth while prefix was being built.
+        c.execute("INSERT INTO cue(media_id,idx,start,end,text) VALUES('m1',1,1.0,2.0,'World')", []).unwrap();
+        let after = cue_signature_db(&c, "m1").unwrap();
+        assert_ne!(before, after);
+
+        let slot = std::sync::Mutex::new(None);
+        let built = Arc::new(vec![json!({ "role": "assistant", "content": "OK" })]);
+        assert!(!cache_prefix_if_unchanged(&slot, before, after, &built));
+        assert!(slot.lock().unwrap().is_none());
+
+        // Also catches cue replacement with identical cue count and different text length.
+        c.execute("UPDATE cue SET text='Different text here' WHERE media_id='m1' AND idx=1", []).unwrap();
+        let after_replace = cue_signature_db(&c, "m1").unwrap();
+        assert_ne!(after, after_replace);
+        assert!(!cache_prefix_if_unchanged(&slot, after, after_replace, &built));
+
+        // Stable signature caches cleanly.
+        assert!(cache_prefix_if_unchanged(&slot, after_replace, after_replace, &built));
+        assert!(slot.lock().unwrap().is_some());
     }
 }
