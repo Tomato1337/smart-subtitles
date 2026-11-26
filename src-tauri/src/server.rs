@@ -65,6 +65,7 @@ fn origin_of(h: &HeaderMap) -> Option<String> {
 
 async fn host_check(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Response {
     if !crate::setup::valid_loopback_host(req.headers(), st.listen_port) {
+        logs::log("events", &format!("http reject {}: 403 bad Host", req.uri().path()));
         return err(StatusCode::FORBIDDEN, "Host должен быть 127.0.0.1");
     }
     next.run(req).await
@@ -124,6 +125,9 @@ pub(crate) fn err(code: StatusCode, msg: impl Into<String>) -> Response {
 }
 
 pub(crate) fn health_allowed_with(lampa_origins: &[String], port: u16, headers: &HeaderMap) -> Result<(), &'static str> {
+    if !crate::setup::valid_loopback_host(headers, port) {
+        return Err("Host должен быть 127.0.0.1");
+    }
     if headers.contains_key(header::ORIGIN) {
         let Some(o) = origin_of(headers) else {
             return Err("origin не разрешён");
@@ -131,13 +135,13 @@ pub(crate) fn health_allowed_with(lampa_origins: &[String], port: u16, headers: 
         if !lampa_origins.contains(&o) {
             return Err("origin не разрешён");
         }
-        return Ok(());
     }
-    crate::setup::agent_public_allowed(headers, port)
+    Ok(())
 }
 
 async fn health(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if let Err(msg) = health_allowed_with(&st.cfg().lampa.origins, st.listen_port, &headers) {
+        logs::log("events", "http reject /api/health: 403 origin");
         return err(StatusCode::FORBIDDEN, msg);
     }
     Json(json!({ "ok": true })).into_response()
@@ -183,7 +187,16 @@ pub(crate) fn validate_http_session_request(req: &SessionRequest) -> Result<(), 
     Ok(())
 }
 
-pub(crate) fn authorize_session_post_with(lampa_origins: &[String], agent_token: &str, headers: &HeaderMap) -> Result<Option<String>, (StatusCode, &'static str)> {
+fn referer_origin_if_allowed(lampa_origins: &[String], headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get(header::REFERER)?.to_str().ok()?;
+    let origin = url::Url::parse(raw).ok()?.origin().ascii_serialization();
+    lampa_origins.iter().find(|o| *o == &origin).cloned()
+}
+
+/// Authorizes `POST /api/session`: when `Origin` is present (browser requests), it must match
+/// `lampa.origins`; when `Origin` is absent (e.g., Lampa Desktop with `webSecurity: false` or
+/// local tools behind loopback `Host`), allow and attribute matching `Referer` if present.
+pub(crate) fn authorize_session_post_with(lampa_origins: &[String], headers: &HeaderMap) -> Result<Option<String>, (StatusCode, &'static str)> {
     if headers.contains_key(header::ORIGIN) {
         let Some(o) = origin_of(headers) else {
             return Err((StatusCode::FORBIDDEN, "origin не разрешён"));
@@ -193,32 +206,34 @@ pub(crate) fn authorize_session_post_with(lampa_origins: &[String], agent_token:
         }
         return Ok(Some(o));
     }
-    if !crate::setup::sec_fetch_safe(headers) {
-        return Err((StatusCode::FORBIDDEN, "доступ из браузера без разрешённого origin закрыт"));
-    }
-    if !crate::setup::valid_bearer(headers, agent_token) {
-        return Err((StatusCode::UNAUTHORIZED, "требуется origin из lampa.origins или Bearer-токен"));
-    }
-    Ok(None)
+    Ok(referer_origin_if_allowed(lampa_origins, headers))
 }
 
 pub(crate) fn authorize_session_post(st: &AppState, headers: &HeaderMap) -> Result<Option<String>, (StatusCode, &'static str)> {
-    authorize_session_post_with(&st.cfg().lampa.origins, &st.agent_token, headers)
+    authorize_session_post_with(&st.cfg().lampa.origins, headers)
 }
 
 async fn post_session(State(st): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
     let allowed_origin = match authorize_session_post(&st, &headers) {
         Ok(o) => o,
-        Err((code, msg)) => return err(code, msg),
+        Err((code, msg)) => {
+            logs::log("events", &format!("http reject /api/session: {} origin", code.as_u16()));
+            return err(code, msg);
+        }
     };
     if !is_json_content_type(&headers) {
+        logs::log("events", "http reject /api/session: 415 content-type");
         return err(StatusCode::UNSUPPORTED_MEDIA_TYPE, "требуется Content-Type: application/json");
     }
     let req: SessionRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
-        Err(e) => return err(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => {
+            logs::log("events", "http reject /api/session: 400 invalid json");
+            return err(StatusCode::BAD_REQUEST, e.to_string());
+        }
     };
     if let Err(msg) = validate_http_session_request(&req) {
+        logs::log("events", &format!("http reject /api/session: 400 {msg}"));
         return err(StatusCode::BAD_REQUEST, msg);
     }
     if let Some(o) = allowed_origin {
@@ -226,7 +241,10 @@ async fn post_session(State(st): State<Arc<AppState>>, headers: HeaderMap, body:
     }
     match session::open(&st, req, None).await {
         Ok(id) => Json(json!({ "ok": true, "sessionId": id })).into_response(),
-        Err(e) => err(StatusCode::BAD_REQUEST, e),
+        Err(e) => {
+            logs::log("events", "http reject /api/session: 400 session::open");
+            err(StatusCode::BAD_REQUEST, e)
+        }
     }
 }
 
@@ -454,18 +472,37 @@ mod tests {
             h
         };
         let lampa = vec!["https://lampa.example.com".to_string()];
-        let tok = "agent-secret-token";
 
-        // /api/session requires allowed Origin OR (no Origin + valid Bearer token).
-        assert!(authorize_session_post_with(&lampa, tok, &make_headers(&[])).is_err());
-        assert!(authorize_session_post_with(&lampa, tok, &make_headers(&[("Origin", "https://evil.example")])).is_err());
+        // /api/session allows configured Origin, or absent Origin (Lampa Desktop webSecurity: false
+        // sending Sec-Fetch-Site: cross-site without Origin), while rejecting disallowed/null/file Origins.
+        assert_eq!(authorize_session_post_with(&lampa, &make_headers(&[])).unwrap(), None);
         assert_eq!(
-            authorize_session_post_with(&lampa, tok, &make_headers(&[("Origin", "https://lampa.example.com")])).unwrap(),
-            Some("https://lampa.example.com".into())
+            authorize_session_post_with(
+                &lampa,
+                &make_headers(&[
+                    ("Host", "127.0.0.1:47800"),
+                    ("Sec-Fetch-Site", "cross-site"),
+                    ("Sec-Fetch-Mode", "cors"),
+                    ("Sec-Fetch-Dest", "empty"),
+                ]),
+            )
+            .unwrap(),
+            None
         );
         assert_eq!(
-            authorize_session_post_with(&lampa, tok, &make_headers(&[("Authorization", "Bearer agent-secret-token")])).unwrap(),
-            None
+            authorize_session_post_with(
+                &lampa,
+                &make_headers(&[("Referer", "https://lampa.example.com/movie/1")]),
+            )
+            .unwrap(),
+            Some("https://lampa.example.com".into())
+        );
+        assert!(authorize_session_post_with(&lampa, &make_headers(&[("Origin", "https://evil.example")])).is_err());
+        assert!(authorize_session_post_with(&lampa, &make_headers(&[("Origin", "null")])).is_err());
+        assert!(authorize_session_post_with(&lampa, &make_headers(&[("Origin", "file://")])).is_err());
+        assert_eq!(
+            authorize_session_post_with(&lampa, &make_headers(&[("Origin", "https://lampa.example.com")])).unwrap(),
+            Some("https://lampa.example.com".into())
         );
 
         // /media/* requires valid media_token() and only allows Tauri/Lampa origins.
@@ -480,9 +517,23 @@ mod tests {
             Some("tauri://localhost".into())
         );
 
-        // /api/health allows loopback curl, rejects cross-site Sec-Fetch and unallowed Origins.
+        // /api/health allows loopback curl and Lampa Desktop (no Origin + Sec-Fetch-Site: cross-site),
+        // while rejecting foreign Host or unallowed Origins.
         assert!(health_allowed_with(&lampa, 47800, &make_headers(&[("Host", "127.0.0.1:47800")])).is_ok());
-        assert!(health_allowed_with(&lampa, 47800, &make_headers(&[("Host", "127.0.0.1:47800"), ("Sec-Fetch-Site", "cross-site")])).is_err());
+        assert!(
+            health_allowed_with(
+                &lampa,
+                47800,
+                &make_headers(&[
+                    ("Host", "127.0.0.1:47800"),
+                    ("Sec-Fetch-Site", "cross-site"),
+                    ("Sec-Fetch-Mode", "cors"),
+                    ("Sec-Fetch-Dest", "empty"),
+                ]),
+            )
+            .is_ok()
+        );
+        assert!(health_allowed_with(&lampa, 47800, &make_headers(&[("Host", "evil.example:47800")])).is_err());
         assert!(health_allowed_with(&lampa, 47800, &make_headers(&[("Host", "127.0.0.1:47800"), ("Origin", "https://evil.example")])).is_err());
         assert!(health_allowed_with(&lampa, 47800, &make_headers(&[("Host", "127.0.0.1:47800"), ("Origin", "https://lampa.example.com")])).is_ok());
 
