@@ -106,48 +106,144 @@ fn task_text(cues: &[(u32, String)], cefr_hint: &str) -> String {
     )
 }
 
-async fn run_batch(st: &Arc<AppState>, s: &Arc<Session>, first: u32, blocked: &CancellationToken) -> anyhow::Result<bool> {
-    let mid = s.media_id.clone();
-    let cues: Vec<(u32, String)> = st
-        .db(move |c| {
-            c.prepare("SELECT idx,text FROM cue WHERE media_id=?1 AND idx>=?2 AND idx<?3 ORDER BY idx")?
-                .query_map(params![mid, first, first + BATCH], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .collect()
-        })
-        .await.map_err(anyhow::Error::msg)?;
-    if cues.is_empty() { return Ok(true); }
+fn load_missing_cues_db(
+    c: &rusqlite::Connection,
+    media_id: &str,
+    first: u32,
+) -> rusqlite::Result<(u32, Vec<(u32, String)>)> {
+    let end = first + BATCH;
+    let total: u32 = c.query_row(
+        "SELECT count(*) FROM cue WHERE media_id=?1 AND idx>=?2 AND idx<?3",
+        params![media_id, first, end],
+        |r| r.get(0),
+    )?;
+    let cues = c
+        .prepare(
+            "SELECT idx,text FROM cue WHERE media_id=?1 AND idx>=?2 AND idx<?3 AND (ru IS NULL OR trim(ru)='') ORDER BY idx",
+        )?
+        .query_map(params![media_id, first, end], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((total, cues))
+}
 
-    let cefr = st.cfg().learner.cefr.clone();
+fn save_batch_db(
+    c: &rusqlite::Connection,
+    media_id: &str,
+    first: u32,
+    anns: &[CueAnnotation],
+) -> rusqlite::Result<u32> {
+    let end = first + BATCH;
+    let tx = c.unchecked_transaction()?;
+    for a in anns {
+        tx.execute("DELETE FROM chunk WHERE media_id=?1 AND cue_idx=?2", params![media_id, a.idx])?;
+        tx.execute("DELETE FROM cue_pattern WHERE media_id=?1 AND cue_idx=?2", params![media_id, a.idx])?;
+        tx.execute("UPDATE cue SET ru=?1 WHERE media_id=?2 AND idx=?3", params![a.ru, media_id, a.idx])?;
+        for ch in &a.chunks {
+            tx.execute(
+                "INSERT OR REPLACE INTO chunk VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                params![media_id, a.idx, ch.start_char, ch.end_char, ch.text, ch.kind, ch.ru],
+            )?;
+        }
+        for p in &a.patterns {
+            tx.execute(
+                "INSERT OR REPLACE INTO cue_pattern VALUES(?1,?2,?3,?4,?5)",
+                params![media_id, a.idx, p.pattern_id, p.start_char, p.end_char],
+            )?;
+        }
+    }
+    let missing: u32 = tx.query_row(
+        "SELECT count(*) FROM cue WHERE media_id=?1 AND idx>=?2 AND idx<?3 AND (ru IS NULL OR trim(ru)='')",
+        params![media_id, first, end],
+        |r| r.get(0),
+    )?;
+    let status = if missing == 0 { "done" } else { "failed" };
+    tx.execute("INSERT OR REPLACE INTO annot_batch VALUES(?1,?2,?3)", params![media_id, first, status])?;
+    tx.commit()?;
+    Ok(missing)
+}
+
+async fn request_batch(
+    st: &Arc<AppState>,
+    s: &Arc<Session>,
+    first: u32,
+    cues: &[(u32, String)],
+    cefr: &str,
+    blocked: &CancellationToken,
+) -> anyhow::Result<Option<Vec<CueAnnotation>>> {
     let raw: RawBatch = tokio::select! {
         r = async {
             let mut messages = (*prompts::prefix(st, s).await?).clone();
-            messages.push(json!({ "role": "user", "content": task_text(&cues, &cefr) }));
+            messages.push(json!({ "role": "user", "content": task_text(cues, cefr) }));
             client::chat_json(st, super::tasks::Task::Annotate, &s.media_id, &format!("annotate {first}"), &messages, 8000).await
         } => r?,
-        _ = blocked.cancelled() => return Ok(false),
+        _ = blocked.cancelled() => return Ok(None),
     };
-    let anns = process(&cues, raw);
-    if anns.len() * 2 < cues.len() {
+    Ok(Some(process(cues, raw)))
+}
+
+async fn run_batch(st: &Arc<AppState>, s: &Arc<Session>, first: u32, blocked: &CancellationToken) -> anyhow::Result<bool> {
+    let mid = s.media_id.clone();
+    let (total_in_batch, cues) = st
+        .db(move |c| load_missing_cues_db(c, &mid, first))
+        .await
+        .map_err(anyhow::Error::msg)?;
+    if total_in_batch == 0 {
+        return Ok(true);
+    }
+    if cues.is_empty() {
+        let mid = s.media_id.clone();
+        st.db(move |c| save_batch_db(c, &mid, first, &[]))
+            .await
+            .map_err(anyhow::Error::msg)?;
+        return Ok(true);
+    }
+
+    let cefr = st.cfg().learner.cefr.clone();
+    let Some(anns) = request_batch(st, s, first, &cues, &cefr, blocked).await? else {
+        return Ok(false);
+    };
+    if anns.is_empty() || anns.len() * 2 < cues.len() {
+        if !anns.is_empty() {
+            let (mid, a2) = (s.media_id.clone(), anns.clone());
+            st.db(move |c| save_batch_db(c, &mid, first, &a2))
+                .await
+                .map_err(anyhow::Error::msg)?;
+            let _ = st.app.emit("annot:updated", json!({ "mediaId": s.media_id, "cues": anns }));
+        }
         anyhow::bail!("ответ не совпал с репликами: {} из {}", anns.len(), cues.len());
     }
 
     let (mid, a2) = (s.media_id.clone(), anns.clone());
-    st.db(move |c| {
-        let tx = c.unchecked_transaction()?;
-        for a in &a2 {
-            tx.execute("UPDATE cue SET ru=?1 WHERE media_id=?2 AND idx=?3", params![a.ru, mid, a.idx])?;
-            for ch in &a.chunks {
-                tx.execute("INSERT OR REPLACE INTO chunk VALUES(?1,?2,?3,?4,?5,?6,?7)", params![mid, a.idx, ch.start_char, ch.end_char, ch.text, ch.kind, ch.ru])?;
-            }
-            for p in &a.patterns {
-                tx.execute("INSERT OR REPLACE INTO cue_pattern VALUES(?1,?2,?3,?4,?5)", params![mid, a.idx, p.pattern_id, p.start_char, p.end_char])?;
+    let mut missing = st
+        .db(move |c| save_batch_db(c, &mid, first, &a2))
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let _ = st.app.emit("annot:updated", json!({ "mediaId": s.media_id, "cues": anns }));
+
+    if missing > 0 && !blocked.is_cancelled() {
+        let mid = s.media_id.clone();
+        let (_, retry_cues) = st
+            .db(move |c| load_missing_cues_db(c, &mid, first))
+            .await
+            .map_err(anyhow::Error::msg)?;
+        if !retry_cues.is_empty() {
+            let Some(more) = request_batch(st, s, first, &retry_cues, &cefr, blocked).await? else {
+                return Ok(false);
+            };
+            if !more.is_empty() {
+                let (mid, a3) = (s.media_id.clone(), more.clone());
+                missing = st
+                    .db(move |c| save_batch_db(c, &mid, first, &a3))
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                let _ = st.app.emit("annot:updated", json!({ "mediaId": s.media_id, "cues": more }));
             }
         }
-        tx.execute("INSERT OR REPLACE INTO annot_batch VALUES(?1,?2,'done')", params![mid, first])?;
-        tx.commit()
-    })
-    .await.map_err(anyhow::Error::msg)?;
-    let _ = st.app.emit("annot:updated", json!({ "mediaId": s.media_id, "cues": anns }));
+    }
+
+    if missing > 0 {
+        anyhow::bail!("неполный разбор пачки: осталось {missing} непереведённых реплик");
+    }
     Ok(true)
 }
 
@@ -420,19 +516,32 @@ pub fn restart(st: &Arc<AppState>, s: &Arc<Session>) -> bool {
     start(st, s, None)
 }
 
+fn prepare_start_run(
+    slot: &Mutex<Arc<Run>>,
+    parent_cancel: &CancellationToken,
+    enabled: bool,
+    first: Option<u32>,
+) -> Option<Arc<Run>> {
+    let mut current = slot.lock().unwrap();
+    let is_running = current.status.lock().unwrap().0;
+    let is_blocked = current.blocked.is_cancelled();
+    if first.is_some() && is_running && !is_blocked {
+        return None;
+    }
+    current.cancel.cancel();
+    let run = Arc::new(Run {
+        cancel: parent_cancel.child_token(),
+        status: Mutex::new((enabled, None)),
+        ..Default::default()
+    });
+    *current = run.clone();
+    Some(run)
+}
+
 fn start(st: &Arc<AppState>, s: &Arc<Session>, first: Option<u32>) -> bool {
     let enabled = st.cfg().llm_enabled();
-    let run = {
-        let mut current = s.annot_run.lock().unwrap();
-        if first.is_some() && (current.blocked.is_cancelled() || current.status.lock().unwrap().0) { return false; }
-        current.cancel.cancel();
-        let run = Arc::new(Run {
-            cancel: s.cancel.child_token(),
-            status: Mutex::new((enabled, None)),
-            ..Default::default()
-        });
-        *current = run.clone();
-        run
+    let Some(run) = prepare_start_run(&s.annot_run, &s.cancel, enabled, first) else {
+        return false;
     };
     if !enabled { return false; }
     let (st, s) = (st.clone(), s.clone());
@@ -567,5 +676,65 @@ mod tests {
         let generic = failure(&anyhow::anyhow!("boom"));
         assert!(!generic.blocked);
         assert_eq!(generic.message, "Не удалось разобрать диалоги. Подробности в llm.log");
+    }
+
+    #[test]
+    fn save_batch_db_clears_stale_rows_and_withholds_done_until_complete() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init(&c).unwrap();
+        c.execute("INSERT INTO media(id,kind,source_url,title,updated_at) VALUES('m1','file','u','t',0)", []).unwrap();
+        c.execute("INSERT INTO cue(media_id,idx,start,end,text) VALUES('m1',0,0.0,1.0,'Hi'),('m1',1,1.0,2.0,'Bye')", []).unwrap();
+        // Pre-existing stale chunk & pattern on cue 0.
+        c.execute("INSERT INTO chunk VALUES('m1',0,0,2,'Hi','slang','привет')", []).unwrap();
+        c.execute("INSERT INTO cue_pattern VALUES('m1',0,'PASSIVE',0,2)", []).unwrap();
+
+        // Save partial batch (only cue 0, cue 1 still missing).
+        let partial = vec![CueAnnotation {
+            idx: 0,
+            ru: "Привет".into(),
+            chunks: vec![Chunk { start_char: 0, end_char: 2, text: "Hi".into(), kind: "idiom".into(), ru: "здорова".into() }],
+            patterns: vec![],
+        }];
+        let missing = save_batch_db(&c, "m1", 0, &partial).unwrap();
+        assert_eq!(missing, 1);
+
+        let batch_status: String = c.query_row("SELECT status FROM annot_batch WHERE media_id='m1' AND first_idx=0", [], |r| r.get(0)).unwrap();
+        assert_eq!(batch_status, "failed");
+
+        // Stale chunk and pattern rows on cue 0 were deleted before inserting new ones.
+        let pat_n: i64 = c.query_row("SELECT count(*) FROM cue_pattern WHERE media_id='m1' AND cue_idx=0", [], |r| r.get(0)).unwrap();
+        assert_eq!(pat_n, 0);
+        let chunk_kind: String = c.query_row("SELECT kind FROM chunk WHERE media_id='m1' AND cue_idx=0", [], |r| r.get(0)).unwrap();
+        assert_eq!(chunk_kind, "idiom");
+
+        // Missing-cue query targets only cue 1.
+        let (total, todo) = load_missing_cues_db(&c, "m1", 0).unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(todo, vec![(1, "Bye".to_string())]);
+
+        // Completing cue 1 flips batch status to 'done'.
+        let rest = vec![CueAnnotation { idx: 1, ru: "Пока".into(), chunks: vec![], patterns: vec![] }];
+        let missing = save_batch_db(&c, "m1", 0, &rest).unwrap();
+        assert_eq!(missing, 0);
+        let batch_status: String = c.query_row("SELECT status FROM annot_batch WHERE media_id='m1' AND first_idx=0", [], |r| r.get(0)).unwrap();
+        assert_eq!(batch_status, "done");
+    }
+
+    #[test]
+    fn prepare_start_run_allows_explicit_retry_to_clear_blocked_state() {
+        let parent = CancellationToken::new();
+        let blocked_run = Arc::new(Run::default());
+        blocked_run.blocked.cancel();
+        *blocked_run.status.lock().unwrap() = (false, Some(AnnotFailure { message: "HTTP 401".into(), blocked: true }));
+        let slot = Mutex::new(blocked_run.clone());
+
+        // Single-batch retry (first = Some) must replace a blocked run and reset `blocked`.
+        let next = prepare_start_run(&slot, &parent, true, Some(40)).expect("retry should clear blocked");
+        assert!(!next.blocked.is_cancelled());
+        assert!(next.status.lock().unwrap().1.is_none());
+        assert!(blocked_run.cancel.is_cancelled());
+
+        // While an unblocked run is actively executing, single-batch retry steps aside.
+        assert!(prepare_start_run(&slot, &parent, true, Some(40)).is_none());
     }
 }

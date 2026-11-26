@@ -120,7 +120,7 @@ pub fn cache_path(file_id: i64) -> PathBuf {
 
 pub async fn download(st: &AppState, file_id: i64) -> anyhow::Result<Download> {
     let cache = cache_path(file_id);
-    if let Ok(bytes) = tokio::fs::read(&cache).await {
+    if let Ok(bytes) = super::sidecar::read_file_bounded(&cache, super::sidecar::MAX_SUB_BYTES).await {
         return Ok(Download::Bytes(bytes));
     }
     // Anonymous downloads work with the API key alone (smaller daily quota); login only raises it.
@@ -135,7 +135,8 @@ pub async fn download(st: &AppState, file_id: i64) -> anyhow::Result<Download> {
         if status == 406 || d["remaining"].as_i64() == Some(0) { return Ok(Download::QuotaExhausted); }
         bail!("OpenSubtitles download: HTTP {status}");
     };
-    let bytes = st.http.get(link).send().await?.error_for_status()?.bytes().await?.to_vec();
+    let resp = super::sidecar::no_redirect_http(link)?.get(link).send().await?;
+    let bytes = super::sidecar::read_bounded(resp, super::sidecar::MAX_SUB_BYTES).await?;
     if let Some(dir) = cache.parent() { let _ = tokio::fs::create_dir_all(dir).await; }
     let _ = tokio::fs::write(&cache, &bytes).await;
     Ok(Download::Bytes(bytes))

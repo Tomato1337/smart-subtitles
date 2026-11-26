@@ -345,13 +345,28 @@ impl SseAccumulator {
         let d = &v["choices"][0]["delta"];
         if let Some(r) = d["reasoning_content"].as_str() { self.turn.reasoning.push_str(r); }
         if let Some(tcs) = d["tool_calls"].as_array() {
+            const MAX_TOOL_CALLS_PER_TURN: usize = 64;
             for tc in tcs {
-                let i = tc["index"].as_u64().unwrap_or(0) as usize;
-                while self.turn.tool_calls.len() <= i { self.turn.tool_calls.push(ToolCall::default()); }
+                let Some(i) = (match tc.get("index") {
+                    Some(v) if !v.is_null() => v.as_u64().and_then(|n| usize::try_from(n).ok()),
+                    _ => Some(0),
+                })
+                .filter(|&i| i < MAX_TOOL_CALLS_PER_TURN) else {
+                    continue;
+                };
+                while self.turn.tool_calls.len() <= i {
+                    self.turn.tool_calls.push(ToolCall::default());
+                }
                 let slot = &mut self.turn.tool_calls[i];
-                if let Some(id) = tc["id"].as_str() { slot.id = id.to_string(); }
-                if let Some(n) = tc["function"]["name"].as_str() { slot.name.push_str(n); }
-                if let Some(a) = tc["function"]["arguments"].as_str() { slot.arguments.push_str(a); }
+                if let Some(id) = tc["id"].as_str().filter(|s| !s.is_empty()) {
+                    slot.id = id.to_string();
+                }
+                if let Some(n) = tc["function"]["name"].as_str() {
+                    slot.name.push_str(n);
+                }
+                if let Some(a) = tc["function"]["arguments"].as_str() {
+                    slot.arguments.push_str(a);
+                }
             }
         }
         let text = d["content"].as_str().filter(|t| !t.is_empty())?;
@@ -443,8 +458,38 @@ impl SseAccumulator {
     }
 }
 
+async fn consume_sse_stream<S, B, E>(
+    mut stream: S,
+    acc: &mut SseAccumulator,
+    mut on_text: impl FnMut(&str),
+) -> anyhow::Result<()>
+where
+    S: futures_util::Stream<Item = Result<B, E>> + Unpin,
+    B: AsRef<[u8]>,
+    anyhow::Error: From<E>,
+{
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        buf.extend_from_slice(chunk?.as_ref());
+        while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
+            let line_bytes: Vec<u8> = buf.drain(..=nl).collect();
+            let line = String::from_utf8_lossy(&line_bytes);
+            if let Some(t) = acc.feed(line.trim()) {
+                on_text(&t);
+            }
+        }
+    }
+    if !buf.is_empty() {
+        let line = String::from_utf8_lossy(&buf);
+        if let Some(t) = acc.feed(line.trim()) {
+            on_text(&t);
+        }
+    }
+    Ok(())
+}
+
 /// Streaming completion with tools; `on_text` receives each text delta as it arrives.
-pub(crate) async fn stream_completion(http: &reqwest::Client, t: &Target, tag: &str, messages: &[Value], tools: &[Value], usage: &mut Usage, mut on_text: impl FnMut(&str)) -> anyhow::Result<Turn> {
+pub(crate) async fn stream_completion(http: &reqwest::Client, t: &Target, tag: &str, messages: &[Value], tools: &[Value], usage: &mut Usage, on_text: impl FnMut(&str)) -> anyhow::Result<Turn> {
     if t.endpoint.api_key.is_empty() { return Err(MissingKeyError.into()); }
     let max_tokens = 2000 + t.effort.extra_tokens();
     let mut b = match t.endpoint.api {
@@ -458,16 +503,8 @@ pub(crate) async fn stream_completion(http: &reqwest::Client, t: &Target, tag: &
         Api::Anthropic => anthropic_body(&t.model, t.effort, messages, tools, max_tokens, true),
     };
     let resp = send(http, t, &mut b, Duration::from_secs(180)).await?;
-    let mut stream = resp.bytes_stream();
-    let mut buf = String::new();
     let mut acc = SseAccumulator { api: t.endpoint.api, ..Default::default() };
-    while let Some(chunk) = stream.next().await {
-        buf.push_str(&String::from_utf8_lossy(&chunk?));
-        while let Some(nl) = buf.find('\n') {
-            let line: String = buf.drain(..=nl).collect();
-            if let Some(t) = acc.feed(line.trim()) { on_text(&t); }
-        }
-    }
+    consume_sse_stream(resp.bytes_stream(), &mut acc, on_text).await?;
     if let Some(u) = &acc.usage {
         *usage = Usage::from_api(t.endpoint.api, u);
         log_usage(tag, usage);
@@ -666,5 +703,45 @@ mod tests {
         assert_eq!(extract_json("```json\n{\"a\":1}\n```"), "{\"a\":1}");
         assert_eq!(extract_json("  {\"a\":{\"b\":2}}  "), "{\"a\":{\"b\":2}}");
         assert_eq!(extract_json("нет json"), "нет json");
+    }
+
+    #[tokio::test]
+    async fn consume_sse_stream_decodes_multibyte_utf8_split_across_chunks() {
+        let payload = "data: {\"choices\":[{\"delta\":{\"content\":\"Привет 👋 мир!\"}}]}\ndata: [DONE]\n";
+        // Split into 3-byte chunks so Cyrillic (2 bytes) and emoji (4 bytes) cross chunk boundaries.
+        let chunks: Vec<anyhow::Result<Vec<u8>>> = payload
+            .as_bytes()
+            .chunks(3)
+            .map(|c| Ok(c.to_vec()))
+            .collect();
+        let mut acc = SseAccumulator { api: Api::Openai, ..Default::default() };
+        let mut streamed = String::new();
+        consume_sse_stream(futures_util::stream::iter(chunks), &mut acc, |t| streamed.push_str(t))
+            .await
+            .unwrap();
+        assert_eq!(streamed, "Привет 👋 мир!");
+        assert_eq!(acc.turn.content, "Привет 👋 мир!");
+        assert!(!streamed.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn feed_openai_bounds_tool_call_index_and_preserves_non_empty_id() {
+        let mut acc = SseAccumulator { api: Api::Openai, ..Default::default() };
+        acc.feed_openai(&json!({
+            "choices": [{ "delta": { "tool_calls": [
+                { "index": 0, "id": "call_abc", "function": { "name": "vocab_lookup" } }
+            ] } }]
+        }));
+        // Empty id on continuation chunk must NOT clobber "call_abc"; absurd index must be ignored.
+        acc.feed_openai(&json!({
+            "choices": [{ "delta": { "tool_calls": [
+                { "index": 0, "id": "", "function": { "arguments": "{\"words\":[]}" } },
+                { "index": u64::MAX, "id": "evil", "function": { "name": "boom" } }
+            ] } }]
+        }));
+        assert_eq!(acc.turn.tool_calls.len(), 1);
+        assert_eq!(acc.turn.tool_calls[0].id, "call_abc");
+        assert_eq!(acc.turn.tool_calls[0].name, "vocab_lookup");
+        assert_eq!(acc.turn.tool_calls[0].arguments, "{\"words\":[]}");
     }
 }

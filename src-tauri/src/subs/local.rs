@@ -72,7 +72,8 @@ fn parse_streams(json: &[u8]) -> anyhow::Result<(Vec<mkv::TextTrack>, bool)> {
 }
 
 async fn streams(file: &Path) -> anyhow::Result<(Vec<mkv::TextTrack>, bool)> {
-    let fut = crate::proc::command("ffprobe")
+    let ffprobe = crate::proc::find("ffprobe").ok_or_else(|| anyhow!("ffprobe не найден"))?;
+    let fut = crate::proc::command(ffprobe)
         .args(["-v", "error", "-select_streams", "s", "-show_streams", "-of", "json"])
         .arg(file)
         .kill_on_drop(true)
@@ -117,7 +118,8 @@ pub async fn tracks(file: &Path) -> Result<Vec<mkv::TextTrack>, String> {
 
 /// The track as SRT text.
 async fn extract(file: &Path, index: u64, cancel: &tokio_util::sync::CancellationToken) -> Result<String, String> {
-    let fut = crate::proc::background("ffmpeg")
+    let ffmpeg = crate::proc::find("ffmpeg").ok_or_else(|| "ffmpeg не найден".to_string())?;
+    let fut = crate::proc::background(ffmpeg)
         .args(["-v", "error", "-nostdin", "-i"])
         .arg(file)
         .args(["-map", &format!("0:{index}"), "-f", "srt", "-"])

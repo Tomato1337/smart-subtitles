@@ -19,7 +19,7 @@ pub fn normalize(raw: Vec<RawCue>) -> Vec<RawCue> {
 /// Replaces all cues and every table derived from them.
 pub fn replace_cues(conn: &Connection, media_id: &str, cues: &[RawCue]) -> rusqlite::Result<()> {
     let tx = conn.unchecked_transaction()?;
-    for t in ["cue", "chunk", "cue_pattern", "annot_batch", "explanation", "embedded_load"] {
+    for t in ["cue", "chunk", "cue_pattern", "annot_batch", "explanation", "embedded_load", "sub_sync"] {
         tx.execute(&format!("DELETE FROM {t} WHERE media_id=?1"), [media_id])?;
     }
     {
@@ -154,6 +154,11 @@ mod tests {
         replace_cues(&c, "m", &[raw(0.0, 1.0, "One"), raw(1.0, 2.0, "Two")]).unwrap();
         c.execute("UPDATE cue SET ru='Раз' WHERE idx=0", []).unwrap();
         c.execute("INSERT INTO chunk VALUES('m',0,0,3,'One','idiom','раз')", []).unwrap();
+        c.execute(
+            "INSERT INTO sub_sync(media_id,source_path,status,offset,support,detail,created_at) VALUES('m','/a.srt','done',1.5,5,NULL,0)",
+            [],
+        )
+        .unwrap();
         let l = list(&c, "m").unwrap();
         assert_eq!(l.cues.len(), 2);
         assert_eq!(l.annotations.len(), 1);
@@ -163,6 +168,8 @@ mod tests {
         assert_eq!((l.cues.len(), l.annotations.len()), (1, 0));
         let n: i64 = c.query_row("SELECT count(*) FROM chunk", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0);
+        let sync_n: i64 = c.query_row("SELECT count(*) FROM sub_sync", [], |r| r.get(0)).unwrap();
+        assert_eq!(sync_n, 0);
     }
 
     #[test]

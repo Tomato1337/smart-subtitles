@@ -113,6 +113,22 @@ fn escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
+/// Full HTML escaping for plain-text Anki fields (`&`, `<`, `>`, `"`, `'`).
+pub fn escape_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// The movie line with the searched word in `<b>`; punctuation stays outside the bold.
 pub fn clip_text(text: &str, word_index: usize) -> String {
     let tokens: Vec<&str> = text.split_whitespace().collect();
@@ -206,24 +222,28 @@ impl Values {
     /// Field HTML for one source; a missing media file is an empty field, as in tutor.
     pub fn value(&self, source: Source) -> String {
         match source {
-            Source::Word => self.word.clone(),
-            Source::Translation => self.translation.clone(),
-            Source::WordType => self.word_type.clone(),
-            Source::ClozeGap => cloze_gap(&self.cloze_sentence),
-            Source::ClozeRaw => self.cloze_sentence.clone(),
-            Source::Sentence => self.sentence.clone(),
-            Source::SentenceTranslation => self.sentence_translation.clone(),
-            Source::Image => self.image_file.as_ref().map(|f| format!("<img src=\"{f}\">")).unwrap_or_default(),
+            Source::Word => escape_html(&self.word),
+            Source::Translation => escape_html(&self.translation),
+            Source::WordType => escape_html(&self.word_type),
+            Source::ClozeGap => escape_html(&cloze_gap(&self.cloze_sentence)),
+            Source::ClozeRaw => escape_html(&self.cloze_sentence),
+            Source::Sentence => escape_html(&self.sentence),
+            Source::SentenceTranslation => escape_html(&self.sentence_translation),
+            Source::Image => self
+                .image_file
+                .as_ref()
+                .map(|f| format!("<img src=\"{}\">", escape_html(f)))
+                .unwrap_or_default(),
             Source::WordAudio => sound(self.word_audio.as_deref()),
             Source::SentenceAudio => sound(self.sentence_audio.as_deref()),
             // `<source src>` and not `<video src>`: Anki's media scanner only sees img/audio/object/source.
             Source::Clip => self
                 .clip_file
                 .as_ref()
-                .map(|f| format!("<video playsinline preload=\"auto\"><source src=\"{f}\" type=\"video/webm\"></video>"))
+                .map(|f| format!("<video playsinline preload=\"auto\"><source src=\"{}\" type=\"video/webm\"></video>", escape_html(f)))
                 .unwrap_or_default(),
             Source::ClipText => self.clip_text.clone(),
-            Source::ClipSource => self.clip_source.clone(),
+            Source::ClipSource => escape_html(&self.clip_source),
         }
     }
 }
@@ -314,11 +334,52 @@ mod tests {
         assert_eq!(v.value(Source::Image), "<img src=\"bring_1.webp\">");
         assert_eq!(v.value(Source::WordAudio), "[sound:bring_2.mp3]");
         assert_eq!(v.value(Source::SentenceAudio), "");
-        assert_eq!(v.value(Source::ClozeGap), "It'll [...] him joy.");
-        assert_eq!(v.value(Source::ClozeRaw), "It'll {{c1::bring}} him joy.");
+        assert_eq!(v.value(Source::ClozeGap), "It&#39;ll [...] him joy.");
+        assert_eq!(v.value(Source::ClozeRaw), "It&#39;ll {{c1::bring}} him joy.");
         assert_eq!(
             v.value(Source::Clip),
             "<video playsinline preload=\"auto\"><source src=\"smartsubs_3.webm\" type=\"video/webm\"></video>"
         );
+    }
+
+    #[test]
+    fn plain_text_fields_escape_html_xss_payloads() {
+        let payloads = [
+            "<script>alert(1)</script>",
+            "<img src=x onerror=alert('xss')>",
+            "<<script>alert(\"x\")</script>",
+        ];
+        for payload in payloads {
+            let v = Values {
+                word: payload.into(),
+                translation: payload.into(),
+                word_type: payload.into(),
+                cloze_sentence: format!("Say {{{{c1::{payload}}}}} & \"go\""),
+                sentence: payload.into(),
+                sentence_translation: payload.into(),
+                clip_text: clip_text(payload, 0),
+                clip_source: payload.into(),
+                ..Default::default()
+            };
+            for src in [
+                Source::Word,
+                Source::Translation,
+                Source::WordType,
+                Source::ClozeGap,
+                Source::ClozeRaw,
+                Source::Sentence,
+                Source::SentenceTranslation,
+                Source::ClipSource,
+            ] {
+                let rendered = v.value(src);
+                assert!(!rendered.contains('<'), "unescaped '<' in {src:?}: {rendered}");
+                assert!(!rendered.contains('>'), "unescaped '>' in {src:?}: {rendered}");
+                assert!(!rendered.contains('"'), "unescaped '\"' in {src:?}: {rendered}");
+                assert!(!rendered.contains('\''), "unescaped '\\'' in {src:?}: {rendered}");
+            }
+            let ct = v.value(Source::ClipText);
+            assert!(!ct.contains("<script"), "unescaped script in ClipText: {ct}");
+            assert!(!ct.contains("<img"), "unescaped img in ClipText: {ct}");
+        }
     }
 }

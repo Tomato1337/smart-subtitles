@@ -1297,6 +1297,92 @@ fn intent_key(context: &JobContext, span: Option<&str>) -> String {
     hex::encode(Sha256::digest(v.to_string().as_bytes()))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn create_or_reuse_sync(
+    c: &Connection,
+    quick: bool,
+    id: &str,
+    key: Option<&str>,
+    media_id: &str,
+    cue_idx: u32,
+    span: Option<&str>,
+    state: CardJobState,
+    remaining_ms: u64,
+    ctx_json: &str,
+    progress_json: &str,
+) -> rusqlite::Result<(String, bool)> {
+    if let Some(k) = key {
+        if let Some(existing) = c
+            .query_row(
+                "SELECT id FROM card_job WHERE intent_key=?1 AND state NOT IN('cancelled','deleted') ORDER BY created_at DESC LIMIT 1",
+                [k],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            return Ok((existing, false));
+        }
+    } else if !quick {
+        let existing: Option<String> = match span {
+            Some(sp) => c
+                .query_row(
+                    "SELECT id FROM card_job \
+                     WHERE origin='review' AND state='editing' AND media_id=?1 AND cue_idx=?2 \
+                       AND span IS NOT NULL AND lower(trim(span))=lower(trim(?3)) \
+                     ORDER BY created_at DESC LIMIT 1",
+                    rusqlite::params![media_id, cue_idx, sp],
+                    |r| r.get(0),
+                )
+                .optional()?,
+            None => c
+                .query_row(
+                    "SELECT id FROM card_job \
+                     WHERE origin='review' AND state='editing' AND media_id=?1 AND cue_idx=?2 \
+                       AND span IS NULL \
+                     ORDER BY created_at DESC LIMIT 1",
+                    rusqlite::params![media_id, cue_idx],
+                    |r| r.get(0),
+                )
+                .optional()?,
+        };
+        if let Some(existing_id) = existing {
+            return Ok((existing_id, false));
+        }
+    }
+    c.execute(
+        "INSERT INTO card_job(id,origin,intent_key,media_id,cue_idx,span,state,revision,version,remaining_ms,cancel_requested,\
+         context_json,assets_json,progress_json,warnings_json,note_confirmed,created_at,updated_at) \
+         VALUES(?1,?2,?3,?4,?5,?6,?7,0,1,?8,0,?9,'{}',?10,'[]',0,?11,?11) ON CONFLICT DO NOTHING",
+        rusqlite::params![
+            id,
+            if quick { "quick" } else { "review" },
+            key,
+            media_id,
+            cue_idx,
+            span,
+            state.as_str(),
+            remaining_ms as i64,
+            ctx_json,
+            progress_json,
+            db::now()
+        ],
+    )?;
+    if c.changes() == 1 {
+        return Ok((id.to_string(), true));
+    }
+    let existing = match key {
+        Some(k) => c
+            .query_row(
+                "SELECT id FROM card_job WHERE intent_key=?1 AND state NOT IN('cancelled','deleted') ORDER BY created_at DESC LIMIT 1",
+                [k],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?,
+        None => None,
+    };
+    existing.map(|id| (id, false)).ok_or_else(|| db_payload("Карточка не создана"))
+}
+
 async fn create(
     st: &Arc<AppState>,
     media_id: String,
@@ -1319,61 +1405,29 @@ async fn create(
     let remaining = if quick { GRACE_MS } else { 0 };
     let progress = Progress::phase(if quick { "grace" } else { "edit" });
     let id = uuid::Uuid::new_v4().to_string();
-    let (db, ctx_json, key2, id2, span2, media2) = (
+    let ctx_json = serde_json::to_string(&context).map_err(|e| e.to_string())?;
+    let (db, key2, id2, span2, media2) = (
         st.db.clone(),
-        serde_json::to_string(&context).map_err(|e| e.to_string())?,
         key.clone(),
         id.clone(),
         span.clone(),
         media_id.clone(),
     );
-    // One transaction-less statement is enough: the partial unique index on intent_key makes the
-    // insert-or-existing decision atomic even for two simultaneous clicks.
+    let progress_json = serde_json::to_string(&progress).unwrap_or_default();
     let (chosen, inserted) = db_task(&db, move |c| {
-        if let Some(k) = &key2 {
-            if let Some(existing) = c
-                .query_row(
-                    "SELECT id FROM card_job WHERE intent_key=?1 AND state NOT IN('cancelled','deleted') ORDER BY created_at DESC LIMIT 1",
-                    [k],
-                    |r| r.get::<_, String>(0),
-                )
-                .optional()?
-            {
-                return Ok((existing, false));
-            }
-        }
-        c.execute(
-            "INSERT INTO card_job(id,origin,intent_key,media_id,cue_idx,span,state,revision,version,remaining_ms,cancel_requested,\
-             context_json,assets_json,progress_json,warnings_json,note_confirmed,created_at,updated_at) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,0,1,?8,0,?9,'{}',?10,'[]',0,?11,?11) ON CONFLICT DO NOTHING",
-            rusqlite::params![
-                id2,
-                if quick { "quick" } else { "review" },
-                key2,
-                media2,
-                cue_idx,
-                span2,
-                state.as_str(),
-                remaining as i64,
-                ctx_json,
-                serde_json::to_string(&progress).unwrap_or_default(),
-                db::now()
-            ],
-        )?;
-        if c.changes() == 1 {
-            return Ok((id2, true));
-        }
-        let existing = match &key2 {
-            Some(k) => c
-                .query_row(
-                    "SELECT id FROM card_job WHERE intent_key=?1 AND state NOT IN('cancelled','deleted') ORDER BY created_at DESC LIMIT 1",
-                    [k],
-                    |r| r.get::<_, String>(0),
-                )
-                .optional()?,
-            None => None,
-        };
-        existing.map(|id| (id, false)).ok_or_else(|| db_payload("Карточка не создана"))
+        create_or_reuse_sync(
+            c,
+            quick,
+            &id2,
+            key2.as_deref(),
+            &media2,
+            cue_idx,
+            span2.as_deref(),
+            state,
+            remaining,
+            &ctx_json,
+            &progress_json,
+        )
     })
     .await?;
     let row = load(st, &chosen).await?;
@@ -1527,7 +1581,6 @@ async fn run_job(st: Arc<AppState>, job_id: String, control: Arc<JobControl>, op
         return;
     }
     let result = execute(&st, &row, &control, &op.token).await;
-    drop(turn);
     if !control.is_current(op.generation) || st.card_jobs.shutdown.is_cancelled() {
         return;
     }
@@ -1582,6 +1635,7 @@ async fn run_job(st: Arc<AppState>, job_id: String, control: Arc<JobControl>, op
     control.notify.notify_waiters();
     refresh_proposal(&st, &job_id).await;
     sync_and_index(&st, &job_id).await;
+    drop(turn);
 }
 
 /// Draft, assets and the owned add for one queued job. The last committed row travels with an error
@@ -2829,6 +2883,76 @@ async fn edit_inner(st: &Arc<AppState>, job_id: &str, refresh: bool, control: &A
     editor(st, &row).await
 }
 
+pub(crate) async fn close_edit_db(db: &Arc<Mutex<Connection>>, job_id: &str) -> Result<(JobRow, bool), String> {
+    for _ in 0..3 {
+        let row = load_db(db, job_id).await?;
+        if row.state != CardJobState::Editing {
+            return Ok((row, false));
+        }
+        let change = if row.note_confirmed {
+            Change {
+                state: Some(CardJobState::Added),
+                revision: Some(row.revision + 1),
+                pending_operation: Some(None),
+                pending_fields: Some(BTreeMap::new()),
+                progress: Some(Progress::phase("added")),
+                error: Some(None),
+                ..Default::default()
+            }
+        } else if row.origin == "review" {
+            Change {
+                state: Some(CardJobState::Cancelled),
+                remaining_ms: Some(0),
+                cancel_requested: Some(true),
+                revision: Some(row.revision + 1),
+                progress: Some(Progress::phase("cancelled")),
+                error: Some(None),
+                ..Default::default()
+            }
+        } else {
+            Change {
+                state: Some(CardJobState::Interrupted),
+                remaining_ms: Some(0),
+                revision: Some(row.revision + 1),
+                progress: Some(Progress::phase("interrupted")),
+                error: Some(None),
+                ..Default::default()
+            }
+        };
+        if let Some(updated) = apply_db(db, job_id, row.version, change).await? {
+            return Ok((updated, true));
+        }
+        let fresh = load_db(db, job_id).await?;
+        if fresh.state != CardJobState::Editing {
+            return Ok((fresh, false));
+        }
+    }
+    Err(STALE.into())
+}
+
+#[allow(dead_code)]
+pub async fn close_edit(st: &Arc<AppState>, job_id: &str) -> Result<CardJob, String> {
+    let (row, changed) = close_edit_db(&st.db, job_id).await?;
+    if let Some(control) = st
+        .card_jobs
+        .controls
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(job_id)
+        .cloned()
+    {
+        control.set_editing(false);
+        if changed && !row.note_confirmed {
+            control.finish();
+        }
+    }
+    if changed {
+        emit(st, &row);
+        refresh_proposal(st, job_id).await;
+    }
+    Ok(dto_of(st, &row))
+}
+
 /// Reads the actual mapped fields and stores them as the conflict baseline. Called only by explicit
 /// refresh/open, never by a background refetch.
 async fn reload_baseline(st: &Arc<AppState>, row: &JobRow) -> Result<JobRow, String> {
@@ -3578,16 +3702,19 @@ pub async fn update_owned_note(
 
 /// Validates and enqueues the selected proposal words in one transaction. AppHandle-free: the
 /// runtime supplies the captured context, tests exercise the real SQL rules.
+/// Returns `(proposal_status, newly_queued_or_requeued_job_ids)`.
 fn enqueue_sync(
     c: &Connection,
     proposal_id: i64,
     picked: &[usize],
     ctx_json: &str,
     words_json: &str,
-) -> rusqlite::Result<String> {
+) -> rusqlite::Result<(String, Vec<String>)> {
     let words: Vec<WordDraft> = serde_json::from_str(words_json).map_err(|e| db_payload(e.to_string()))?;
+    let mut spawned = Vec::new();
     for i in picked {
         let word = words.get(*i).ok_or_else(|| db_payload("Выбран несуществующий номер карточки"))?;
+        let mut inserted_here = false;
         let (id, state, revision, confirmed) = match c
             .query_row(
                 "SELECT id,state,revision,note_confirmed FROM card_job WHERE proposal_id=?1 AND word_index=?2",
@@ -3615,6 +3742,7 @@ fn enqueue_sync(
                         db::now()
                     ],
                 )?;
+                inserted_here = c.changes() == 1;
                 // A racing insert or a lost conflict: use the durable row.
                 let (id, state, revision, confirmed): (String, String, i64, bool) = c
                     .query_row(
@@ -3625,7 +3753,9 @@ fn enqueue_sync(
                 (id, state, revision, confirmed)
             }
         };
-        if !confirmed && (state == "failed" || state == "interrupted") {
+        if inserted_here {
+            spawned.push(id);
+        } else if !confirmed && (state == "failed" || state == "interrupted") {
             c.execute(
                 "UPDATE card_job SET state='queued',version=version+1,revision=?1,error=NULL,draft_json=?2,progress_json=?3,warnings_json='[]',updated_at=?4 WHERE id=?5",
                 rusqlite::params![
@@ -3636,6 +3766,7 @@ fn enqueue_sync(
                     id
                 ],
             )?;
+            spawned.push(id);
         }
     }
     let active: i64 = c.query_row(
@@ -3660,7 +3791,7 @@ fn enqueue_sync(
         "failed"
     };
     c.execute("UPDATE proposal SET status=?1, error=NULL WHERE id=?2", rusqlite::params![status, proposal_id])?;
-    Ok(status.to_string())
+    Ok((status.to_string(), spawned))
 }
 
 /// A legacy `adding`/`failed` proposal without any durable job cannot prove which note it may have
@@ -3718,20 +3849,14 @@ pub async fn enqueue_proposal(st: &Arc<AppState>, proposal_id: i64, indices: Vec
     let ctx_json = serde_json::to_string(&context).map_err(|e| e.to_string())?;
     let (db, words_json2) = (st.db.clone(), words_json.clone());
     let picked2 = picked.clone();
-    let status = db_task(&db, move |c| {
+    let (status, ids) = db_task(&db, move |c| {
         let tx = c.unchecked_transaction()?;
-        let status = enqueue_sync(&tx, proposal_id, &picked2, &ctx_json, &words_json2)?;
+        let res = enqueue_sync(&tx, proposal_id, &picked2, &ctx_json, &words_json2)?;
         tx.commit()?;
-        Ok(status)
+        Ok(res)
     })
     .await?;
     st.card_jobs.reported.lock().unwrap_or_else(|e| e.into_inner()).remove(&proposal_id);
-    let ids: Vec<String> = db_task(&st.db, move |c| {
-        let mut q = c.prepare(&format!("SELECT id FROM card_job WHERE proposal_id=?1 AND state='queued' AND state IN({ACTIVE_STATES}) ORDER BY word_index"))?;
-        let rows = q.query_map([proposal_id], |r| r.get::<_, String>(0))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    })
-    .await?;
     for id in &ids {
         if let Ok(row) = load(st, id).await {
             emit(st, &row);
@@ -4782,16 +4907,24 @@ mod tests {
         )
         .unwrap();
         let words = r#"[{"word":"a","translation":"a","word_type":"noun","cloze_sentence":"{{c1::a}}","full_sentence":"a","sentence_translation":"a","image_prompt":""},{"word":"b","translation":"b","word_type":"noun","cloze_sentence":"{{c1::b}}","full_sentence":"b","sentence_translation":"b","image_prompt":""}]"#;
-        let status = enqueue_sync(&c, 1, &[0, 1], "{}", words).unwrap();
+        let (status, queued1) = enqueue_sync(&c, 1, &[0, 1], "{}", words).unwrap();
         assert_eq!(status, "adding");
+        assert_eq!(queued1.len(), 2);
         let count: i64 = c.query_row("SELECT COUNT(*) FROM card_job WHERE proposal_id=1", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 2);
         let job0: String = c.query_row("SELECT id FROM card_job WHERE proposal_id=1 AND word_index=0", [], |r| r.get(0)).unwrap();
         let job1: String = c.query_row("SELECT id FROM card_job WHERE proposal_id=1 AND word_index=1", [], |r| r.get(0)).unwrap();
+
+        // Calling enqueue_sync while both jobs are still queued returns NO duplicate spawn IDs.
+        let (status_dup, queued_dup) = enqueue_sync(&c, 1, &[0, 1], "{}", words).unwrap();
+        assert_eq!(status_dup, "adding");
+        assert!(queued_dup.is_empty(), "already-queued sibling workers must not be respawned");
+
         c.execute("UPDATE card_job SET state='added',note_confirmed=1,note_id=42 WHERE id=?1", rusqlite::params![job0]).unwrap();
         c.execute("UPDATE card_job SET state='failed',error='x' WHERE id=?1", rusqlite::params![job1]).unwrap();
-        let status = enqueue_sync(&c, 1, &[0, 1], "{}", words).unwrap();
+        let (status, queued2) = enqueue_sync(&c, 1, &[0, 1], "{}", words).unwrap();
         assert_eq!(status, "adding");
+        assert_eq!(queued2, vec![job1.clone()]);
         let (state0, note0): (String, Option<i64>) = c
             .query_row("SELECT state,note_id FROM card_job WHERE id=?1", rusqlite::params![job0], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap();
@@ -4804,6 +4937,130 @@ mod tests {
         assert_eq!(revision1, 1, "a retry advances the revision");
         assert!(enqueue_sync(&c, 1, &[5], "{}", words).unwrap_err().to_string().contains("номер"));
         assert!(enqueue_sync(&c, 1, &[0], "{}", "not json").is_err());
+    }
+
+    #[test]
+    fn review_create_reuses_active_editing_job_for_same_span_and_cue() {
+        let c = Connection::open_in_memory().unwrap();
+        crate::db::init(&c).unwrap();
+        let ctx_json = serde_json::to_string(&context("http://127.0.0.1:8765")).unwrap();
+        let progress_json = serde_json::to_string(&Progress::phase("edit")).unwrap();
+
+        let (id1, ins1) = create_or_reuse_sync(
+            &c,
+            false,
+            "rev-1",
+            None,
+            "m1",
+            4,
+            Some("bail on"),
+            CardJobState::Editing,
+            0,
+            &ctx_json,
+            &progress_json,
+        )
+        .unwrap();
+        assert!(ins1);
+        assert_eq!(id1, "rev-1");
+
+        // Same (media_id, cue_idx, span) reuses active Editing row instead of stranding duplicates.
+        let (id2, ins2) = create_or_reuse_sync(
+            &c,
+            false,
+            "rev-2",
+            None,
+            "m1",
+            4,
+            Some("  Bail On "),
+            CardJobState::Editing,
+            0,
+            &ctx_json,
+            &progress_json,
+        )
+        .unwrap();
+        assert!(!ins2);
+        assert_eq!(id2, "rev-1");
+
+        // Different span creates a distinct review job.
+        let (id3, ins3) = create_or_reuse_sync(
+            &c,
+            false,
+            "rev-3",
+            None,
+            "m1",
+            4,
+            Some("give up"),
+            CardJobState::Editing,
+            0,
+            &ctx_json,
+            &progress_json,
+        )
+        .unwrap();
+        assert!(ins3);
+        assert_eq!(id3, "rev-3");
+
+        // Once cancelled, a new review job for the first span inserts cleanly.
+        c.execute("UPDATE card_job SET state='cancelled' WHERE id='rev-1'", []).unwrap();
+        let (id4, ins4) = create_or_reuse_sync(
+            &c,
+            false,
+            "rev-4",
+            None,
+            "m1",
+            4,
+            Some("bail on"),
+            CardJobState::Editing,
+            0,
+            &ctx_json,
+            &progress_json,
+        )
+        .unwrap();
+        assert!(ins4);
+        assert_eq!(id4, "rev-4");
+    }
+
+    #[tokio::test]
+    async fn close_edit_db_handles_review_confirmed_and_unconfirmed_edits() {
+        let db = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        let ctx = context("http://127.0.0.1:8765");
+        {
+            let c = db.lock().unwrap();
+            crate::db::init(&c).unwrap();
+            insert_job(&c, "rev-draft", "editing", &ctx, false, None);
+            c.execute("UPDATE card_job SET origin='review', revision=0 WHERE id='rev-draft'", []).unwrap();
+
+            insert_job(&c, "added-edit", "editing", &ctx, true, Some(77));
+            c.execute("UPDATE card_job SET origin='quick', revision=3, pending_operation='update' WHERE id='added-edit'", []).unwrap();
+
+            insert_job(&c, "quick-edit", "editing", &ctx, false, None);
+            c.execute("UPDATE card_job SET origin='quick', revision=2, remaining_ms=1500 WHERE id='quick-edit'", []).unwrap();
+        }
+
+        // 1. Brand-new never-saved review draft -> Cancelled
+        let (rev_done, changed1) = close_edit_db(&db, "rev-draft").await.unwrap();
+        assert!(changed1);
+        assert_eq!(rev_done.state, CardJobState::Cancelled);
+        assert_eq!(rev_done.revision, 1);
+        assert!(rev_done.cancel_requested);
+
+        // Idempotent when already out of Editing
+        let (rev_again, changed_again) = close_edit_db(&db, "rev-draft").await.unwrap();
+        assert!(!changed_again);
+        assert_eq!(rev_again.state, CardJobState::Cancelled);
+
+        // 2. Confirmed-note edit closed without saving -> Added
+        let (added_done, changed2) = close_edit_db(&db, "added-edit").await.unwrap();
+        assert!(changed2);
+        assert_eq!(added_done.state, CardJobState::Added);
+        assert_eq!(added_done.revision, 4);
+        assert_eq!(added_done.pending_operation, None);
+
+        // 3. Unconfirmed quick edit closed without saving -> Interrupted (retryable, never silently committed)
+        let (quick_done, changed3) = close_edit_db(&db, "quick-edit").await.unwrap();
+        assert!(changed3);
+        assert_eq!(quick_done.state, CardJobState::Interrupted);
+        assert_eq!(quick_done.revision, 3);
+        assert_eq!(quick_done.remaining_ms, 0);
     }
 
     // ---- ignored: real Anki + real AnkiConnect + a one-shot lost-response proxy ---------------

@@ -75,7 +75,11 @@ fn elem_header(b: &[u8]) -> Result<(usize, u64), String> {
 }
 
 async fn read_range(st: &AppState, src: &str, from: u64, len: u64) -> Result<Vec<u8>, String> {
-    let to = from.saturating_add(len.max(1) - 1);
+    let span = len.max(1);
+    let cap = usize::try_from(span).map_err(|_| "слишком большой диапазон чтения Matroska".to_string())?;
+    let to = from
+        .checked_add(span - 1)
+        .ok_or_else(|| "диапазон чтения выходит за пределы файла".to_string())?;
     let r = st
         .http
         .get(src)
@@ -87,17 +91,19 @@ async fn read_range(st: &AppState, src: &str, from: u64, len: u64) -> Result<Vec
     if r.status() != reqwest::StatusCode::PARTIAL_CONTENT {
         return Err("сервер не поддерживает Range".into());
     }
-    r.bytes().await.map(|b| b.to_vec()).map_err(|e| e.without_url().to_string())
+    super::sidecar::read_bounded(r, cap).await.map_err(|e| e.to_string())
 }
 
 /// Body of the element whose header starts at `at`: from the already-read head, else one header
 /// read and one body read. `max` bounds the element size.
 async fn body_at(st: &AppState, src: &str, at: u64, head: &[u8], max: u64) -> Result<Vec<u8>, String> {
-    if let Some(buf) = head.get(at as usize..) {
+    if let Some(buf) = usize::try_from(at).ok().and_then(|off| head.get(off..)) {
         if let Ok((hn, size)) = elem_header(buf) {
             if size > 0 && size <= max {
-                if let Some(body) = buf.get(hn..hn + size as usize) {
-                    return Ok(body.to_vec());
+                if let Some(end) = usize::try_from(size).ok().and_then(|sz| hn.checked_add(sz)) {
+                    if let Some(body) = buf.get(hn..end) {
+                        return Ok(body.to_vec());
+                    }
                 }
             }
         }
@@ -107,7 +113,24 @@ async fn body_at(st: &AppState, src: &str, at: u64, head: &[u8], max: u64) -> Re
     if size == 0 || size > max {
         return Err(format!("неожиданный размер элемента Matroska: {size}"));
     }
-    read_range(st, src, at + hn as u64, size).await
+    let next = at
+        .checked_add(hn as u64)
+        .ok_or_else(|| "смещение элемента Matroska переполнено".to_string())?;
+    read_range(st, src, next, size).await
+}
+
+async fn get_or_cache_ok<F, Fut>(
+    cell: &tokio::sync::OnceCell<Result<Arc<Index>, String>>,
+    loader: F,
+) -> Result<Arc<Index>, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<Index, String>>,
+{
+    let stored = cell
+        .get_or_try_init(|| async move { loader().await.map(Arc::new).map(Ok::<_, String>) })
+        .await?;
+    stored.clone()
 }
 
 /// Reads the file header, Tracks and Cues once per session and builds the index of one track.
@@ -115,12 +138,7 @@ pub async fn index(st: &Arc<AppState>, s: &Arc<Session>, track: Option<u64>) -> 
     if !(s.src.starts_with("http://") || s.src.starts_with("https://")) {
         return Err("встроенные субтитры бывают только у http(s)-источников".into());
     }
-    let cached = s
-        .embedded_index
-        .get_or_init(|| async { read_index(st, s).await.map(Arc::new) })
-        .await
-        .clone();
-    let base = cached.clone()?;
+    let base = get_or_cache_ok(&s.embedded_index, || read_index(st, s)).await?;
     let Some(track) = track else { return Ok(base) };
     if base.track.number == track {
         return Ok(base);
@@ -193,14 +211,14 @@ async fn head_until(st: &AppState, s: &Session, idx: &Index) -> f64 {
     (resume + HEAD_SECS).min(end)
 }
 
-fn state_of(idx: &Index, from: usize, head: f64) -> EmbeddedState {
+fn state_of(idx: &Index, from: usize, head: f64, stored: u32) -> EmbeddedState {
     let piece = idx.file.piece;
     let (est_bytes, head_bytes) = estimate(&idx.cues, from, head, piece);
     EmbeddedState {
         phase: "loading",
         track: label(&idx.track),
         total_cues: idx.cues.len() as u32,
-        loaded_cues: from as u32,
+        loaded_cues: stored,
         loaded_until: idx.cues.get(from).or_else(|| idx.cues.last()).map(|c| c.time).unwrap_or(0.0),
         head_until: head,
         est_bytes,
@@ -212,6 +230,10 @@ fn state_of(idx: &Index, from: usize, head: f64) -> EmbeddedState {
 
 /// Asks the user before downloading, then starts reading the track from the first cue.
 pub async fn start(st: &Arc<AppState>, s: &Arc<Session>, track: Option<u64>, confirmed: bool) -> Option<()> {
+    let in_run_token = acquire::current_run_token();
+    if s.cancel.is_cancelled() || in_run_token.as_ref().is_some_and(|t| t.is_cancelled()) {
+        return None;
+    }
     let idx = match index(st, s, track).await {
         Ok(i) => i,
         Err(e) => {
@@ -220,15 +242,22 @@ pub async fn start(st: &Arc<AppState>, s: &Arc<Session>, track: Option<u64>, con
         }
     };
     let head = head_until(st, s, &idx).await;
-    let mut state = state_of(&idx, 0, head);
+    let mut state = state_of(&idx, 0, head, 0);
     if !confirmed {
         state.phase = "confirm";
         set_state(st, s, Some(state.clone()));
         let (tx, rx) = tokio::sync::oneshot::channel();
         *s.embedded_decision.lock().unwrap() = Some(tx);
+        let run_tok = in_run_token.clone();
         let accept = tokio::select! {
             answer = rx => answer.unwrap_or(false),
             _ = s.cancel.cancelled() => false,
+            _ = async {
+                match run_tok {
+                    Some(t) => t.cancelled().await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => false,
         };
         *s.embedded_decision.lock().unwrap() = None;
         if !accept {
@@ -237,6 +266,14 @@ pub async fn start(st: &Arc<AppState>, s: &Arc<Session>, track: Option<u64>, con
             return None;
         }
         state.phase = "loading";
+    }
+    let _install_guard = acquire::lock_install(&s.id).await;
+    if s.cancel.is_cancelled() || in_run_token.as_ref().is_some_and(|t| t.is_cancelled()) {
+        set_state(st, s, None);
+        return None;
+    }
+    if in_run_token.is_none() {
+        acquire::cancel_in_flight(s);
     }
     let (mid, total, number, name) = (s.media_id.clone(), state.total_cues, idx.track.number, state.track.clone());
     // The previous load must be stopped before its cues are deleted, or it could append them to
@@ -274,7 +311,9 @@ pub async fn resume(st: &Arc<AppState>, s: &Arc<Session>) {
         return;
     }
     let head = head_until(st, s, &idx).await;
-    let state = state_of(&idx, from, head);
+    let mid = s.media_id.clone();
+    let stored = st.db(move |c| stored_cue_count_db(c, &mid)).await.unwrap_or(0);
+    let state = state_of(&idx, from, head, stored);
     set_state(st, s, Some(state.clone()));
     acquire::status(st, SubsStatus::new(&s.media_id, "downloading").msg("встроенные субтитры"));
     spawn_load(st, s, idx, from, head, state);
@@ -291,12 +330,18 @@ fn spawn_load(st: &Arc<AppState>, s: &Arc<Session>, idx: Arc<Index>, from: usize
 }
 
 /// End time of a cue: its own duration added to the start, else the block's, else up to the next
-/// cue but no more than five seconds. A zero duration counts as none.
+/// strictly later cue but no more than five seconds. A zero duration counts as none.
 fn cue_end(start: f64, duration: Option<f64>, next: Option<f64>) -> f64 {
+    let next = next.filter(|n| *n > start);
     duration
         .filter(|d| *d > 0.0)
         .map(|d| start + d)
         .unwrap_or_else(|| next.map(|n| n.min(start + 5.0)).unwrap_or(start + 5.0))
+}
+
+fn next_strictly_later(cues: &[mkv::CueRef], i: usize) -> Option<f64> {
+    let start = cues[i].time;
+    cues[i + 1..].iter().map(|n| n.time).find(|t| *t > start)
 }
 
 /// One fetched line: the text and the block's own duration when it carries one.
@@ -308,8 +353,14 @@ struct Fetched {
 /// The window read, and one exact re-read when the block is longer than the window.
 async fn fetch_once(st: &AppState, s: &Session, idx: &Index, cue: &mkv::CueRef) -> Result<Fetched, String> {
     let track = idx.track.number;
-    let base = cue.cluster + cue.rel;
-    let win = read_range(st, &s.src, base + 5, WINDOW).await?;
+    let base = cue
+        .cluster
+        .checked_add(cue.rel)
+        .ok_or_else(|| "смещение блока субтитров переполнено".to_string())?;
+    let win_at = base
+        .checked_add(5)
+        .ok_or_else(|| "смещение окна субтитров переполнено".to_string())?;
+    let win = read_range(st, &s.src, win_at, WINDOW).await?;
     if let Some((_, dur, text)) = mkv::block_in_window(&win, track) {
         return Ok(Fetched { text, dur: dur.map(|d| d as f64 * idx.file.scale) });
     }
@@ -317,7 +368,13 @@ async fn fetch_once(st: &AppState, s: &Session, idx: &Index, cue: &mkv::CueRef) 
     let Some((l, total)) = mkv::block_span(&win, track) else {
         return Err("блок субтитров не найден".into());
     };
-    let exact = read_range(st, &s.src, cue.cluster + 4 + l as u64 + cue.rel, total).await?;
+    let exact_at = cue
+        .cluster
+        .checked_add(4)
+        .and_then(|v| v.checked_add(l as u64))
+        .and_then(|v| v.checked_add(cue.rel))
+        .ok_or_else(|| "смещение блока субтитров переполнено".to_string())?;
+    let exact = read_range(st, &s.src, exact_at, total).await?;
     let Some((_, dur, text)) = mkv::block_in_window(&exact, track) else {
         return Err("блок субтитров не прочитан".into());
     };
@@ -343,6 +400,7 @@ async fn fetch(st: &AppState, s: &Session, idx: &Index, cue: &mkv::CueRef) -> Re
 async fn load(st: Arc<AppState>, s: Arc<Session>, idx: Arc<Index>, from: usize, head: f64, mut state: EmbeddedState, token: CancellationToken) {
     let split = (from..idx.cues.len()).find(|i| idx.cues[*i].time >= head).unwrap_or(idx.cues.len());
     let (mut buf, mut first) = (Vec::new(), true);
+    let mut next_cue = from as u32;
     for (range, width) in [((from, split), 8usize), ((split, idx.cues.len()), 4usize)] {
         if range.0 >= range.1 {
             continue;
@@ -370,13 +428,13 @@ async fn load(st: Arc<AppState>, s: Arc<Session>, idx: Arc<Index>, from: usize, 
                 }
             };
             let cue = &idx.cues[i];
-            let end = cue_end(cue.time, cue.duration.or(got.dur), idx.cues.get(i + 1).map(|n| n.time));
+            let end = cue_end(cue.time, cue.duration.or(got.dur), next_strictly_later(&idx.cues, i));
             buf.push(RawCue { start: cue.time, end, text: got.text });
-            state.loaded_cues = (i + 1) as u32;
+            next_cue = (i + 1) as u32;
             state.loaded_until = idx.cues.get(i + 1).map(|c| c.time).unwrap_or(head);
             // A full batch, the end of the head (the film may start), or the end of the track.
             if buf.len() >= annotate::BATCH as usize || i + 1 == range.1 || i + 1 == idx.cues.len() {
-                match flush(&st, &s, &idx, &token, &mut buf, &mut state, &mut first).await {
+                match flush(&st, &s, &idx, &token, &mut buf, next_cue, &mut state, &mut first).await {
                     Ok(true) => {}
                     Ok(false) => return,
                     Err(e) => {
@@ -388,7 +446,7 @@ async fn load(st: Arc<AppState>, s: Arc<Session>, idx: Arc<Index>, from: usize, 
         }
     }
     if !buf.is_empty() {
-        match flush(&st, &s, &idx, &token, &mut buf, &mut state, &mut first).await {
+        match flush(&st, &s, &idx, &token, &mut buf, next_cue, &mut state, &mut first).await {
             Ok(true) => {}
             Ok(false) => return,
             Err(e) => {
@@ -403,21 +461,43 @@ async fn load(st: Arc<AppState>, s: Arc<Session>, idx: Arc<Index>, from: usize, 
     // A whole track with nothing stored means the blocks were not text we could read: saying
     // "done" would leave the film without subtitles and without an explanation.
     let mid = s.media_id.clone();
-    let stored: i64 = st
-        .db(move |c| c.query_row("SELECT count(*) FROM cue WHERE media_id=?1", [&mid], |r| r.get(0)))
-        .await
-        .unwrap_or(0);
-    if stored == 0 && idx.cues.len() >= 8 {
+    let stored = st.db(move |c| stored_cue_count_db(c, &mid)).await.unwrap_or(0);
+    if stored == 0 {
         fail(&st, &s, &mut state, "в блоках дорожки нет читаемого текста".into()).await;
         return;
     }
     state.phase = "done";
-    state.loaded_cues = idx.cues.len() as u32;
+    state.loaded_cues = stored;
     state.loaded_until = s.probe.get().map(|p| p.duration).filter(|d| *d > 0.0).unwrap_or(state.head_until);
     set_state(&st, &s, Some(state.clone()));
     // The last batch may have been stored earlier: tell the analysis that nothing more is coming.
     s.cues_grew.notify_one();
     annotate::emit_status(&st, &s.media_id).await;
+}
+
+fn stored_cue_count_db(conn: &rusqlite::Connection, media_id: &str) -> rusqlite::Result<u32> {
+    let stored: i64 = conn.query_row("SELECT count(*) FROM cue WHERE media_id=?1", [media_id], |r| r.get(0))?;
+    Ok(stored.max(0) as u32)
+}
+
+fn flush_db(
+    conn: &rusqlite::Connection,
+    media_id: &str,
+    track: u64,
+    cues: &[RawCue],
+    next_cue: u32,
+) -> rusqlite::Result<(bool, u32)> {
+    let owned = store::append_cues(conn, media_id, track, cues, next_cue)?;
+    let stored = stored_cue_count_db(conn, media_id)?;
+    Ok((owned, stored))
+}
+
+fn status_for_stored(media_id: &str, stored: u32) -> SubsStatus {
+    if stored > 0 {
+        acquire::ready_status(media_id, "embedded", true)
+    } else {
+        SubsStatus::new(media_id, "none")
+    }
 }
 
 /// Stores the accumulated cues; every batch makes the analysis read the longer script. `false`
@@ -428,6 +508,7 @@ async fn flush(
     idx: &Index,
     token: &CancellationToken,
     buf: &mut Vec<RawCue>,
+    next_cue: u32,
     state: &mut EmbeddedState,
     first: &mut bool,
 ) -> Result<bool, String> {
@@ -436,38 +517,36 @@ async fn flush(
     }
     let cues = store::normalize(std::mem::take(buf));
     let mid = s.media_id.clone();
-    let next = state.loaded_cues;
     let track = idx.track.number;
-    if !st.db(move |c| store::append_cues(c, &mid, track, &cues, next)).await? {
+    let (owned, stored_cues) = st
+        .db(move |c| flush_db(c, &mid, track, &cues, next_cue))
+        .await?;
+    if !owned {
         return Ok(false);
     }
+    state.loaded_cues = stored_cues;
     // The prompt prefix carries the whole script, so it must be rebuilt from the longer cue list.
     *s.prefix.lock().unwrap() = None;
     s.cues_grew.notify_one();
     let _ = st.app.emit("subs:updated", serde_json::json!({ "mediaId": s.media_id }));
     set_state(st, s, Some(state.clone()));
-    if *first && state.loaded_cues > 0 {
+    if *first && stored_cues > 0 {
         *first = false;
-        let mut e = SubsStatus::new(&s.media_id, "ready");
-        e.source = Some("embedded");
-        e.exact = Some(true);
-        acquire::status(st, e);
+        acquire::status(st, status_for_stored(&s.media_id, stored_cues));
         annotate::restart(st, s);
     }
     Ok(true)
 }
 
 async fn fail(st: &Arc<AppState>, s: &Arc<Session>, state: &mut EmbeddedState, e: String) {
+    let mid = s.media_id.clone();
+    let stored = st.db(move |c| stored_cue_count_db(c, &mid)).await.unwrap_or(0);
+    state.loaded_cues = stored;
     state.phase = "failed";
     state.message = Some(format!("загрузка прервана: {e}"));
     set_state(st, s, Some(state.clone()));
     acquire::warn(st, s, format!("загрузка встроенных субтитров: {e}"));
-    let status = if state.loaded_cues > 0 {
-        acquire::ready_status(&s.media_id, "embedded", true)
-    } else {
-        SubsStatus::new(&s.media_id, "none")
-    };
-    acquire::status(st, status);
+    acquire::status(st, status_for_stored(&s.media_id, stored));
     // Nothing more will arrive: let the scheduler re-read the counters instead of waiting forever.
     s.cues_grew.notify_one();
 }
@@ -499,5 +578,84 @@ mod tests {
         assert_eq!(cue_end(10.0, None, None), 15.0);
         // A zero duration is no duration at all.
         assert_eq!(cue_end(10.0, Some(0.0), Some(11.0)), 11.0);
+        // Simultaneous next cue does not collapse end == start.
+        assert_eq!(cue_end(10.0, None, Some(10.0)), 15.0);
+        let sim = vec![cue(10.0, 1, 0), cue(10.0, 2, 0), cue(12.5, 3, 0)];
+        assert_eq!(next_strictly_later(&sim, 0), Some(12.5));
+        assert_eq!(cue_end(sim[0].time, None, next_strictly_later(&sim, 0)), 12.5);
+        assert_eq!(cue_end(sim[1].time, None, next_strictly_later(&sim, 1)), 12.5);
+    }
+
+    #[tokio::test]
+    async fn get_or_cache_ok_retries_after_error_and_caches_success() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let cell: tokio::sync::OnceCell<Result<Arc<Index>, String>> = tokio::sync::OnceCell::new();
+        let calls = AtomicUsize::new(0);
+
+        let first = get_or_cache_ok(&cell, || {
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n == 0 {
+                    Err("transient network error".into())
+                } else {
+                    unreachable!()
+                }
+            }
+        })
+        .await;
+        assert!(first.is_err());
+        assert!(!cell.initialized());
+
+        let mk_idx = || Index {
+            track: mkv::TextTrack { number: 3, name: "EN".into(), lang: "eng".into(), forced: false },
+            cues: vec![cue(1.0, 0, 0)],
+            file: Arc::new(File {
+                seg_data: 0,
+                scale: 0.001,
+                piece: 4096,
+                tracks: vec![],
+                cues_body: vec![],
+            }),
+        };
+
+        let second = get_or_cache_ok(&cell, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async { Ok(mk_idx()) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(second.track.number, 3);
+        assert!(cell.initialized());
+
+        // Subsequent call must reuse cached Index without running the loader again.
+        let third = get_or_cache_ok(&cell, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async { Err("should not be called".into()) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(third.track.number, 3);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn flush_db_and_status_derive_counts_from_actual_db_rows() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init(&c).unwrap();
+        c.execute("INSERT INTO media(id,kind,source_url,title,updated_at) VALUES('m1','file','u','t',0)", []).unwrap();
+        store::begin_embedded(&c, "m1", 3, "ENG", 10).unwrap();
+
+        // Batch 1 normalized to 0 valid cues: next_cue advances for resume, stored remains 0 -> status is "none", never "ready".
+        let (owned, stored) = flush_db(&c, "m1", 3, &[], 5).unwrap();
+        assert!(owned);
+        assert_eq!(stored, 0);
+        assert_eq!(status_for_stored("m1", stored).state, "none");
+
+        // Batch 2 stores 1 readable cue -> stored = 1 -> status becomes "ready".
+        let cues = store::normalize(vec![RawCue { start: 1.0, end: 2.0, text: "Hello".into() }]);
+        let (owned, stored) = flush_db(&c, "m1", 3, &cues, 10).unwrap();
+        assert!(owned);
+        assert_eq!(stored, 1);
+        assert_eq!(status_for_stored("m1", stored).state, "ready");
     }
 }

@@ -528,6 +528,47 @@ async fn restore_local_clip(
     Ok(Some(path))
 }
 
+fn is_transient_anki_lifecycle_error(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("lifecycle")
+        || lower.contains("currently syncing")
+        || lower.contains("sync in progress")
+        || lower.contains("database is locked")
+}
+
+async fn retry_anki_lifecycle<T, E, F, Fut>(
+    cancel: &CancellationToken,
+    mut op: F,
+) -> Result<T, jobs::JobError>
+where
+    E: std::fmt::Display,
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+{
+    const BACKOFFS_MS: [u64; 3] = [250, 500, 1000];
+    for attempt in 0..=BACKOFFS_MS.len() {
+        if cancel.is_cancelled() {
+            return Err(jobs::JobError::Cancelled);
+        }
+        match op().await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                if let Some(&delay) = BACKOFFS_MS.get(attempt) {
+                    if is_transient_anki_lifecycle_error(&msg) {
+                        tokio::select! {
+                            _ = cancel.cancelled() => return Err(jobs::JobError::Cancelled),
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(delay)) => continue,
+                        }
+                    }
+                }
+                return Err(jobs::JobError::Failed(format!("Anki: {msg}")));
+            }
+        }
+    }
+    unreachable!()
+}
+
 /// Builds every asset and renders the owned fields for one captured cue. Reuses an asset whose input
 /// hash did not change. Unlike image generation, a failed clip may succeed when the source recovers.
 pub async fn prepare(
@@ -541,12 +582,9 @@ pub async fn prepare(
     use jobs::{AssetSlot, JobError};
     let anki = &context.anki;
     let client = connect::Client::new(&st.http, &anki.url);
-    client
-        .create_deck(&anki.deck)
-        .await
-        .map_err(|e| JobError::Failed(format!("Anki: {e}")))?;
-    note_type::ensure(&client, &anki.note_type).await.map_err(|e| JobError::Failed(format!("Anki: {e:#}")))?;
-    let model_fields = client.model_field_names(&anki.note_type).await.map_err(|e| JobError::Failed(format!("Anki: {e}")))?;
+    retry_anki_lifecycle(cancel, || client.create_deck(&anki.deck)).await?;
+    retry_anki_lifecycle(cancel, || note_type::ensure(&client, &anki.note_type)).await?;
+    let model_fields = retry_anki_lifecycle(cancel, || client.model_field_names(&anki.note_type)).await?;
     let map = fields::resolve(&model_fields, &anki.fields);
     if let Some((name, None)) = map.first() {
         return Err(JobError::Failed(format!(
@@ -958,7 +996,9 @@ async fn clip_audio(clip: &Path, out: &Path, cancel: &CancellationToken) -> Resu
         tokio::fs::create_dir_all(parent).await.map_err(|e| jobs::JobError::Failed(format!("каталог озвучки: {e}")))?;
     }
     let part = part_path(out);
-    let mut cmd = crate::proc::background("ffmpeg");
+    let ffmpeg = crate::proc::find("ffmpeg")
+        .ok_or_else(|| jobs::JobError::Failed("ffmpeg не найден".into()))?;
+    let mut cmd = crate::proc::background(ffmpeg);
     cmd.args(["-v", "error", "-y", "-i"])
         .arg(clip)
         .args(["-vn", "-c:a", "libmp3lame", "-q:a", "4"])
@@ -1181,5 +1221,51 @@ mod tests {
         assert_eq!(second.1.as_ref().unwrap().status, "ready");
         assert_eq!(calls.load(Ordering::SeqCst), 2, "each submission retried only the upload, never TTS");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn retry_anki_lifecycle_retries_transient_errors_and_stops_on_permanent_or_cancel() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let cancel = CancellationToken::new();
+        let attempts = AtomicUsize::new(0);
+        let ok = retry_anki_lifecycle(&cancel, || {
+            let n = attempts.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n < 2 {
+                    Err("Collection lifecycle operation is active")
+                } else {
+                    Ok(42usize)
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(ok, 42);
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+
+        // Non-lifecycle errors fail immediately without retries.
+        let perm_attempts = AtomicUsize::new(0);
+        let err = retry_anki_lifecycle(&cancel, || {
+            perm_attempts.fetch_add(1, Ordering::SeqCst);
+            async move { Err::<(), _>("model not found") }
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(err, jobs::JobError::Failed(_)));
+        assert_eq!(perm_attempts.load(Ordering::SeqCst), 1);
+
+        // Cancelled backoff exits with JobError::Cancelled.
+        let tok = CancellationToken::new();
+        let tok2 = tok.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            tok2.cancel();
+        });
+        let cancelled = retry_anki_lifecycle(&tok, || async move {
+            Err::<(), _>("Collection lifecycle operation is active")
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(cancelled, jobs::JobError::Cancelled));
     }
 }

@@ -14,6 +14,7 @@ use tokio::process::Command;
 const ASR_PY: &str = include_str!("asr.py");
 const REQUIREMENT: &str = "faster-whisper==1.2.1";
 const MODEL: &str = "base.en";
+const MODEL_REVISION: &str = "3d3d5dee26484f91867d81cb899cfcf72b96be6c";
 const THREADS: u32 = 4;
 
 /// One recognised word with times relative to the fragment it came from.
@@ -38,9 +39,15 @@ pub fn pcm_temp() -> anyhow::Result<TempFile> {
     Ok(TempFile(dir.join(format!("{}.f32", uuid::Uuid::new_v4()))))
 }
 
-/// `uv` from PATH, then the two usual install locations.
+/// `uv` from PATH (excluding `node_modules/.bin`), then the two usual install locations.
 pub(crate) fn find_uv() -> Option<PathBuf> {
-    crate::proc::find("uv")
+    let path = crate::proc::without_npm_bins(&std::env::var_os("PATH").unwrap_or_default());
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".local").join("bin"));
+        dirs.push(home.join(".cargo").join("bin"));
+    }
+    crate::proc::find_in("uv", dirs)
 }
 
 async fn output(cmd: Command, secs: u64, cancel: &tokio_util::sync::CancellationToken) -> anyhow::Result<Output> {
@@ -97,6 +104,23 @@ async fn ensure_env(st: &AppState, cancel: &tokio_util::sync::CancellationToken)
     Ok(python)
 }
 
+/// Builds ffmpeg arguments for extracting mono 16 kHz float32 PCM, gating remote inputs with
+/// `-protocol_whitelist` so untrusted playlists cannot pivot to local/arbitrary protocols.
+fn extract_pcm_args(src: &str, audio_index: u32, start: f64, dur: f64, out: &Path) -> Vec<String> {
+    let mut a: Vec<String> = ["-hide_banner", "-v", "error", "-y", "-ss"].iter().map(|s| s.to_string()).collect();
+    a.push(format!("{start:.3}"));
+    a.extend(["-t".into(), format!("{dur:.3}")]);
+    let lower = src.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        a.extend(["-protocol_whitelist".into(), "http,https,tcp,tls".into()]);
+    }
+    a.extend(["-i".into(), crate::media::input(src)]);
+    a.extend(["-map".into(), format!("0:{audio_index}"), "-vn".into()]);
+    a.extend(["-ac", "1", "-ar", "16000", "-f", "f32le"].map(String::from));
+    a.push(out.to_string_lossy().into_owned());
+    a
+}
+
 /// One fragment of the media's audio as mono 16 kHz float32 PCM, so ASR never touches the network
 /// stream itself. The cancellation token kills the whole ffmpeg process group.
 pub async fn extract_pcm_cancellable(
@@ -107,13 +131,9 @@ pub async fn extract_pcm_cancellable(
     out: &Path,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<()> {
-    let mut a: Vec<String> = ["-hide_banner", "-v", "error", "-y", "-ss"].iter().map(|s| s.to_string()).collect();
-    a.push(format!("{start:.3}"));
-    a.extend(["-t".into(), format!("{dur:.3}"), "-i".into(), crate::media::input(src)]);
-    a.extend(["-map".into(), format!("0:{audio_index}"), "-vn".into()]);
-    a.extend(["-ac", "1", "-ar", "16000", "-f", "f32le"].map(String::from));
-    a.push(out.to_string_lossy().into_owned());
-    let mut cmd = crate::proc::background("ffmpeg");
+    let ffmpeg = crate::proc::find("ffmpeg").ok_or_else(|| anyhow!("ffmpeg не найден"))?;
+    let a = extract_pcm_args(src, audio_index, start, dur, out);
+    let mut cmd = crate::proc::background(ffmpeg);
     cmd.args(&a);
     let o = output(cmd, 180, cancel).await?;
     if !o.status.success() {
@@ -122,11 +142,6 @@ pub async fn extract_pcm_cancellable(
         bail!("ffmpeg: {}", e.trim().lines().last().unwrap_or("ошибка"));
     }
     Ok(())
-}
-
-/// Compatibility wrapper for callers without a cancellation token.
-pub async fn extract_pcm(src: &str, audio_index: u32, start: f64, dur: f64, out: &Path) -> anyhow::Result<()> {
-    extract_pcm_cancellable(src, audio_index, start, dur, out, &tokio_util::sync::CancellationToken::new()).await
 }
 
 /// Words for every file, in file order. Times are relative to their file.
@@ -147,7 +162,7 @@ pub async fn transcribe_cancellable(
 
     let threads = THREADS.to_string();
     let mut c = crate::proc::background(&python);
-    c.arg(&script).args([MODEL, &threads]).args(files);
+    c.arg(&script).args([MODEL, MODEL_REVISION, &threads]).args(files);
     c.env("HF_HUB_DISABLE_TELEMETRY", "1");
     let o = output(c, 600, cancel).await.map_err(|e| anyhow!("распознавание речи: {e}"))?;
     if !o.status.success() {
@@ -156,11 +171,6 @@ pub async fn transcribe_cancellable(
     let stdout = String::from_utf8_lossy(&o.stdout);
     let last = stdout.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
     serde_json::from_str(last).map_err(|e| anyhow!("распознавание речи: {e}"))
-}
-
-/// Compatibility wrapper for callers without a cancellation token.
-pub async fn transcribe(st: &AppState, files: &[PathBuf]) -> anyhow::Result<Vec<Vec<Word>>> {
-    transcribe_cancellable(st, files, &tokio_util::sync::CancellationToken::new()).await
 }
 
 /// The house spelling of a subtitle/ASR word: lowercase, quotes and punctuation trimmed off the ends.
@@ -182,5 +192,17 @@ mod tests {
         assert_eq!(tokens("-Yeah, you're a lucky lady.\n-Oh, I'm excited."), ["yeah", "you're", "a", "lucky", "lady", "oh", "i'm", "excited"]);
         assert_eq!(tokens(" 'quoted' — 9am? "), ["quoted", "9am"]);
         assert_eq!(tokens("..."), Vec::<String>::new());
+    }
+
+    #[test]
+    fn extract_pcm_args_restricts_remote_protocols() {
+        let out = Path::new("/tmp/out.f32");
+        let http_args = extract_pcm_args("https://example.com/stream.mkv", 1, 10.0, 5.0, out);
+        let pos = http_args.iter().position(|a| a == "-protocol_whitelist").expect("whitelist flag");
+        assert_eq!(http_args[pos + 1], "http,https,tcp,tls");
+        assert!(pos < http_args.iter().position(|a| a == "-i").unwrap());
+
+        let file_args = extract_pcm_args("file:///tmp/movie.mkv", 1, 10.0, 5.0, out);
+        assert!(!file_args.iter().any(|a| a == "-protocol_whitelist"));
     }
 }

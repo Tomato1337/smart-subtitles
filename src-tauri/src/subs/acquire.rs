@@ -2,8 +2,75 @@ use super::{embedded, local, opensubtitles as os, parse, sidecar, store, torrser
 use crate::{notify::{self, Level}, session::Session, state::AppState, types::SubsStatus};
 use rusqlite::{params, Connection, OptionalExtension};
 use sha1::{Digest, Sha1};
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, LazyLock, Mutex,
+    },
+};
 use tauri::Emitter;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+use tokio_util::sync::CancellationToken;
+
+static RUN_SEQ: AtomicU64 = AtomicU64::new(1);
+static ACTIVE_RUNS: LazyLock<Mutex<HashMap<String, (u64, CancellationToken)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static INSTALL_LOCKS: LazyLock<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+tokio::task_local! {
+    static RUN_TOKEN: CancellationToken;
+}
+
+struct RunGuard {
+    session_id: String,
+    seq: u64,
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        let mut runs = ACTIVE_RUNS.lock().unwrap();
+        if runs.get(&self.session_id).is_some_and(|(s, _)| *s == self.seq) {
+            runs.remove(&self.session_id);
+        }
+    }
+}
+
+pub(super) fn current_run_token() -> Option<CancellationToken> {
+    RUN_TOKEN.try_with(|t| t.clone()).ok()
+}
+
+pub(super) async fn lock_install(session_id: &str) -> OwnedMutexGuard<()> {
+    let lock = {
+        let mut map = INSTALL_LOCKS.lock().unwrap();
+        map.retain(|_, v| Arc::strong_count(v) > 1);
+        map.entry(session_id.to_string())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
+    };
+    lock.lock_owned().await
+}
+
+fn register_run(session_id: &str, token: &CancellationToken) -> RunGuard {
+    let seq = RUN_SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut runs = ACTIVE_RUNS.lock().unwrap();
+    if let Some((_, prev)) = runs.insert(session_id.to_string(), (seq, token.clone())) {
+        prev.cancel();
+    }
+    RunGuard { session_id: session_id.to_string(), seq }
+}
+
+pub(super) fn cancel_in_flight(s: &Session) {
+    if let Some((_, tok)) = ACTIVE_RUNS.lock().unwrap().remove(&s.id) {
+        tok.cancel();
+    }
+    if let Some(tx) = s.embedded_decision.lock().unwrap().take() {
+        let _ = tx.send(false);
+    }
+    s.embedded_cancel.lock().unwrap().cancel();
+}
 
 pub(super) fn status(st: &AppState, e: SubsStatus) { let _ = st.app.emit("subs:status", e); }
 
@@ -73,8 +140,21 @@ pub async fn install(
     if cues.is_empty() {
         return Err("в файле нет реплик".into());
     }
-    // Another cue set ends any embedded load: the running loader must not append to it.
-    s.embedded_cancel.lock().unwrap().cancel();
+    let in_run_token = current_run_token();
+    let _install_guard = lock_install(&s.id).await;
+    if s.cancel.is_cancelled() || in_run_token.as_ref().is_some_and(|t| t.is_cancelled()) {
+        return Err("отменено установкой других субтитров".into());
+    }
+    // User-chosen / non-run install stops any active background acquisition & confirmation prompt,
+    // and any Cue replacement ends an existing embedded load so stale tracks never overwrite manual subs.
+    if in_run_token.is_none() {
+        cancel_in_flight(s);
+    } else {
+        if let Some(tx) = s.embedded_decision.lock().unwrap().take() {
+            let _ = tx.send(false);
+        }
+        s.embedded_cancel.lock().unwrap().cancel();
+    }
     let n = cues.len();
     let (mid, p) = (s.media_id.clone(), path.to_string_lossy().into_owned());
     st.db(move |c| {
@@ -123,7 +203,7 @@ async fn try_sidecar(st: &Arc<AppState>, s: &Arc<Session>) -> Option<()> {
     }
     let mut last = None;
     for r in cands {
-        let bytes = match sidecar::read_ref(st, &r.url).await {
+        let bytes = match sidecar::read_ref(st, &s.src, &r.url).await {
             Ok(b) => b,
             Err(e) => { last = Some(e.to_string()); continue; }
         };
@@ -226,59 +306,111 @@ async fn try_opensubtitles(st: &Arc<AppState>, s: &Arc<Session>) -> Option<()> {
 
 /// Tries the sources from `subtitles.sources` in order (the video itself is never downloaded for subtitles); a stored result for this media short-circuits everything.
 pub async fn run(st: Arc<AppState>, s: Arc<Session>) {
-    let mid = s.media_id.clone();
-    let cached = st
-        .db(move |c| cached_source(c, &mid))
-        .await
-        .ok()
-        .flatten();
-    if let Some((kind, exact)) = cached {
-        status(&st, ready_status(&s.media_id, &kind, exact));
-        let _ = st.app.emit("subs:updated", serde_json::json!({ "mediaId": s.media_id }));
-        crate::llm::annotate::restart(&st, &s);
-        if kind == "embedded" {
-            // A half-read track continues where it stopped: the row is the earlier consent.
+    let run_token = s.cancel.child_token();
+    let _guard = register_run(&s.id, &run_token);
+    RUN_TOKEN
+        .scope(run_token.clone(), async move {
             let mid = s.media_id.clone();
-            let more = st
-                .db(move |c| store::embedded_progress(c, &mid))
+            let cached = st
+                .db(move |c| cached_source(c, &mid))
                 .await
                 .ok()
-                .flatten()
-                .is_some_and(|(_, next, total)| next < total);
-            if more {
-                embedded::resume(&st, &s).await;
+                .flatten();
+            if s.cancel.is_cancelled() || run_token.is_cancelled() {
+                return;
             }
-        } else {
-            // The embedded track needs no timing check: it comes from the same file as the video.
-            super::sync::spawn(&st, &s);
-        }
-        return;
-    }
+            if let Some((kind, exact)) = cached {
+                status(&st, ready_status(&s.media_id, &kind, exact));
+                let _ = st.app.emit("subs:updated", serde_json::json!({ "mediaId": s.media_id }));
+                crate::llm::annotate::restart(&st, &s);
+                if kind == "embedded" {
+                    // A half-read track continues where it stopped: the row is the earlier consent.
+                    let mid = s.media_id.clone();
+                    let more = st
+                        .db(move |c| store::embedded_progress(c, &mid))
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some_and(|(_, next, total)| next < total);
+                    if more {
+                        embedded::resume(&st, &s).await;
+                    }
+                } else {
+                    // The embedded track needs no timing check: it comes from the same file as the video.
+                    super::sync::spawn(&st, &s);
+                }
+                return;
+            }
 
-    status(&st, SubsStatus::new(&s.media_id, "searching"));
-    let cfg = st.cfg();
-    for id in &cfg.subtitles.sources {
-        let got = match id.as_str() {
-            "torrserver" => try_torrserver(&st, &s).await,
-            "sidecar" => try_sidecar(&st, &s).await,
-            "embedded" => match local::path(&s.src) {
-                Some(file) => local::start(&st, &s, &file).await,
-                None => embedded::start(&st, &s, None, false).await,
-            },
-            "opensubtitles" => try_opensubtitles(&st, &s).await,
-            _ => None,
-        };
-        if got.is_some() || s.cancel.is_cancelled() {
-            return;
-        }
-    }
-    if s.cancel.is_cancelled() { return; }
-    status(&st, SubsStatus::new(&s.media_id, "none"));
+            status(&st, SubsStatus::new(&s.media_id, "searching"));
+            let cfg = st.cfg();
+            for id in &cfg.subtitles.sources {
+                if s.cancel.is_cancelled() || run_token.is_cancelled() {
+                    return;
+                }
+                let got = match id.as_str() {
+                    "torrserver" => try_torrserver(&st, &s).await,
+                    "sidecar" => try_sidecar(&st, &s).await,
+                    "embedded" => match local::path(&s.src) {
+                        Some(file) => local::start(&st, &s, &file).await,
+                        None => embedded::start(&st, &s, None, false).await,
+                    },
+                    "opensubtitles" => try_opensubtitles(&st, &s).await,
+                    _ => None,
+                };
+                if got.is_some() || s.cancel.is_cancelled() || run_token.is_cancelled() {
+                    return;
+                }
+            }
+            if s.cancel.is_cancelled() || run_token.is_cancelled() {
+                return;
+            }
+            status(&st, SubsStatus::new(&s.media_id, "none"));
+        })
+        .await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn manual_install_cancels_in_flight_run_and_pending_embedded_decision() {
+        let session_cancel = CancellationToken::new();
+        let run_token = session_cancel.child_token();
+        let _guard = register_run("sess-1", &run_token);
+        let embedded_decision = Mutex::new(None);
+        let embedded_cancel = Mutex::new(session_cancel.child_token());
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        *embedded_decision.lock().unwrap() = Some(tx);
+
+        // Simulate acquire::run waiting on embedded confirmation while manual install fires.
+        let tok_ref = run_token.clone();
+        let wait_task = tokio::spawn(RUN_TOKEN.scope(tok_ref.clone(), async move {
+            let accept = tokio::select! {
+                ans = rx => ans.unwrap_or(false),
+                _ = tok_ref.cancelled() => false,
+            };
+            (accept, current_run_token().unwrap().is_cancelled())
+        }));
+
+        // Simulate cancel_in_flight triggered by user-chosen acquire::install.
+        if let Some((_, tok)) = ACTIVE_RUNS.lock().unwrap().remove("sess-1") {
+            tok.cancel();
+        }
+        if let Some(dtx) = embedded_decision.lock().unwrap().take() {
+            let _ = dtx.send(false);
+        }
+        embedded_cancel.lock().unwrap().cancel();
+
+        let (accepted, was_cancelled) = wait_task.await.unwrap();
+        assert!(!accepted);
+        assert!(was_cancelled);
+        assert!(embedded_decision.lock().unwrap().is_none());
+        assert!(embedded_cancel.lock().unwrap().is_cancelled());
+        assert!(!session_cancel.is_cancelled());
+    }
 
     #[test]
     fn cache_file_is_per_candidate() {

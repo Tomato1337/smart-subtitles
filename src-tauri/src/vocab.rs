@@ -36,9 +36,12 @@ static FUNCTION_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 });
 
 static SEPARABLE_PRONOUNS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    ["it", "him", "her", "them", "me", "us", "you", "this", "that", "one"]
-        .into_iter()
-        .collect()
+    [
+        "it", "him", "her", "them", "me", "us", "you", "this", "that", "one",
+        "i", "he", "she", "we", "they",
+    ]
+    .into_iter()
+    .collect()
 });
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -329,11 +332,17 @@ fn is_above_level(word_cefr: Option<Cefr>, learner_cefr: &str) -> bool {
     (w as u8) > max_allowed
 }
 
+const MAX_VOCAB_BYTES: u64 = 16 * 1024 * 1024;
+
 impl VocabIndex {
     pub fn from_gz(bytes: &[u8]) -> anyhow::Result<Self> {
-        let mut decoder = GzDecoder::new(bytes);
-        let mut text = String::new();
-        decoder.read_to_string(&mut text)?;
+        let mut decoder = GzDecoder::new(bytes).take(MAX_VOCAB_BYTES + 1);
+        let mut raw = Vec::new();
+        decoder.read_to_end(&mut raw)?;
+        if raw.len() as u64 > MAX_VOCAB_BYTES {
+            anyhow::bail!("vocab index exceeds max decompressed size ({MAX_VOCAB_BYTES} bytes)");
+        }
+        let text = String::from_utf8(raw)?;
         Self::parse_tsv(&text)
     }
 
@@ -588,7 +597,10 @@ impl VocabIndex {
             .collect();
         let separable_pair: Option<(&str, &str)> = if needle.len() == 2 {
             Some((needle[0].as_str(), needle[1].as_str()))
-        } else if needle.len() == 3 && SEPARABLE_PRONOUNS.contains(needle[1].as_str()) {
+        } else if needle.len() == 3
+            && (SEPARABLE_PRONOUNS.contains(raw_tokens[1].as_str())
+                || SEPARABLE_PRONOUNS.contains(needle[1].as_str()))
+        {
             Some((needle[0].as_str(), needle[2].as_str()))
         } else {
             None
@@ -711,12 +723,7 @@ impl VocabIndex {
         if let Some(l) = self.lemma_of(&head[0]) {
             head[0] = l;
         }
-        let head_key = head.join(" ");
-        if self.lemmas.contains_key(&head_key) {
-            head_key
-        } else {
-            exact
-        }
+        head.join(" ")
     }
 
     /// 0..=5 for A1..=C2 when the word or indexed phrase has a CEFR label.
@@ -999,5 +1006,50 @@ mod tests {
         user.insert("illusion".into());
         let after = INDEX.analyze_cues(&cues, "B1", &anki, &user);
         assert!(after.comprehension_pct > b1_base.comprehension_pct);
+    }
+
+    #[test]
+    fn from_gz_rejects_oversized_payloads() {
+        use flate2::{write::GzEncoder, Compression};
+        use std::io::Write;
+
+        let mut enc = GzEncoder::new(Vec::new(), Compression::fast());
+        let bomb = vec![b'#'; (MAX_VOCAB_BYTES as usize) + 64];
+        enc.write_all(&bomb).unwrap();
+        let gz = enc.finish().unwrap();
+
+        let err = VocabIndex::from_gz(&gz).err().expect("oversized gzip should fail");
+        assert!(err.to_string().contains("max decompressed size"), "unexpected err: {err}");
+    }
+
+    #[test]
+    fn separable_phrasal_matches_object_pronouns_and_unindexed_canonical_key_lemmatizes_head() {
+        let cues = vec![
+            "I'll bail him out tonight.".to_string(),
+            "Can you cheer her up?".to_string(),
+            "Drop them off at the corner.".to_string(),
+            "Help me out here.".to_string(),
+            "Count us in!".to_string(),
+        ];
+        let queries = vec![
+            INDEX.lookup("bail out", "B1"),
+            INDEX.lookup("bail him out", "B1"),
+            INDEX.lookup("cheer up", "B1"),
+            INDEX.lookup("cheer her up", "B1"),
+            INDEX.lookup("drop off", "B1"),
+            INDEX.lookup("drop them off", "B1"),
+            INDEX.lookup("help out", "B1"),
+            INDEX.lookup("help me out", "B1"),
+            INDEX.lookup("count in", "B1"),
+            INDEX.lookup("count us in", "B1"),
+        ];
+        let counts = INDEX.count_in_cues(&cues, &queries);
+        assert_eq!(counts, vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+
+        // Unindexed multi-word expressions normalize the head verb consistently.
+        assert_eq!(INDEX.canonical_key("bailing out"), "bail out");
+        assert_eq!(INDEX.canonical_key("bailed out"), "bail out");
+        assert_eq!(INDEX.canonical_key("taking off"), "take off");
+        assert_eq!(INDEX.canonical_key("took off"), "take off");
     }
 }

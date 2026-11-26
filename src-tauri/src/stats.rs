@@ -796,7 +796,10 @@ fn query_films_and_friction(
 
         let denom_sec = if watched_sec >= 60 {
             watched_sec as f64
-        } else if f.last_position >= 60.0 && (period == Period::All || f.updated_at >= ts_param) {
+        } else if f.watch_sec_all == 0
+            && f.last_position >= 60.0
+            && (period == Period::All || f.updated_at >= ts_param)
+        {
             f.last_position
         } else {
             0.0
@@ -932,6 +935,7 @@ fn query_unadded_words(
     }
 
     let mut groups: HashMap<String, Acc> = HashMap::new();
+    let mut counted_clicks: HashSet<(String, u32, String)> = HashSet::new();
     let mut stmt = conn.prepare(
         "SELECT e.media_id, e.cue_idx, e.span, e.json, e.created_at,
                 m.title, m.season, m.episode, COALESCE(m.audio_index, 0), m.sub_offset, c.text
@@ -991,11 +995,15 @@ fn query_unadded_words(
             continue;
         }
 
-        let clicks_for_row = fe_clicks
-            .get(&(media_id.clone(), cue_idx, lower_span))
-            .copied()
-            .unwrap_or(1)
-            .max(1);
+        let clicks_for_row = if counted_clicks.insert((media_id.clone(), cue_idx, lower_span.clone())) {
+            fe_clicks
+                .get(&(media_id.clone(), cue_idx, lower_span))
+                .copied()
+                .unwrap_or(1)
+                .max(1)
+        } else {
+            0
+        };
         let film_label = if let (Some(s), Some(e)) = (season, episode) {
             format!("{title} S{s}E{e}")
         } else {
@@ -1168,9 +1176,34 @@ fn query_grammar(conn: &Connection) -> rusqlite::Result<GrammarStats> {
     })
 }
 
-fn query_ai(conn: &Connection, period: Period, today: &str, now_ts: i64, port: u16) -> rusqlite::Result<AiStats> {
-    let since_ts = match period.days() {
-        Some(d) => now_ts - (d as i64) * 86400,
+fn query_ai(conn: &Connection, period: Period, today: &str, _now_ts: i64, port: u16) -> rusqlite::Result<AiStats> {
+    let by_day = matches!(period, Period::Days7 | Period::Days30);
+    let granularity = if by_day { "day".to_string() } else { "week".to_string() };
+
+    let preset_keys: Option<Vec<String>> = if by_day {
+        let count = period.days().unwrap_or(30) as i32;
+        Some(
+            (0..count)
+                .map(|i| date_shift(conn, today, &format!("-{} days", count - 1 - i)))
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+        )
+    } else if period == Period::Days90 {
+        let cur_mon: String = conn.query_row("SELECT date(?1, 'weekday 0', '-6 days')", [today], |r| r.get(0))?;
+        Some(
+            (0..13)
+                .map(|i| date_shift(conn, &cur_mon, &format!("-{} days", (12 - i) * 7)))
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+        )
+    } else {
+        None
+    };
+
+    let since_ts: i64 = match preset_keys.as_deref().and_then(|k| k.first()) {
+        Some(first_day) => conn.query_row(
+            "SELECT CAST(strftime('%s', ?1 || ' 00:00:00', 'utc') AS INTEGER)",
+            [first_day],
+            |r| r.get(0),
+        )?,
         None => 0,
     };
 
@@ -1298,9 +1331,6 @@ fn query_ai(conn: &Connection, period: Period, today: &str, now_ts: i64, port: u
         rows.collect::<Result<_, _>>()?
     };
 
-    let by_day = matches!(period, Period::Days7 | Period::Days30);
-    let granularity = if by_day { "day".to_string() } else { "week".to_string() };
-
     let bucket_expr = if by_day {
         "date(u.created_at, 'unixepoch', 'localtime')"
     } else {
@@ -1353,19 +1383,7 @@ fn query_ai(conn: &Connection, period: Period, today: &str, now_ts: i64, port: u
         }
     }
 
-    let keys: Vec<String> = if by_day {
-        let count = period.days().unwrap_or(30) as i32;
-        (0..count)
-            .map(|i| date_shift(conn, today, &format!("-{} days", count - 1 - i)))
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    } else if period == Period::Days90 {
-        let cur_mon: String = conn.query_row("SELECT date(?1, 'weekday 0', '-6 days')", [today], |r| r.get(0))?;
-        (0..13)
-            .map(|i| date_shift(conn, &cur_mon, &format!("-{} days", (12 - i) * 7)))
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    } else {
-        bucket_map.keys().cloned().collect()
-    };
+    let keys: Vec<String> = preset_keys.unwrap_or_else(|| bucket_map.keys().cloned().collect());
 
     let series = keys
         .into_iter()
@@ -1893,5 +1911,119 @@ mod tests {
         let f2 = ov.immersion.films.iter().find(|f| f.media_id == "m2").unwrap();
         assert_eq!(f1.wpm, Some(27));
         assert_eq!(f2.wpm, None);
+    }
+
+    #[test]
+    fn query_ai_since_ts_aligns_to_keys_zero_local_midnight() {
+        let c = Connection::open_in_memory().unwrap();
+        db::init(&c).unwrap();
+        let today: String = c
+            .query_row("SELECT date(1760000000, 'unixepoch', 'localtime')", [], |r| r.get(0))
+            .unwrap();
+        let now_ts: i64 = c
+            .query_row(
+                "SELECT CAST(strftime('%s', ?1 || ' 23:30:00', 'utc') AS INTEGER)",
+                [&today],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let first_day = date_shift(&c, &today, "-6 days").unwrap();
+        let midnight_ts: i64 = c
+            .query_row(
+                "SELECT CAST(strftime('%s', ?1 || ' 00:00:00', 'utc') AS INTEGER)",
+                [&first_day],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        c.execute(
+            "INSERT INTO media(id,kind,source_url,title,updated_at) VALUES('m1','file','file:///a.mkv','Film',?1)",
+            [now_ts],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO llm_usage(media_id,task,model,input,cache_read,cache_write,output,usd,created_at) VALUES
+             ('m1','annotate','m',100,0,0,10,0.50,?1),
+             ('m1','annotate','m',100,0,0,10,0.10,?2),
+             ('m1','explain','m',100,0,0,10,0.20,?3)",
+            params![midnight_ts - 1, midnight_ts, now_ts - 60],
+        )
+        .unwrap();
+
+        let ov = query_overview(&c, Some("7d"), &[], false, "Learning English", "B1", 47800, now_ts).unwrap();
+        assert_eq!(ov.ai.requests, 2);
+        assert!((ov.ai.total_usd - 0.30).abs() < 1e-6, "unexpected total_usd={}", ov.ai.total_usd);
+        assert_eq!(ov.ai.series[0].key, first_day);
+        assert_eq!(ov.ai.series[0].requests, 1);
+        assert!((ov.ai.series[0].total_usd - 0.10).abs() < 1e-6);
+        let series_sum: f64 = ov.ai.series.iter().map(|b| b.total_usd).sum();
+        assert!((series_sum - ov.ai.total_usd).abs() < 1e-6);
+    }
+
+    #[test]
+    fn film_friction_guards_legacy_last_position_with_watch_sec_all_zero() {
+        let c = Connection::open_in_memory().unwrap();
+        db::init(&c).unwrap();
+        let now_ts = 1_760_000_000;
+        let old_ts = now_ts - 30 * 86400;
+
+        c.execute(
+            "INSERT INTO media(id,kind,source_url,title,duration,last_position,updated_at) VALUES
+             ('m1','file','file:///a.mkv','Old Watch',5000.0,3600.0,?1)",
+            [now_ts - 10],
+        )
+        .unwrap();
+        record_watch_tick(&c, "m1", 3600, old_ts).unwrap();
+        c.execute(
+            "INSERT INTO cue(media_id,idx,start,end,text) VALUES('m1',0,10.0,12.0,'Look out')",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO explanation(media_id,cue_idx,span,json,created_at) VALUES
+             ('m1',0,'Look out','{\"chunk\":\"look out\",\"translation\":\"берегись\",\"ipa\":\"\",\"kind\":\"phrasal_verb\",\"meaning\":\"\",\"examples\":[]}',?1)",
+            [now_ts - 10],
+        )
+        .unwrap();
+
+        let ov = query_overview(&c, Some("7d"), &[], false, "Learning English", "B1", 47800, now_ts).unwrap();
+        assert_eq!(ov.immersion.films.len(), 1);
+        assert_eq!(ov.immersion.films[0].watched_sec, 0);
+        assert_eq!(ov.immersion.films[0].lookups_per_10m, None);
+        assert_eq!(ov.immersion.films[0].replays_per_10m, None);
+        assert!(ov.immersion.friction_trend.is_empty(), "friction={:?}", ov.immersion.friction_trend);
+    }
+
+    #[test]
+    fn unadded_words_deduplicates_fe_clicks_for_case_variant_explanations() {
+        let c = Connection::open_in_memory().unwrap();
+        db::init(&c).unwrap();
+        let now_ts = 1_760_000_000;
+
+        c.execute(
+            "INSERT INTO media(id,kind,source_url,title,updated_at) VALUES('m1','file','file:///a.mkv','Film',?1)",
+            [now_ts],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO cue(media_id,idx,start,end,text) VALUES('m1',0,1.0,2.0,'Bail on us')",
+            [],
+        )
+        .unwrap();
+        let expl_json = r#"{"chunk":"bail on","translation":"подвести","ipa":"","kind":"phrasal_verb","meaning":"","examples":[]}"#;
+        c.execute(
+            "INSERT INTO explanation(media_id,cue_idx,span,json,created_at) VALUES
+             ('m1',0,'Bail on',?1,?2),
+             ('m1',0,'bail on',?1,?3)",
+            params![expl_json, now_ts - 20, now_ts - 10],
+        )
+        .unwrap();
+        for i in 0..3 {
+            record_friction(&c, "m1", 0, "lookup", Some("Bail on"), now_ts - i).unwrap();
+        }
+
+        let ov = query_overview(&c, Some("7d"), &[], false, "Learning English", "B1", 47800, now_ts).unwrap();
+        assert_eq!(ov.vocabulary.unadded.len(), 1);
+        assert_eq!(ov.vocabulary.unadded[0].clicks, 3);
     }
 }
