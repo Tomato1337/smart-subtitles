@@ -14,15 +14,23 @@ const RETENTION: Duration = Duration::from_secs(14 * 24 * 3600);
 pub fn redact(s: &str) -> String {
     use std::sync::LazyLock;
     static USERINFO: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"://[^/@\s]+@").unwrap());
-    static AUTHZ: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(authorization)\b\s*[:=]\s*\S.*$").unwrap());
-    static KEYVAL: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r#"(?i)\b(x-api-key|api[_-]?key|access[_-]?token)\b\s*[:=]\s*"?[^\s",}]+"?"#).unwrap());
+    static QUERY: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)([?&])(key|api[_-]?key|access[_-]?token|token|password)=[^&\s#]+").unwrap());
+    static AUTHZ: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r#"(?i)"?\b(authorization)\b"?\s*[:=]\s*(?:"[^"]*"|[^\r\n,}]+)"#).unwrap());
+    static KEYVAL: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r#"(?i)"?\b(x-goog-api-key|x-api-key|api[_-]?key|access[_-]?token|password)\b"?\s*[:=]\s*(?:"[^"]*"|[^\s",}&]+)"#).unwrap());
     static SCHEME: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}").unwrap());
     static SK: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\bsk-[A-Za-z0-9_-]{8,}").unwrap());
+    static AIZA: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\bAIza[A-Za-z0-9_-]{8,}").unwrap());
+    static GSK: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\bgsk_[A-Za-z0-9_-]{8,}").unwrap());
+    static XAI: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\bxai-[A-Za-z0-9_-]{8,}").unwrap());
     let s = USERINFO.replace_all(s, "://***@");
+    let s = QUERY.replace_all(&s, "$1$2=***");
     let s = AUTHZ.replace_all(&s, "$1=***");
     let s = KEYVAL.replace_all(&s, "$1=***");
     let s = SCHEME.replace_all(&s, "$1 ***");
-    SK.replace_all(&s, "sk-***").into_owned()
+    let s = SK.replace_all(&s, "sk-***");
+    let s = AIZA.replace_all(&s, "AIza***");
+    let s = GSK.replace_all(&s, "gsk_***");
+    XAI.replace_all(&s, "xai-***").into_owned()
 }
 
 fn logs_dir() -> PathBuf {
@@ -77,6 +85,26 @@ mod tests {
         assert_eq!(super::redact("api_key=\"abc123\", model=m"), "api_key=***, model=m");
         assert_eq!(super::redact("Authorization: Basic dXNlcjpwYXNz"), "Authorization=***");
         assert_eq!(super::redact("annotate 0 prompt=2421 cache_hit=- completion=896"), "annotate 0 prompt=2421 cache_hit=- completion=896");
+    }
+
+    #[test]
+    fn redacts_json_quoted_headers_query_params_and_key_prefixes() {
+        assert_eq!(
+            super::redact(r#"{"api_key":"secret123","apiKey": "secret456","x-goog-api-key":"AIzaSyAbc123456","password":"pw 123"}"#),
+            "{api_key=***,apiKey=***,x-goog-api-key=***,password=***}"
+        );
+        assert_eq!(
+            super::redact(r#"{"authorization": "Bearer supersecretvalue", "ok": true}"#),
+            r#"{authorization=***, "ok": true}"#
+        );
+        assert_eq!(
+            super::redact("GET https://example.com/v1/models?key=AIzaSyAbc12345&foo=1&api_key=k999&token=tok123"),
+            "GET https://example.com/v1/models?key=***&foo=1&api_key=***&token=***"
+        );
+        assert_eq!(
+            super::redact("bad key AIzaSyD123456789 and gsk_1234567890ab and xai-abcdef123456"),
+            "bad key AIza*** and gsk_*** and xai-***"
+        );
     }
 
     #[test]

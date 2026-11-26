@@ -21,7 +21,7 @@ pub struct Session {
     pub src: String,
     pub probe: OnceLock<Probe>,
     pub audio_index: Mutex<u32>,
-    pub ffmpeg: tokio::sync::Mutex<Option<Child>>,
+    pub ffmpeg: tokio::sync::Mutex<Option<(u64, Child)>>,
     pub gen: AtomicU64,
     /// Byte-flow gate of the current stream `(gen, paused)`: set by `/media/{sid}/flow`, read by the body stream.
     pub flow: Mutex<Option<(u64, Arc<std::sync::atomic::AtomicBool>)>>,
@@ -47,9 +47,29 @@ impl Session {
         self.probe.get().map(|p| video_mode(p, vaapi_ok))
     }
     pub async fn kill_ffmpeg(&self) {
-        if let Some(mut c) = self.ffmpeg.lock().await.take() {
+        if let Some((_, mut c)) = self.ffmpeg.lock().await.take() {
             let _ = c.start_kill();
             let _ = c.wait().await;
+        }
+    }
+
+    /// Kills the active ffmpeg process only if it still belongs to `gen`, preventing a failing
+    /// older stream request from terminating a newer seek's process.
+    pub async fn kill_ffmpeg_if_gen(&self, gen: u64) -> bool {
+        let child = {
+            let mut slot = self.ffmpeg.lock().await;
+            if slot.as_ref().is_some_and(|(g, _)| *g == gen) {
+                slot.take().map(|(_, c)| c)
+            } else {
+                None
+            }
+        };
+        if let Some(mut c) = child {
+            let _ = c.start_kill();
+            let _ = c.wait().await;
+            true
+        } else {
+            false
         }
     }
 }
@@ -176,6 +196,7 @@ pub async fn open_with_options(
     if req.title.trim().is_empty() {
         return Err(bad("title не может быть пустым"));
     }
+    let _open_guard = st.session_open_lock.lock().await;
     st.sessions.close().await;
 
     let media_id = media_id_for(&req.url, file_size);
@@ -230,7 +251,10 @@ pub async fn open_with_options(
         embedded_index: Default::default(),
         cues_grew: Default::default(),
     });
-    st.sessions.replace(Some(session.clone()));
+    if let Some(displaced) = st.sessions.replace(Some(session.clone())) {
+        displaced.cancel.cancel();
+        displaced.kill_ffmpeg().await;
+    }
     let _ = st.app.emit("session:loading", serde_json::json!({
         "title": title,
         "originalTitle": original_title,
@@ -245,11 +269,47 @@ pub async fn open_with_options(
     let s2 = session.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(e) = finish_open(&st2, &s2).await {
-            crate::logs::log("app", &format!("open failed: {e}"));
-            let _ = st2.app.emit("player:error", serde_json::json!({ "message": e }));
+            if !s2.cancel.is_cancelled() {
+                crate::logs::log("app", &format!("open failed: {e}"));
+                let _ = st2.app.emit("player:error", serde_json::json!({ "message": e }));
+            }
         }
     });
     Ok(session.id.clone())
+}
+
+async fn resolve_and_persist_audio(
+    db: &Arc<Mutex<rusqlite::Connection>>,
+    media_id: &str,
+    audio_tracks: &[AudioTrack],
+    cancel: &CancellationToken,
+) -> Result<Option<u32>, String> {
+    if cancel.is_cancelled() {
+        return Ok(None);
+    }
+    let mid = media_id.to_string();
+    let saved = crate::state::db_task(db, move |c| {
+        c.query_row("SELECT audio_index FROM media WHERE id=?1", [&mid], |r| r.get::<_, Option<u32>>(0))
+    })
+    .await?;
+    if cancel.is_cancelled() {
+        return Ok(None);
+    }
+    if let Some(idx) = saved.filter(|i| audio_tracks.iter().any(|a| a.index == *i)) {
+        return Ok(Some(idx));
+    }
+    let default_idx = probe::default_audio(audio_tracks);
+    if saved.is_none() {
+        if let Some(def) = default_idx {
+            let mid = media_id.to_string();
+            crate::state::db_task(db, move |c| {
+                c.execute("UPDATE media SET audio_index=?1 WHERE id=?2 AND audio_index IS NULL", rusqlite::params![def, mid])?;
+                Ok(())
+            })
+            .await?;
+        }
+    }
+    Ok(Some(default_idx.unwrap_or(0)))
 }
 
 async fn commit_probed_media(
@@ -283,11 +343,18 @@ async fn finish_open(st: &Arc<AppState>, s: &Arc<Session>) -> Result<(), String>
     if !commit_probed_media(&st.db, &s.media_id, &s.cancel, p.duration, s.from_start).await? {
         return Ok(());
     }
-    let saved = st.db({ let m = s.media_id.clone(); move |c| c.query_row("SELECT audio_index FROM media WHERE id=?1", [&m], |r| r.get::<_, Option<u32>>(0)) }).await?;
-    let audio = saved.filter(|i| p.audio.iter().any(|a| a.index == *i)).or_else(|| probe::default_audio(&p.audio)).unwrap_or(0);
+    let Some(audio) = resolve_and_persist_audio(&st.db, &s.media_id, &p.audio, &s.cancel).await? else {
+        return Ok(());
+    };
     *s.audio_index.lock().unwrap() = audio;
     let _ = s.probe.set(p);
+    if s.cancel.is_cancelled() {
+        return Ok(());
+    }
     if let Some(state) = build_state(st, s).await? {
+        if s.cancel.is_cancelled() {
+            return Ok(());
+        }
         let _ = st.app.emit("session:opened", &state);
     }
     tauri::async_runtime::spawn(crate::subs::acquire::run(st.clone(), s.clone()));
@@ -410,5 +477,86 @@ mod tests {
             .query_row("SELECT last_position FROM media WHERE id='m1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(pos, 0.0);
+    }
+
+    #[tokio::test]
+    async fn default_audio_persists_only_when_null_and_not_cancelled() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO media(id,kind,source_url,title,updated_at) VALUES
+             ('m1','lampa','http://x','Film 1',100),
+             ('m2','lampa','http://y','Film 2',100)",
+            [],
+        )
+        .unwrap();
+        conn.execute("UPDATE media SET audio_index=0 WHERE id='m2'", []).unwrap();
+        let db = Arc::new(Mutex::new(conn));
+        let tracks = vec![
+            AudioTrack { index: 0, codec: "ac3".into(), lang: Some("rus".into()), title: None, channels: 6 },
+            AudioTrack { index: 2, codec: "eac3".into(), lang: Some("eng".into()), title: None, channels: 6 },
+        ];
+
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert_eq!(resolve_and_persist_audio(&db, "m1", &tracks, &cancelled).await.unwrap(), None);
+
+        let active = CancellationToken::new();
+        assert_eq!(resolve_and_persist_audio(&db, "m1", &tracks, &active).await.unwrap(), Some(2));
+        let persisted: Option<u32> = db
+            .lock()
+            .unwrap()
+            .query_row("SELECT audio_index FROM media WHERE id='m1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(persisted, Some(2));
+
+        // Explicit user track 0 on m2 is preserved.
+        assert_eq!(resolve_and_persist_audio(&db, "m2", &tracks, &active).await.unwrap(), Some(0));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_ffmpeg_if_gen_ignores_superseded_generations() {
+        let cancel = CancellationToken::new();
+        let s = Session {
+            id: "s1".into(),
+            media_id: "m1".into(),
+            req: SessionRequest {
+                url: "http://x/v.mkv".into(),
+                title: "Film".into(),
+                path: None,
+                subtitles: vec![],
+                resume_at: None,
+                card: None,
+                season: None,
+                episode: None,
+                episodes: vec![],
+                playlist: vec![],
+            },
+            from_start: false,
+            seek_at: None,
+            src: "http://x/v.mkv".into(),
+            probe: OnceLock::new(),
+            audio_index: Mutex::new(0),
+            ffmpeg: tokio::sync::Mutex::new(None),
+            gen: AtomicU64::new(0),
+            flow: Mutex::new(None),
+            embedded_cancel: Mutex::new(cancel.child_token()),
+            cancel,
+            prefix: Mutex::new(None),
+            annot_run: Default::default(),
+            annot_priority: Default::default(),
+            embedded: Mutex::new(None),
+            embedded_decision: Mutex::new(None),
+            embedded_index: Default::default(),
+            cues_grew: Default::default(),
+        };
+        let child = tokio::process::Command::new("sleep").arg("30").kill_on_drop(true).spawn().unwrap();
+        *s.ffmpeg.lock().await = Some((2, child));
+
+        assert!(!s.kill_ffmpeg_if_gen(1).await, "stale generation 1 must not kill generation 2");
+        assert!(s.ffmpeg.lock().await.is_some());
+        assert!(s.kill_ffmpeg_if_gen(2).await, "matching generation 2 must be killed");
+        assert!(s.ffmpeg.lock().await.is_none());
     }
 }

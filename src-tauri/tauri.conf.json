@@ -15,6 +15,8 @@
         "label": "main",
         "width": 1600,
         "height": 900,
+        "minWidth": 960,
+        "minHeight": 620,
         "title": "Smart Subtitles",
         "resizable": true,
         "fullscreen": false,
@@ -22,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: http://127.0.0.1:47800; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src http://127.0.0.1:47800 blob:; connect-src ipc: http://ipc.localhost http://127.0.0.1:47800"
+      "csp": "default-src 'self'; img-src 'self' data: http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src http://127.0.0.1:* blob:; connect-src ipc: http://ipc.localhost http://127.0.0.1:*"
     }
   },
   "bundle": {

@@ -12,8 +12,16 @@ const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
 
 /// A tool started in the foreground: the video stream, ffprobe, uv.
 pub fn command(program: impl AsRef<OsStr>) -> Command {
+    let resolved = resolve_program(program.as_ref());
+    #[cfg(windows)]
+    if let Some((node, script)) = node_entrypoint_for_cmd(Path::new(&resolved)) {
+        let mut c = Command::new(node);
+        c.arg(script);
+        c.creation_flags(CREATE_NO_WINDOW);
+        return c;
+    }
     #[allow(unused_mut)]
-    let mut c = Command::new(program);
+    let mut c = Command::new(&resolved);
     #[cfg(windows)]
     c.creation_flags(CREATE_NO_WINDOW);
     c
@@ -22,18 +30,99 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
 /// Background work (clips, speech recognition, image conversion) at a lower CPU priority, so
 /// playback does not stutter: `nice -n 10` on Unix, the below-normal priority class on Windows.
 pub fn background(program: impl AsRef<OsStr>) -> Command {
+    let resolved = resolve_program(program.as_ref());
     #[cfg(unix)]
     {
         let mut c = Command::new("nice");
-        c.args(["-n", "10"]).arg(program);
+        c.args(["-n", "10"]).arg(resolved);
         c
     }
     #[cfg(windows)]
     {
-        let mut c = Command::new(program);
+        if let Some((node, script)) = node_entrypoint_for_cmd(Path::new(&resolved)) {
+            let mut c = Command::new(node);
+            c.arg(script);
+            c.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
+            return c;
+        }
+        let mut c = Command::new(&resolved);
         c.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
         c
     }
+}
+
+/// Resolves bare executable names (no path separator) via `find` so Windows never searches CWD first.
+fn resolve_program(program: &OsStr) -> OsString {
+    if let Some(s) = program.to_str() {
+        if !s.is_empty() && !s.contains('/') && !s.contains('\\') {
+            if let Some(found) = find(s) {
+                return found.into_os_string();
+            }
+        }
+    }
+    program.to_os_string()
+}
+
+/// Extracts a Node.js script entrypoint from an npm-generated Windows `.cmd` shim so callers can
+/// run `node <script>` directly instead of passing untrusted args through `cmd.exe`.
+pub fn parse_cmd_js_target(cmd_path: &Path, content: &str) -> Option<PathBuf> {
+    let dir = cmd_path.parent()?;
+    for raw_line in content.lines() {
+        let mut idx = 0;
+        while let Some(rel) = raw_line[idx..].find('"') {
+            let start = idx + rel + 1;
+            let Some(end_rel) = raw_line[start..].find('"') else { break };
+            let token = &raw_line[start..start + end_rel];
+            idx = start + end_rel + 1;
+            let lower = token.to_ascii_lowercase();
+            if !(lower.ends_with(".js") || lower.ends_with(".mjs") || lower.ends_with(".cjs")) {
+                continue;
+            }
+            let rel_path = token
+                .strip_prefix("%dp0%\\")
+                .or_else(|| token.strip_prefix("%dp0%/"))
+                .or_else(|| token.strip_prefix("%~dp0\\"))
+                .or_else(|| token.strip_prefix("%~dp0/"))
+                .or_else(|| token.strip_prefix("%dp0%"))
+                .or_else(|| token.strip_prefix("%~dp0"))?;
+            let normalized = rel_path.replace('\\', "/");
+            if normalized.is_empty() || normalized.contains("..") || normalized.starts_with('/') {
+                continue;
+            }
+            let mut candidate = dir.to_path_buf();
+            for part in normalized.split('/').filter(|p| !p.is_empty()) {
+                candidate.push(part);
+            }
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Resolves `(node_executable, script_path)` for a `.cmd` npm wrapper when both exist safely.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn node_entrypoint_for_cmd(cmd_path: &Path) -> Option<(PathBuf, PathBuf)> {
+    let ext = cmd_path.extension()?.to_str()?;
+    if !ext.eq_ignore_ascii_case("cmd") {
+        return None;
+    }
+    let content = std::fs::read_to_string(cmd_path).ok()?;
+    let script = parse_cmd_js_target(cmd_path, &content)?;
+    if !script.is_file() {
+        return None;
+    }
+    let dir = cmd_path.parent()?;
+    let sibling = dir.join(if cfg!(windows) { "node.exe" } else { "node" });
+    let node = if executable(&sibling) { sibling } else { find("node")? };
+    Some((node, script))
+}
+
+/// Rejects characters that `cmd.exe` interprets as command/variable metacharacters when a `.cmd`
+/// wrapper cannot be unwrapped to a direct binary invocation.
+#[allow(dead_code)]
+pub fn has_cmd_metachars(s: &OsStr) -> bool {
+    let Some(text) = s.to_str() else { return true };
+    text.chars().any(|c| matches!(c, '\r' | '\n' | '\0' | '&' | '|' | '<' | '>' | '^' | '%' | '!' | '"'))
 }
 
 #[cfg(unix)]
@@ -62,13 +151,40 @@ pub fn find_in(name: &str, dirs: impl IntoIterator<Item = PathBuf>) -> Option<Pa
     dirs.into_iter().flat_map(|d| names.iter().map(move |n| d.join(n)).collect::<Vec<_>>()).find(|p| executable(p))
 }
 
+/// `PATH` entries excluding empty, relative (`.`, `./...`) and current-working-directory entries.
+fn is_safe_path_dir(dir: &Path, cwd: Option<&Path>, cwd_canon: Option<&Path>) -> bool {
+    if dir.as_os_str().is_empty() || !dir.is_absolute() {
+        return false;
+    }
+    if dir.components().any(|c| matches!(c, std::path::Component::CurDir | std::path::Component::ParentDir)) {
+        return false;
+    }
+    if let Some(c) = cwd {
+        if dir == c {
+            return false;
+        }
+    }
+    if let Some(cc) = cwd_canon {
+        if dir.canonicalize().ok().as_deref() == Some(cc) {
+            return false;
+        }
+    }
+    true
+}
+
+pub(crate) fn filter_safe_dirs(dirs: impl IntoIterator<Item = PathBuf>, cwd: Option<&Path>) -> Vec<PathBuf> {
+    let cwd_canon = cwd.and_then(|c| c.canonicalize().ok());
+    dirs.into_iter().filter(|d| is_safe_path_dir(d, cwd, cwd_canon.as_deref())).collect()
+}
+
 /// `PATH`, then `~/.local/bin` and `~/.cargo/bin`: where the official uv installer puts it on every OS,
-/// and where a GUI app's trimmed `PATH` often does not reach.
+/// and where a GUI app's trimmed `PATH` often does not reach. Excludes CWD and relative `.` entries.
 pub fn find(name: &str) -> Option<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let cwd = std::env::current_dir().ok();
+    let path_dirs = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default();
+    let mut dirs = filter_safe_dirs(path_dirs, cwd.as_deref());
     if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join(".local").join("bin"));
-        dirs.push(home.join(".cargo").join("bin"));
+        dirs.extend(filter_safe_dirs([home.join(".local").join("bin"), home.join(".cargo").join("bin")], cwd.as_deref()));
     }
     find_in(name, dirs)
 }
@@ -231,6 +347,46 @@ mod tests {
         std::fs::write(b.join("tool"), "").unwrap();
         std::fs::set_permissions(b.join("tool"), std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(find_in("tool", [a, b.clone()]), Some(b.join("tool")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn filter_safe_dirs_excludes_cwd_and_relative_entries() {
+        let dir = std::env::temp_dir().join(format!("smartsubs-proc-safe-{}", uuid::Uuid::new_v4()));
+        let cwd = dir.join("cwd");
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        let filtered = filter_safe_dirs(
+            [
+                PathBuf::from(""),
+                PathBuf::from("."),
+                PathBuf::from("./bin"),
+                cwd.clone(),
+                cwd.join("."),
+                bin.clone(),
+            ],
+            Some(&cwd),
+        );
+        assert_eq!(filtered, vec![bin]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parses_npm_cmd_shim_and_rejects_cmd_metachars() {
+        let dir = std::env::temp_dir().join(format!("smartsubs-proc-cmd-{}", uuid::Uuid::new_v4()));
+        let js = dir.join("node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js");
+        std::fs::create_dir_all(js.parent().unwrap()).unwrap();
+        std::fs::write(&js, "console.log('hi');").unwrap();
+        let cmd_path = dir.join("omp.cmd");
+        let shim = r#"@ECHO off
+"%_prog%"  "%dp0%\node_modules\@oh-my-pi\pi-coding-agent\dist\cli.js" %*
+"#;
+        assert_eq!(parse_cmd_js_target(&cmd_path, shim), Some(js));
+        assert_eq!(parse_cmd_js_target(&cmd_path, r#"node "%dp0%\..\evil.js""#), None);
+        assert!(has_cmd_metachars(OsStr::new("hello & calc")));
+        assert!(has_cmd_metachars(OsStr::new("line1\nline2")));
+        assert!(!has_cmd_metachars(OsStr::new("--model anthropic/claude")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

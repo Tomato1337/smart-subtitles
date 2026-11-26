@@ -17,7 +17,7 @@
     Lampa.Player.listener.follow('create', function(e) {
       if (bypass) { bypass = false; return; }
       var d = e.data || {};
-      if (d.iptv || typeof d.url !== 'string' || d.url.indexOf('http') !== 0 || d.url.indexOf('youtube.com') !== -1) return;
+      if (d.iptv || typeof d.url !== 'string' || !/^https?:\/\//i.test(d.url) || d.url.indexOf('youtube.com') !== -1) return;
 
       e.abort();
       pending = {
@@ -58,7 +58,7 @@
 
   function subs(list) {
     if (!Array.isArray(list)) return [];
-    return list.filter(function(s) { return s && s.url; }).map(function(s) {
+    return list.filter(function(s) { return s && typeof s.url === 'string' && /^https?:\/\//i.test(s.url); }).map(function(s) {
       return { label: String(s.label || ''), url: s.url };
     });
   }
@@ -111,7 +111,7 @@
       season: se ? se.season : null,
       episode: se ? se.episode : null,
       episodes: [],
-      playlist: (Array.isArray(p.playlist) ? p.playlist : []).filter(function(i) { return i && i.url; }).map(function(i) {
+      playlist: (Array.isArray(p.playlist) ? p.playlist : []).filter(function(i) { return i && typeof i.url === 'string' && /^https?:\/\//i.test(i.url); }).map(function(i) {
         return { title: i.title || '', url: play(i.url), path: i.path || null, subtitles: subs(i.subtitles) };
       }),
     };

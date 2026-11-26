@@ -11,21 +11,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  # One draft for every job: parallel jobs creating it themselves would race into duplicates.
-  release:
+  # Tag mismatch must fail fast before building all target platforms.
+  verify-tag:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
-    outputs:
-      id: ${{ steps.draft.outputs.id }}
     steps:
       - uses: actions/checkout@v4
-      - id: draft
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+      - env:
           TAG: ${{ github.ref_name }}
         run: |
           # Packages are named after the app version: a tag that disagrees would ship 0.1.0 files as v0.2.0.
@@ -34,22 +29,9 @@ jobs:
             echo "::error::Тег $TAG не совпадает с версией $version в src-tauri/tauri.conf.json"
             exit 1
           fi
-          # A re-run reuses the release of this tag; drafts are only visible in the list.
-          id=$(gh api "repos/$GH_REPO/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)
-          if [ -z "$id" ]; then
-            # The id comes from the create response itself: the release list lags behind a fresh draft.
-            id=$(gh api --method POST "repos/$GH_REPO/releases" -f tag_name="$TAG" -f name="Smart Subtitles $TAG" -F draft=true \
-              -f body='Fedora — `.rpm`, Debian/Ubuntu — `.deb`, любой Linux — `.AppImage`, Arch — `.pkg.tar.zst`, macOS (Apple Silicon и Intel) — `.dmg`, Windows — `-setup.exe`. Установка описана в README.' \
-              --jq .id)
-          fi
-          if [ -z "$id" ]; then
-            echo "::error::Не удалось создать релиз $TAG"
-            exit 1
-          fi
-          echo "id=$id" >> "$GITHUB_OUTPUT"
 
   fedora:
-    needs: release
+    needs: verify-tag
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     container: fedora:latest
@@ -65,10 +47,7 @@ jobs:
           workspaces: src-tauri
       - run: npm ci
       - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          releaseId: ${{ needs.release.outputs.id }}
           args: --bundles rpm
       - uses: actions/upload-artifact@v4
         with:
@@ -77,7 +56,7 @@ jobs:
 
   # The oldest supported Ubuntu: the .deb and the AppImage then run on newer glibc too.
   debian:
-    needs: release
+    needs: verify-tag
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-22.04
     steps:
@@ -97,10 +76,7 @@ jobs:
           workspaces: src-tauri
       - run: npm ci
       - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          releaseId: ${{ needs.release.outputs.id }}
           args: --bundles deb,appimage
       - uses: actions/upload-artifact@v4
         with:
@@ -112,7 +88,7 @@ jobs:
           path: src-tauri/target/release/bundle/appimage/*.AppImage
 
   arch:
-    needs: [release, debian]
+    needs: [verify-tag, debian]
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     container: archlinux:latest
@@ -124,9 +100,12 @@ jobs:
           path: packaging/arch
       - name: Build the package
         run: |
-          pacman -Syu --noconfirm --needed base-devel github-cli jq
+          pacman -Syu --noconfirm --needed base-devel jq
           version=$(jq -r .version src-tauri/tauri.conf.json)
+          deb_file=$(ls packaging/arch/*.deb | head -n1)
+          deb_sha=$(sha256sum "$deb_file" | awk '{print $1}')
           sed -i "s/^pkgver=.*/pkgver=${version}/" packaging/arch/PKGBUILD
+          sed -i "s/^sha256sums=.*/sha256sums=('${deb_sha}')/" packaging/arch/PKGBUILD
           useradd -m builder
           chown -R builder packaging/arch
           cd packaging/arch
@@ -136,19 +115,9 @@ jobs:
         with:
           name: arch
           path: packaging/arch/*.pkg.tar.zst
-      - name: Attach to the release
-        if: needs.release.outputs.id != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          for f in packaging/arch/*.pkg.tar.zst; do
-            gh api --method POST -H 'Content-Type: application/octet-stream' \
-              "https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.release.outputs.id }}/assets?name=$(basename "$f")" \
-              --input "$f" > /dev/null
-          done
 
   macos:
-    needs: release
+    needs: verify-tag
     if: ${{ !failure() && !cancelled() }}
     runs-on: macos-latest
     steps:
@@ -165,10 +134,7 @@ jobs:
           workspaces: src-tauri
       - run: npm ci
       - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          releaseId: ${{ needs.release.outputs.id }}
           args: --bundles app,dmg --target universal-apple-darwin
       - uses: actions/upload-artifact@v4
         with:
@@ -176,7 +142,7 @@ jobs:
           path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
 
   windows:
-    needs: release
+    needs: verify-tag
     if: ${{ !failure() && !cancelled() }}
     runs-on: windows-latest
     steps:
@@ -191,12 +157,46 @@ jobs:
           workspaces: src-tauri
       - run: npm ci
       - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          releaseId: ${{ needs.release.outputs.id }}
           args: --bundles nsis
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: src-tauri/target/release/bundle/nsis/*-setup.exe
+
+  # Only this job receives contents:write so untrusted build steps never hold write tokens.
+  release:
+    needs: [fedora, debian, arch, macos, windows]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create draft release and upload packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          (cd artifacts && sha256sum * > SHA256SUMS.txt)
+          id=$(gh api "repos/$GH_REPO/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)
+          if [ -z "$id" ]; then
+            # The id comes from the create response itself: the release list lags behind a fresh draft.
+            id=$(gh api --method POST "repos/$GH_REPO/releases" -f tag_name="$TAG" -f name="Smart Subtitles $TAG" -F draft=true \
+              -f body='Fedora — `.rpm`, Debian/Ubuntu — `.deb`, любой Linux — `.AppImage`, Arch — `.pkg.tar.zst`, macOS (Apple Silicon и Intel) — `.dmg`, Windows — `-setup.exe`. Checksums: `SHA256SUMS.txt`. Установка описана в README.' \
+              --jq .id)
+          fi
+          if [ -z "$id" ]; then
+            echo "::error::Не удалось создать релиз $TAG"
+            exit 1
+          fi
+          for f in artifacts/*; do
+            [ -f "$f" ] || continue
+            gh api --method POST -H 'Content-Type: application/octet-stream' \
+              "https://uploads.github.com/repos/${GH_REPO}/releases/${id}/assets?name=$(basename "$f")" \
+              --input "$f" > /dev/null
+          done

@@ -6,12 +6,21 @@ use tauri::AppHandle;
 pub struct AppState {
     /// Live config; `config_save` swaps it, readers take a cheap Arc snapshot via `cfg()`.
     pub config: RwLock<Arc<Config>>,
+    /// Serializes read-modify-write config updates across UI, agent API, and `annot_set`.
+    pub config_lock: tokio::sync::Mutex<()>,
+    /// Per-install secret token stored in `agent.token` (mode 0600) for local agent HTTP calls.
+    pub agent_token: String,
     /// Port the HTTP server was bound to at startup; config.server.port may differ until restart.
     pub listen_port: u16,
     pub db: Arc<Mutex<Connection>>,
     pub sessions: SessionManager,
+    /// Serializes `session::open_with_options` and `session_close` so sessions cannot orphan each other.
+    pub session_open_lock: tokio::sync::Mutex<()>,
     pub vaapi_ok: AtomicBool,
+    /// Same-host redirects only, so credentials (TorrServer/Anki/etc.) never leak cross-host.
     pub http: reqwest::Client,
+    /// Untrusted remote fetches (posters, third-party URLs): redirects are disabled.
+    pub untrusted_http: reqwest::Client,
     /// LLM calls only: same-host redirects, so a keyed header never follows a cross-host hop.
     pub llm_http: reqwest::Client,
     pub app: AppHandle,

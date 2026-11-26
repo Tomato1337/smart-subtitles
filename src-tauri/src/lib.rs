@@ -29,7 +29,7 @@ use tauri_plugin_deep_link::DeepLinkExt;
 
 /// VAAPI exists only on Linux; elsewhere video that needs re-encoding goes through libx264.
 pub(crate) async fn vaapi_selftest(dev: &str) -> bool {
-    if !cfg!(target_os = "linux") {
+    if !cfg!(target_os = "linux") || dev.is_empty() || setup::validate_vaapi_device(dev).is_err() {
         return false;
     }
     let out = proc::command("ffmpeg")
@@ -37,6 +37,45 @@ pub(crate) async fn vaapi_selftest(dev: &str) -> bool {
         .output()
         .await;
     matches!(out, Ok(o) if o.status.success())
+}
+
+fn same_host_http_client() -> anyhow::Result<reqwest::Client> {
+    let policy = reqwest::redirect::Policy::custom(|a| {
+        let same = a.previous().last().is_some_and(|p| {
+            let scheme_ok = p.scheme() == a.url().scheme()
+                || (p.scheme() == "http" && a.url().scheme() == "https");
+            scheme_ok
+                && p.host_str() == a.url().host_str()
+                && p.port_or_known_default() == a.url().port_or_known_default()
+        });
+        if same && a.previous().len() < 5 { a.follow() } else { a.stop() }
+    });
+    Ok(reqwest::Client::builder().redirect(policy).build()?)
+}
+
+fn untrusted_http_client() -> anyhow::Result<reqwest::Client> {
+    Ok(reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build()?)
+}
+
+fn is_valid_open_deep_link(u: &url::Url) -> bool {
+    u.scheme() == "smartsubs"
+        && u.host_str() == Some("open")
+        && matches!(u.path(), "" | "/")
+        && u.query().is_none()
+        && u.fragment().is_none()
+}
+
+fn should_focus_single_instance(argv: &[String]) -> bool {
+    let deep_links: Vec<&str> = argv
+        .iter()
+        .skip(1)
+        .map(String::as_str)
+        .filter(|a| a.to_ascii_lowercase().starts_with("smartsubs:"))
+        .collect();
+    if deep_links.is_empty() {
+        return true;
+    }
+    deep_links.iter().any(|a| url::Url::parse(a).is_ok_and(|u| is_valid_open_deep_link(&u)))
 }
 
 /// Apps started from Finder/Dock get PATH=/usr/bin:/bin:/usr/sbin:/sbin, so Homebrew's ffmpeg, ffprobe
@@ -61,21 +100,30 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     add_homebrew_to_path();
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| session::show_main_window(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if should_focus_single_instance(&argv) {
+                session::show_main_window(app);
+            }
+        }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             logs::vacuum();
             let cfg = config::Config::load()?;
+            let agent_token = config::load_or_create_agent_token()?;
             let port = cfg.server.port;
             let conn = db::open(&config::config_dir().join("data.db"))?;
             let st = Arc::new(AppState {
                 config: std::sync::RwLock::new(Arc::new(cfg)),
+                config_lock: Default::default(),
+                agent_token,
                 listen_port: port,
                 db: Arc::new(Mutex::new(conn)),
                 sessions: Default::default(),
+                session_open_lock: Default::default(),
                 vaapi_ok: AtomicBool::new(false),
-                http: reqwest::Client::builder().build()?,
+                http: same_host_http_client()?,
+                untrusted_http: untrusted_http_client()?,
                 llm_http: llm::client::http_client()?,
                 app: app.handle().clone(),
                 anki: Default::default(),
@@ -130,7 +178,11 @@ pub fn run() {
             tauri::async_runtime::spawn(theme::watch(h));
 
             let h = app.handle().clone();
-            app.deep_link().on_open_url(move |_| session::show_main_window(&h));
+            app.deep_link().on_open_url(move |event| {
+                if event.urls().iter().any(is_valid_open_deep_link) {
+                    session::show_main_window(&h);
+                }
+            });
             // deb/rpm register smartsubs:// through their .desktop file; an AppImage has no installer, and on
             // Windows the per-user registry entry keeps pointing at the exe that runs now.
             #[cfg(target_os = "linux")]
@@ -138,7 +190,7 @@ pub fn run() {
             #[cfg(windows)]
             let register = true;
             #[cfg(any(windows, target_os = "linux"))]
-            if register {
+            if register && !app.deep_link().is_registered("smartsubs").unwrap_or(false) {
                 if let Err(e) = app.deep_link().register_all() {
                     logs::log("app", &format!("smartsubs:// не зарегистрирован: {e}"));
                 }
@@ -303,5 +355,17 @@ mod ipc_contract {
         assert!(!emitted.is_empty() && !typed.is_empty(), "event extraction found nothing");
         assert_eq!(diff(&emitted, &typed), Vec::<String>::new(), "emitted by Rust but missing from AppEvents in tauri.ts");
         assert_eq!(diff(&typed, &emitted), Vec::<String>::new(), "in AppEvents but never emitted by Rust");
+    }
+
+    #[test]
+    fn deep_link_validation_accepts_only_plain_open() {
+        assert!(super::is_valid_open_deep_link(&url::Url::parse("smartsubs://open").unwrap()));
+        assert!(super::is_valid_open_deep_link(&url::Url::parse("smartsubs://open/").unwrap()));
+        assert!(!super::is_valid_open_deep_link(&url::Url::parse("smartsubs://evil").unwrap()));
+        assert!(!super::is_valid_open_deep_link(&url::Url::parse("smartsubs://open?x=1").unwrap()));
+        assert!(!super::is_valid_open_deep_link(&url::Url::parse("https://open").unwrap()));
+        assert!(super::should_focus_single_instance(&["smart-subtitle".into()]));
+        assert!(super::should_focus_single_instance(&["smart-subtitle".into(), "smartsubs://open".into()]));
+        assert!(!super::should_focus_single_instance(&["smart-subtitle".into(), "smartsubs://evil".into()]));
     }
 }
