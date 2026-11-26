@@ -16,7 +16,7 @@ export function VideoSurface() {
       )}
       {!playing && !buffering && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <span className="flex size-20 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--md-sys-color-scrim)_60%,transparent)] text-[var(--md-sys-color-on-surface)]">
+          <span className="flex size-20 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--md-sys-color-scrim)_60%,transparent)] text-[var(--app-on-video)]">
             <Icon name="play_arrow" size={48} fill />
           </span>
         </div>

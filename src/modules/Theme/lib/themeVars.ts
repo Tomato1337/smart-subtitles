@@ -6,8 +6,10 @@ const kinds: [name: string, hex: string][] = [
  ['slang', '#F06292'], ['reduction', '#BA68C8'], ['grammar', '#FFD54F'],
 ]
 const ANKI = '#FFB74D'
-/** Warnings: kept unblended so the orange stays orange on any wallpaper. */
-const WARNING = '#FF9800'
+/** Warnings: amber-gold kept unblended so warnings stay clearly distinct from red error badges. */
+const WARNING = '#FFC107'
+/** Error badge: vivid red kept distinct from amber warnings across dark and light modes. */
+const ERROR_BADGE = '#E53935'
 /** Success: kept unblended so the green reads clearly across themes. */
 const SUCCESS = '#2E9E6E'
 
@@ -89,15 +91,32 @@ export function themeVars(t: ThemeInput): Record<string, string> {
   if (out[fgVar] && out[bgVar]) out[fgVar] = ensureContrast(out[fgVar], out[bgVar], 6.5)
  }
  const dark = t.mode !== 'light'
- for (const [name, hex] of kinds) out[`--app-kind-${name}`] = customColorTones(hex, t.seed, dark).color
+ for (const [name, hex] of kinds) {
+  const tones = customColorTones(hex, t.seed, dark)
+  const videoTones = customColorTones(hex, t.seed, true)
+  out[`--app-kind-${name}`] = tones.color
+  out[`--app-on-video-kind-${name}`] = videoTones.color
+  if (name === 'grammar') {
+   out['--app-grammar-container'] = tones.container
+   out['--app-grammar-on-container'] = ensureContrast(tones.onContainer, tones.container, 6.5)
+   out['--app-on-video-grammar-container'] = videoTones.container
+   out['--app-on-video-grammar-on-container'] = ensureContrast(videoTones.onContainer, videoTones.container, 6.5)
+  }
+ }
  const anki = customColorTones(ANKI, t.seed, dark)
+ const ankiOnVideo = customColorTones(ANKI, t.seed, true)
  out['--app-anki-label'] = anki.color
+ out['--app-on-video-anki-label'] = ankiOnVideo.color
  out['--app-anki-label-container'] = anki.container
  out['--app-anki-on-label-container'] = anki.onContainer
  const warn = customColorTones(WARNING, t.seed, dark, false)
  out['--app-warning'] = warn.color
+ out['--app-on-warning'] = ensureContrast(warn.onColor, warn.color, 4.5)
  out['--app-warning-container'] = warn.container
  out['--app-on-warning-container'] = warn.onContainer
+ const errBadgeBg = dark ? '#d93025' : customColorTones(ERROR_BADGE, t.seed, false, false).color
+ out['--app-error-badge'] = errBadgeBg
+ out['--app-on-error-badge'] = ensureContrast('#ffffff', errBadgeBg, 4.5)
  const ok = customColorTones(SUCCESS, t.seed, dark, false)
  out['--app-success'] = ok.color
  out['--app-success-container'] = ok.container

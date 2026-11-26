@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type Ref } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { useShallow } from 'zustand/react/shallow'
-import { Icon, IconButton, Menu, MenuDivider, MenuItem, WavyProgress } from '@tomato1337/m3e-react'
+import { Icon, IconButton, Menu, MenuDivider, MenuItem, Presence, TextField, WavyProgress } from '@tomato1337/m3e-react'
 import { api } from '@/common/api/tauri'
 import type { Cue, CueAnnotation } from '@/common/types/ipc'
 import { formatTime } from '@/common/utilities/time'
@@ -58,6 +58,8 @@ type Props = {
  idleOpacity?: number
  /** Any player-level menu, popover or modal dialog is open: keeps the dialog list at full opacity. */
  keepAwake?: boolean
+ /** Extra layout classes (e.g. overlay drawer positioning below 1160 px). */
+ className?: string
 }
 
 const FONT = { S: 'type-title-small', M: 'type-title-medium', L: 'type-title-large' } as const
@@ -99,7 +101,7 @@ function RowActions({ cue, on, compact }: { cue: Cue; on: RowHandlers; compact?:
     variant={compact ? 'tonal' : 'tertiary'}
     shape={compact ? undefined : 'cookie9'}
     fill={!compact}
-    className={compact ? undefined : '!size-11'}
+    style={compact ? undefined : ({ '--m3e-icon-button-size': '44px' } as CSSProperties)}
     icon="auto_awesome"
     label="Объяснить агентом"
     onClick={act(on.explain)}
@@ -196,6 +198,7 @@ export const Sidebar = memo(function Sidebar({
  chromeVisible = true,
  idleOpacity = 0.36,
  keepAwake = false,
+ className = '',
 }: Props) {
  const player = usePlayer()
  // Only the fields the list shows: the whole store also changes on analysis progress, reveal, status…
@@ -229,6 +232,8 @@ export const Sidebar = memo(function Sidebar({
   if (!q) return cues
   return cues.filter((c) => c.text.toLowerCase().includes(q) || (annotations.get(c.idx)?.ru ?? '').toLowerCase().includes(q))
  }, [cues, annotations, query])
+ const cueArrayIndexByIdx = useMemo(() => new Map(cues.map((c, i) => [c.idx, i])), [cues])
+ const focusedCue = focused >= 0 ? (cues[focused] ?? null) : null
 
  // Keep the focused phrase centered; manual wheel/touch scrolling pauses it for 5 s. Nearby phrases glide,
  // long jumps (seek, first load) snap. Deferred a little so Virtuoso has measured the resized rows.
@@ -260,7 +265,7 @@ export const Sidebar = memo(function Sidebar({
    data-tour="sidebar"
    data-sidebar-idle={idle ? 'true' : undefined}
    style={{ '--sidebar-idle-opacity': String(clampedOpacity) } as CSSProperties}
-   className="m3e-motion-from-left flex h-full min-h-0 flex-col overflow-hidden rounded-l-none rounded-r-[var(--md-sys-shape-corner-extra-large)] bg-[var(--md-sys-color-surface-container-low)]"
+   className={`m3e-motion-from-left flex h-full min-h-0 flex-col overflow-hidden rounded-l-none rounded-r-[var(--md-sys-shape-corner-extra-large)] bg-[var(--md-sys-color-surface-container-low)] ${className}`}
    aria-label="Диалоги"
   >
    <div data-sidebar-header className="flex items-center justify-between pl-6 pr-2 pt-4 pb-2">
@@ -281,18 +286,33 @@ export const Sidebar = memo(function Sidebar({
      <IconButton icon="left_panel_close" label="Свернуть" onClick={() => set({ sidebarOpen: false })} />
     </div>
    </div>
-   {searching && (
-    <div className="px-3 pb-2">
-     <input
-      autoFocus
-      value={query}
-      onChange={(e) => setQuery(e.target.value)}
-      placeholder="Поиск по EN и RU"
-      aria-label="Поиск по EN и RU"
-      className="type-body-medium min-h-10 w-full rounded-full bg-[var(--md-sys-color-surface-container-highest)] px-4 py-2"
-     />
-    </div>
-   )}
+   <Presence>
+    {searching && (
+     <div className="m3e-motion-rise px-3 pb-2">
+      <TextField
+       variant="pill"
+       autoFocus
+       value={query}
+       onChange={(e) => setQuery(e.target.value)}
+       placeholder="Поиск по EN и RU"
+       aria-label="Поиск по EN и RU"
+       leading={<Icon name="search" size={18} />}
+       trailing={
+        query ? (
+         <IconButton
+          icon="close"
+          label="Очистить поиск"
+          size="sm"
+          noTip
+          className="mr-1"
+          onClick={() => setQuery('')}
+         />
+        ) : undefined
+       }
+      />
+     </div>
+    )}
+   </Presence>
    <div className="min-h-0 flex-1 overflow-x-hidden" onWheel={noteScroll} onTouchMove={noteScroll}>
     {rows.length === 0 ? (
      <p className="type-body-medium p-4 text-[var(--md-sys-color-on-surface-variant)]">{cues.length === 0 ? 'Реплик пока нет' : 'Ничего не найдено'}</p>
@@ -304,14 +324,15 @@ export const Sidebar = memo(function Sidebar({
       computeItemKey={(_, c) => c.idx}
       itemContent={(_, cue) => {
        const ann = annotations.get(cue.idx)
-       const active = cue.idx === focused
+       const arrayIdx = cueArrayIndexByIdx.get(cue.idx) ?? -1
+       const active = focusedCue !== null && cue.idx === focusedCue.idx
        return (
         <CueRow
          cue={cue}
          ann={ann}
          active={active}
          focusFrom={active ? cue.start + offset : 0}
-         focusTo={active ? focusEnd(cues, cue.idx, offset) : 0}
+         focusTo={active && arrayIdx >= 0 ? focusEnd(cues, arrayIdx, offset) : 0}
          font={sidebarFont}
          translation={showSidebarTranslation}
          needsRetry={canRetry && !ann && failedBatches.has(batchOf(cue.idx))}

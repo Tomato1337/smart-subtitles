@@ -16,7 +16,7 @@
 @layer components {
   .type-hero {
     font-family: var(--md-ref-typeface-brand);
-    font-size: 3.5rem;
+    font-size: clamp(2rem, 5vw, 3.5rem);
     line-height: 1;
     font-weight: var(--app-display-weight);
     font-stretch: var(--app-display-width);

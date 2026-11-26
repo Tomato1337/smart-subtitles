@@ -16,9 +16,14 @@ export function useAnnotPriority(mediaId: string) {
   const sent = useRef<number | null>(null)
   useEffect(() => {
     sent.current = null
+    let prevCues = useSubsStore.getState().cues
+    let prevOffset = useSubsStore.getState().offset
     const apply = () => {
       const { cues, offset } = useSubsStore.getState()
-      if (cues.length === 0) return
+      if (cues.length === 0) {
+        sent.current = null
+        return
+      }
       const i = Math.max(lastStartedBefore(cues, usePlaybackStore.getState().absTime, offset), 0)
       const b = Math.floor(i / BATCH)
       if (b === sent.current) return
@@ -26,6 +31,17 @@ export function useAnnotPriority(mediaId: string) {
       api.annotPrioritize(mediaId, i).catch(() => {})
     }
     apply()
-    return usePlaybackStore.subscribe(apply)
+    const unPlay = usePlaybackStore.subscribe(apply)
+    const unSubs = useSubsStore.subscribe((s) => {
+      if (s.cues === prevCues && s.offset === prevOffset) return
+      if (s.cues.length < prevCues.length || s.cues[0] !== prevCues[0]) sent.current = null
+      prevCues = s.cues
+      prevOffset = s.offset
+      apply()
+    })
+    return () => {
+      unPlay()
+      unSubs()
+    }
   }, [mediaId])
 }

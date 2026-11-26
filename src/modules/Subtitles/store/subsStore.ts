@@ -42,6 +42,8 @@ type SubsStore = SubtitleSettings & {
  annot: AnnotStatus | null
  /** Embedded (in-file) subtitle load of the current film; null when there is none. */
  embedded: EmbeddedState | null
+ /** In-flight subtitle selection key per mediaId, preserved if SubsChooserDialog closes mid-download. */
+ choosingByMedia: Record<string, string | null>
  set: (p: Partial<SubtitleSettings>) => void
  reset: (mediaId: string, offset: number) => void
  setCues: (cues: Cue[], annotations: CueAnnotation[]) => void
@@ -52,6 +54,7 @@ type SubsStore = SubtitleSettings & {
  markFailed: (firstIdx: number) => void
  setAnnot: (a: AnnotStatus) => void
  setEmbedded: (e: EmbeddedState | null) => void
+ setChoosing: (mediaId: string, key: string | null) => void
 }
 
 /** What the analysis UI needs from the store: cues, their annotations and the written-off batches. */
@@ -68,6 +71,7 @@ export const useSubsStore = create<SubsStore>((set, get) => ({
  failedBatches: new Set(),
  annot: null,
  embedded: null,
+ choosingByMedia: {},
  set: (p) => {
   set(p)
   const s = get()
@@ -78,7 +82,7 @@ export const useSubsStore = create<SubsStore>((set, get) => ({
   localStorage.setItem(KEY, JSON.stringify(persisted))
  },
  reset: (mediaId, offset) => set({ mediaId, offset, cues: [], annotations: new Map(), status: null, reveal: null, failedBatches: new Set(), annot: null, embedded: null }),
- setCues: (cues, annotations) => set({ cues, annotations: new Map(annotations.map((a) => [a.idx, a])) }),
+ setCues: (cues, annotations) => set({ cues, annotations: new Map(annotations.map((a) => [a.idx, a])), failedBatches: new Set() }),
  applyAnnotations: (a) =>
   set((s) => {
    const m = new Map(s.annotations)
@@ -91,4 +95,6 @@ export const useSubsStore = create<SubsStore>((set, get) => ({
  markFailed: (firstIdx) => set((s) => ({ failedBatches: new Set(s.failedBatches).add(firstIdx) })),
  setAnnot: (annot) => set({ annot }),
  setEmbedded: (embedded) => set({ embedded }),
+ setChoosing: (mediaId, key) =>
+  set((s) => ({ choosingByMedia: { ...s.choosingByMedia, [mediaId]: key } })),
 }))

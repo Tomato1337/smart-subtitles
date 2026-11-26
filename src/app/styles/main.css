@@ -35,6 +35,19 @@ body {
 :root { --app-on-video: #f3f2f7; --app-video-scrim: rgb(0 0 0 / 0.55); }
 
 @layer components {
+  /* Video and dark guide surfaces always sit on black regardless of app light/dark polarity. */
+  [data-app-subtitles],
+  [data-app-on-video] {
+    --app-kind-idiom: var(--app-on-video-kind-idiom);
+    --app-kind-phrasal-verb: var(--app-on-video-kind-phrasal-verb);
+    --app-kind-collocation: var(--app-on-video-kind-collocation);
+    --app-kind-slang: var(--app-on-video-kind-slang);
+    --app-kind-reduction: var(--app-on-video-kind-reduction);
+    --app-kind-grammar: var(--app-on-video-kind-grammar);
+    --app-grammar-container: var(--app-on-video-grammar-container);
+    --app-grammar-on-container: var(--app-on-video-grammar-on-container);
+    --app-anki-label: var(--app-on-video-anki-label);
+  }
   /* Icon buttons floating on the video: dark scrim container, light glyph and state layer. */
   .icon-button-on-video {
     --m3e-icon-button-container: var(--app-video-scrim);
@@ -106,10 +119,10 @@ body {
 @keyframes fade-out { to { opacity: 0; } }
 .sub-in { animation: sub-in 280ms var(--md-sys-motion-easing-emphasized-decelerate); }
 /* Base style is the end state: if the fill is dropped (WebKitGTK) or unmount lags, the old line must not flash back. */
-.sub-out { opacity: 0; transform: translateY(-14px); animation: sub-out 220ms var(--md-sys-motion-easing-emphasized-accelerate) forwards; }
+.sub-out[data-closing] { pointer-events: none; opacity: 0; transform: translateY(-14px); animation: sub-out 220ms var(--md-sys-motion-easing-emphasized-accelerate) forwards; }
 @media (prefers-reduced-motion: reduce) {
   .sub-in { animation-name: fade-in; }
-  .sub-out { transform: none; animation-name: fade-out; }
+  .sub-out[data-closing] { transform: none; animation-name: fade-out; }
 }
 /* Actions of the focused dialog row. Only opacity/transform: the old height expand re-laid out the
    whole list every frame at each phrase change, and on WebKitGTK the film stalled with it. */
@@ -208,11 +221,19 @@ body {
       align-items: center;
       gap: 8px;
       block-size: 40px;
+      max-inline-size: min(360px, 100vw - 32px);
       padding: 0 16px 0 10px;
       white-space: nowrap;
       font: var(--md-sys-typescale-label-large-weight) var(--md-sys-typescale-label-large-size) / var(--md-sys-typescale-label-large-line-height) var(--md-sys-typescale-label-large-font);
 
-      & > span { color: var(--md-sys-color-on-surface-variant); }
+      & > b {
+        min-inline-size: 0;
+        max-inline-size: min(200px, 45vw);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      & > span { flex-shrink: 0; color: var(--md-sys-color-on-surface-variant); }
     }
   }
 
@@ -267,10 +288,23 @@ body {
       .card-island { transition-property: opacity, scale, width, height, top, left, border-radius, display, overlay; }
     }
   }
-}
 
-/* Volume slider: a 4px tonal track with a 4x20 bar thumb. */
-.m3-range { appearance: none; -webkit-appearance: none; width: 88px; height: 24px; background: transparent; accent-color: var(--md-sys-color-primary); }
-.m3-range::-webkit-slider-runnable-track { height: 4px; border-radius: 9999px; background: linear-gradient(to right, var(--md-sys-color-primary) var(--fill), var(--md-sys-color-secondary-container) var(--fill)); }
-.m3-range::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 4px; height: 20px; margin-top: -8px; border-radius: 9999px; background: var(--md-sys-color-primary); }
-@container dock (max-width: 760px) { .m3-range { display: none; } }
+  /* Responsive player dock and topbar inside their own inline-size containers. */
+  .dock-surface { padding: 8px 24px 12px; }
+  .dock-volume-slider { inline-size: 88px; }
+  .dock-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; }
+  @container dock (max-width: 760px) { .dock-volume-slider { display: none; } }
+  @container dock (max-width: 720px) { .dock-controls { display: flex; align-items: center; justify-content: space-between; gap: 4px; } }
+  @container dock (max-width: 640px) { .dock-surface { padding-inline: 14px; } }
+  @container dock (max-width: 480px) {
+    .dock-controls { flex-wrap: wrap; row-gap: 6px; }
+    .dock-controls > [data-tour='transport'] { order: -1; flex-basis: 100%; justify-content: center; }
+  }
+
+  .topbar-rate-reset { --m3e-icon-button-width: 64px; --m3e-icon-button-radius: var(--md-sys-shape-corner-extra-small); }
+  @container topbar (max-width: 640px) {
+    .topbar-cover { display: none; }
+    .topbar-bar { padding-inline: 12px; gap: 8px; }
+    .topbar-rate-reset { --m3e-icon-button-width: 52px; }
+  }
+}

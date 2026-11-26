@@ -38,18 +38,20 @@ export function TorrentSignalLine({ sessionId, enabled }: { sessionId: string; e
    aria-label={label}
    title={label}
    data-tour="torrent"
-   className="type-label-small flex flex-wrap items-center gap-x-2 gap-y-1 text-[color-mix(in_srgb,var(--app-on-video)_75%,transparent)]"
+   className="type-label-small flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-[color-mix(in_srgb,var(--app-on-video)_75%,transparent)]"
   >
-   <span aria-hidden="true" className="flex items-center gap-1">
+   <span aria-hidden="true" className="flex shrink-0 items-center gap-1">
     {signalDots(h.bufferPercent).map((dot, i) => (
      <span key={i} className="size-2 rounded-full" style={{ backgroundColor: DOT_COLOR[dot] }} />
     ))}
    </span>
-   <span className="tabular-nums">{h.activePeers} / {h.totalPeers}</span>
-   <span aria-hidden="true" className="text-[color-mix(in_srgb,var(--app-on-video)_45%,transparent)]">•</span>
-   <span className="tabular-nums">{h.connectedSeeders} подкл.</span>
-   <span aria-hidden="true" className="text-[color-mix(in_srgb,var(--app-on-video)_45%,transparent)]">•</span>
-   <span className="tabular-nums">{speed} Мбит/с</span>
+   <span className="min-w-0 truncate tabular-nums">
+    {h.activePeers} / {h.totalPeers}
+    <span aria-hidden="true" className="mx-1.5 text-[color-mix(in_srgb,var(--app-on-video)_45%,transparent)]">•</span>
+    {h.connectedSeeders} подкл.
+    <span aria-hidden="true" className="mx-1.5 text-[color-mix(in_srgb,var(--app-on-video)_45%,transparent)]">•</span>
+    {speed} Мбит/с
+   </span>
   </div>
  )
 }

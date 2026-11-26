@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react'
 import { announce, Button, clearExit, closeTopLayer, Icon, Spinner, useLatest, WavyProgress, type ToastAction } from '@tomato1337/m3e-react'
+import { useNotifications } from '@/common/api/notify'
 import { islandSurface, useIslandStore, type IslandOptions } from '../lib/island'
 
 /** A task in work collapses this long after it was shown or stopped being pinned. */
@@ -107,6 +108,7 @@ export function CardIsland() {
  const seq = useIslandStore((s) => s.seq)
  const dock = useIslandStore((s) => s.bar)
  const concealed = useIslandStore((s) => s.concealed)
+ const notifOpen = useNotifications((s) => s.open)
  const [shown, setShown] = useState<Shown | null>(null)
  const [hover, setHover] = useState(false)
  const [focus, setFocus] = useState(false)
@@ -161,14 +163,14 @@ export function CardIsland() {
  // Show or raise once per task, never for an update of the same task.
  useLayoutEffect(() => {
   const p = el.current
-  if (!p || !visible) return
+  if (!p || !visible || notifOpen) return
   clearExit(p)
   // Re-showing moves it to the top of the top layer (above a dialog opened meanwhile).
   if (p.matches(':popover-open')) p.hidePopover()
   p.showPopover()
   const { message: text, options: opts } = latest.current
   announce(opts.actions ? `${text}. ${opts.actions.map((a) => a.label).join(', ')}` : (text ?? ''))
- }, [visible, seq, latest])
+ }, [visible, notifOpen, seq, latest])
 
  // Collapse: a few seconds after the task is shown or unpinned, shortly after hover or focus leaves.
  const leftByUser = useRef(false)
@@ -253,7 +255,7 @@ export function CardIsland() {
    popover="manual"
    className="card-island m3e-snackbar-surface"
    data-mini={expanded ? undefined : ''}
-   data-concealed={!expanded && concealed ? '' : undefined}
+   data-concealed={notifOpen || (!expanded && concealed) ? '' : undefined}
    data-tone={o?.tone}
    style={style}
    onPointerEnter={() => {

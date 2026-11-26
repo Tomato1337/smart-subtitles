@@ -42,7 +42,7 @@ export const PATTERN_UNDERLINE: CSSProperties = {
 export function CueLine({ cue, ann, karaoke, live, onPick, onHover, shareHover, showShared }: Props) {
  const spoken = useSpokenFraction(live ? cue : null)
  const tokens = useMemo(() => tokenize(cue.text), [cue.text])
- const { decorate: anki, hasLabels } = useAnkiDecor(cue, tokens)
+ const { decorate: anki, hasLabels, labelRows } = useAnkiDecor(cue, tokens)
  const showPatterns = useSubsStore((s) => s.patterns)
 
  const decorate = useCallback(
@@ -57,7 +57,7 @@ export function CueLine({ cue, ann, karaoke, live, onPick, onHover, shareHover, 
  )
 
  return (
-  <span className={hasLabels ? 'block pt-5' : undefined}>
+  <span className={labelRows > 1 ? 'block pt-10' : hasLabels ? 'block pt-5' : undefined}>
    <CueText cue={cue} chunks={ann?.chunks ?? []} karaoke={karaoke ?? spoken} onPick={onPick} onHover={onHover} decorate={decorate} shareHover={shareHover} showShared={showShared} />
   </span>
  )

@@ -90,13 +90,25 @@ export const useNotifications = create<State>((set, get) => ({
  setOpen: (open) => set((s) => ({ open, live: open ? [] : s.live })),
 }))
 
+const GENERIC_NETWORK_ERROR = /^(?:TypeError:\s*)?(?:Load failed|Failed to fetch|NetworkError when attempting to fetch resource\.?)$/i
+
+/** Replaces opaque browser/WebKit network error strings with a clear Russian explanation. */
+export function localizeNotifyMessage(message: string): string {
+  const trimmed = message.trim()
+  if (GENERIC_NETWORK_ERROR.test(trimmed)) {
+    return 'Не удалось загрузить данные: нет ответа от сервера'
+  }
+  return message
+}
+
 /**
  * Raises a warn/error notification: the backend stores it (it survives a restart) and pops a toast.
  * Never throws, so a broken backend cannot turn into an `unhandledrejection` loop.
  */
 export function notify(level: NotifyLevel, message: string, options?: NotifyOptions): void {
+ const text = localizeNotifyMessage(message)
  api
-  .notificationsPush(level, message)
+  .notificationsPush(level, text)
   .then((n) => {
    const action = options?.action
    if (action) useNotifications.setState((s) => ({ actions: new Map(s.actions).set(n.id, action) }))
@@ -104,8 +116,8 @@ export function notify(level: NotifyLevel, message: string, options?: NotifyOpti
   })
   .catch(() => {
    // The store is unreachable: the message still belongs in the center, just not on disk.
-   logEvent(`notify failed: ${message}`)
-   const row: AppNotification = { id: localSeq--, level, message, createdAt: Math.floor(Date.now() / 1000) }
+   logEvent(`notify failed: ${text}`)
+   const row: AppNotification = { id: localSeq--, level, message: text, createdAt: Math.floor(Date.now() / 1000) }
    const action = options?.action
    if (action) useNotifications.setState((s) => ({ actions: new Map(s.actions).set(row.id, action) }))
    useNotifications.getState().upsert(row, options?.durationMs)

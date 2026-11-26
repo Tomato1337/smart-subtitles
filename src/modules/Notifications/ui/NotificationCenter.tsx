@@ -1,6 +1,7 @@
 import { useRouterState } from '@tanstack/react-router'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
-import { animateExit, Button, Icon, IconButton, Presence, toastStore } from '@tomato1337/m3e-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
+import { Virtuoso } from 'react-virtuoso'
+import { animateExit, Button, clearExit, Icon, IconButton, Presence, toastStore } from '@tomato1337/m3e-react'
 import { useNotifications, type NotifyAction } from '@/common/api/notify'
 import type { AppNotification, NotifyLevel } from '@/common/types/ipc'
 import { useSessionStore } from '@/modules/Session'
@@ -133,7 +134,7 @@ export function liveToastTopOffset(
 const LEVEL: Record<NotifyLevel, { icon: string; stripe: string; tileBg: string; tileFg: string }> = {
   error: {
     icon: 'error',
-    stripe: 'var(--md-sys-color-error)',
+    stripe: 'var(--app-error-badge)',
     tileBg: 'var(--md-sys-color-error-container)',
     tileFg: 'var(--md-sys-color-on-error-container)',
   },
@@ -168,7 +169,7 @@ function Card({ n, action, onClose, closeIcon, closeLabel, floating = false }: C
     : 'bg-[var(--md-sys-color-surface-container-highest)]'
   return (
     <div
-      className={`relative flex items-start ${floating ? 'gap-2.5' : 'gap-2 py-2 pr-1 pl-5'} ${surface}`}
+      className={`relative flex items-start ${floating ? 'gap-2.5' : 'gap-2 py-2.5 pr-1.5 pl-4'} ${surface}`}
       style={floating ? undefined : { borderRadius: 'var(--md-sys-shape-corner-medium)' }}
     >
       {/* Only the denser center rows carry an inset stripe; the 28px-corner floating popup uses a circular semantic icon tile. */}
@@ -188,8 +189,8 @@ function Card({ n, action, onClose, closeIcon, closeLabel, floating = false }: C
           <Icon name={style.icon} fill />
         </span>
       ) : (
-        <span className="shrink-0" style={{ color: style.stripe }}>
-          <Icon name={style.icon} />
+        <span className="mt-0.5 shrink-0" style={{ color: style.stripe }}>
+          <Icon name={style.icon} size={20} />
         </span>
       )}
       <div className={floating ? 'flex min-w-0 grow flex-col gap-0.5 py-1' : 'min-w-0 grow'}>
@@ -201,14 +202,9 @@ function Card({ n, action, onClose, closeIcon, closeLabel, floating = false }: C
           {action.label}
         </Button>
       ) : (
-        // The stored row keeps its original compact action height; only the popup uses the 56 px target.
-        <button
-          type="button"
-          className="state-layer type-label-large relative shrink-0 rounded-full px-3 py-1.5 text-[var(--md-sys-color-primary)]"
-          onClick={action.run}
-        >
+        <Button variant="text" size="xs" className="shrink-0" onClick={action.run}>
           {action.label}
-        </button>
+        </Button>
       ))}
       <IconButton icon={closeIcon} label={closeLabel} tipPos="left" onClick={onClose} />
     </div>
@@ -263,10 +259,10 @@ export function NotificationHeaderButton({
       {count > 0 && (
         <span
           aria-hidden="true"
-          className="type-label-small pointer-events-none absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 leading-none ring-2 ring-[var(--md-sys-color-surface)]"
+          className="type-label-small pointer-events-none absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 leading-none font-semibold ring-2 ring-[var(--md-sys-color-surface)]"
           style={{
-            background: hasError ? 'var(--md-sys-color-error)' : 'var(--app-warning)',
-            color: hasError ? 'var(--md-sys-color-on-error)' : 'var(--md-sys-color-surface)',
+            background: hasError ? 'var(--app-error-badge)' : 'var(--app-warning)',
+            color: hasError ? 'var(--app-on-error-badge)' : 'var(--app-on-warning)',
           }}
         >
           {count > 99 ? '99+' : count}
@@ -310,7 +306,10 @@ function Bell({ className }: { className: string }) {
       aria-expanded={open}
       aria-controls={NOTIFICATION_PANEL_ID}
       className={`m3e-motion-pop state-layer flex shrink-0 items-center justify-center rounded-full shadow-lg ${className}`}
-      style={{ background: hasError ? 'var(--md-sys-color-error)' : 'var(--app-warning)', color: 'var(--md-sys-color-surface)' }}
+      style={{
+        background: hasError ? 'var(--app-error-badge)' : 'var(--app-warning)',
+        color: hasError ? 'var(--app-on-error-badge)' : 'var(--app-on-warning)',
+      }}
     >
       <Icon name="notifications" size={20} />
       <span
@@ -608,15 +607,22 @@ export function NotificationCenter() {
   // Escape and a click outside both the panel and any registered trigger button close the panel.
   useEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing || e.key === 'Process' || e.keyCode === 229) return
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        setOpen(false)
+      }
+    }
     const onDown = (e: PointerEvent) => {
       if (isInsideNotificationControls(e.target, panelRef.current)) return
       setOpen(false)
     }
-    window.addEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
     window.addEventListener('pointerdown', onDown, true)
     return () => {
-      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('keydown', onKey, true)
       window.removeEventListener('pointerdown', onDown, true)
     }
   }, [open, setOpen])
@@ -633,42 +639,92 @@ export function NotificationCenter() {
       <LiveToasts player={player} pathname={pathname} headerTrigger={headerTrigger} />
       <Presence>
         {open && (
-          <div
-            ref={panelRef}
-            id={NOTIFICATION_PANEL_ID}
-            aria-label="Центр уведомлений"
-            role="dialog"
-            className={`m3e-motion-pop fixed z-[200] flex w-[min(90vw,420px)] flex-col bg-[var(--md-sys-color-surface-container-high)] shadow-xl ${panelPositionClass}`}
-            style={panelStyle}
-          >
-            <div className="flex items-center gap-2 py-2 pr-2 pl-4">
-              <div className="type-title-medium grow">Уведомления</div>
-              {items.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => void clear()}
-                  className="state-layer type-label-large relative shrink-0 rounded-full px-3 py-1.5 text-[var(--md-sys-color-primary)]"
-                >
-                  Очистить все
-                </button>
-              )}
-              <IconButton icon="close" label="Закрыть" onClick={() => setOpen(false)} />
-            </div>
-            {/* overflow-x-hidden: a tooltip's abs-positioned box must not create a horizontal scrollbar. */}
-            {items.length === 0 ? (
-              <div className="flex flex-col items-center gap-1.5 px-6 py-8 text-center text-[var(--md-sys-color-on-surface-variant)]">
-                <Icon name="notifications_none" size={28} />
-                <div className="type-title-small text-[var(--md-sys-color-on-surface)]">Уведомлений пока нет</div>
-                <div className="type-body-small">Здесь появятся предупреждения и ошибки.</div>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-1.5 overflow-x-hidden overflow-y-auto px-2 pb-2">
-                {[...items].reverse().map((n) => <Row key={n.id} n={n} />)}
-              </div>
-            )}
-          </div>
+          <NotificationPanel
+            panelRef={panelRef}
+            panelPositionClass={panelPositionClass}
+            panelStyle={panelStyle}
+            items={items}
+            onClear={() => void clear()}
+            onClose={() => setOpen(false)}
+          />
         )}
       </Presence>
     </>
+  )
+}
+
+function NotificationPanel({
+  panelRef,
+  panelPositionClass,
+  panelStyle,
+  items,
+  onClear,
+  onClose,
+}: {
+  panelRef: React.RefObject<HTMLDivElement | null>
+  panelPositionClass: string
+  panelStyle: CSSProperties
+  items: AppNotification[]
+  onClear: () => void
+  onClose: () => void
+}) {
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null)
+  const reversedItems = useMemo(() => [...items].reverse(), [items])
+
+  // Top-layer manual popover keeps the panel above CardIsland and other popovers while preserving exit animation.
+  useLayoutEffect(() => {
+    const el = panelRef.current
+    if (!el || typeof el.showPopover !== 'function') return
+    clearExit(el)
+    if (!el.matches(':popover-open')) el.showPopover()
+    return () => {
+      if (el.matches(':popover-open')) el.hidePopover()
+    }
+  }, [panelRef])
+
+  return (
+    <div
+      ref={panelRef}
+      id={NOTIFICATION_PANEL_ID}
+      popover="manual"
+      aria-label="Центр уведомлений"
+      role="dialog"
+      className={`m3e-motion-pop fixed inset-auto z-[200] m-0 flex w-[min(90vw,420px)] flex-col border-0 bg-[var(--md-sys-color-surface-container-high)] p-0 text-[var(--md-sys-color-on-surface)] shadow-xl ${panelPositionClass}`}
+      style={panelStyle}
+    >
+      <div className="flex shrink-0 items-center gap-2 py-2 pr-2 pl-4">
+        <div className="type-title-medium grow">Уведомления</div>
+        {items.length > 0 && (
+          <Button variant="text" size="xs" className="shrink-0" onClick={onClear}>
+            Очистить все
+          </Button>
+        )}
+        <IconButton icon="close" label="Закрыть" onClick={onClose} />
+      </div>
+      {/* overflow-x-hidden: a tooltip's abs-positioned box must not create a horizontal scrollbar. */}
+      {items.length === 0 ? (
+        <div className="flex flex-col items-center gap-1.5 px-6 py-8 text-center text-[var(--md-sys-color-on-surface-variant)]">
+          <Icon name="notifications_none" size={28} />
+          <div className="type-title-small text-[var(--md-sys-color-on-surface)]">Уведомлений пока нет</div>
+          <div className="type-body-small">Здесь появятся предупреждения и ошибки.</div>
+        </div>
+      ) : (
+        <div ref={setScrollEl} className="stats-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-2">
+          {scrollEl && (
+            <Virtuoso
+              customScrollParent={scrollEl}
+              data={reversedItems}
+              computeItemKey={(_, n) => n.id}
+              overscan={200}
+              itemContent={(index, n) => (
+                <div className={index < reversedItems.length - 1 ? 'pb-1.5' : undefined}>
+                  <Row n={n} />
+                </div>
+              )}
+            />
+          )}
+        </div>
+      )}
+    </div>
   )
 }

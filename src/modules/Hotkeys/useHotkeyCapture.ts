@@ -48,6 +48,7 @@ export function useHotkeyCapture() {
   useEffect(() => {
     if (!capturing) return
     const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing || e.key === 'Process' || e.keyCode === 229) return
       // The key is the new binding: it must not press the focused button, move focus, close a dialog
       // (preventDefault on Esc cancels the close request), trigger page shortcuts or reach the player.
       e.stopImmediatePropagation()
